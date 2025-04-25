@@ -2868,7 +2868,7 @@ fn vkDebugCallback(
     if (severity.error_bit_ext) {
         log.err(format, args);
     } else if (severity.warning_bit_ext) {
-        log.debug(format, args);
+        log.warn(format, args);
     } else if (severity.info_bit_ext) {
         log.info(format, args);
     } else if (severity.verbose_bit_ext) {
