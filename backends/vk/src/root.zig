@@ -49,7 +49,7 @@ const vk_apis_timers: []const vk.ApiInfo = &.{
             .getDeviceProcAddr = true,
         },
         .device_commands = .{
-            .getCalibratedTimestampsEXT = true,
+            .getCalibratedTimestampsKHR = true,
         },
     },
 };
@@ -240,9 +240,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     defer required_device_extensions.deinit(gpa);
     required_device_extensions.append(gpa, vk.extensions.khr_swapchain.name) catch @panic("OOM");
     if (options.timestamp_queries) {
-        // NOTE: this has been promoted to `VK_KHR_calibrated_timestamps`, but at the time of
-        // writing, it's not yet available as many places under that name.
-        required_device_extensions.append(gpa, vk.extensions.ext_calibrated_timestamps.name) catch @panic("OOM");
+        required_device_extensions.append(gpa, vk.extensions.khr_calibrated_timestamps.name) catch @panic("OOM");
     }
 
     log.info("enumerate devices:", .{});
@@ -2239,7 +2237,7 @@ pub fn timestampCalibrationImpl(maybe_timers_device: ?vk.DeviceProxy(vk_apis_tim
         .max_deviation = 0,
     };
     var calibration_results: [2]u64 = undefined;
-    const max_deviation = timers_device.getCalibratedTimestampsEXT(
+    const max_deviation = timers_device.getCalibratedTimestampsKHR(
         2,
         &.{
             .{ .time_domain = .clock_monotonic_raw_khr },
