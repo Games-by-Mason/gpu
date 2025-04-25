@@ -4,7 +4,6 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const native_target = b.resolveTargetQuery(.{});
 
     const no_llvm = b.option(
         bool,
@@ -18,29 +17,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const pools = b.dependency("pools", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    gpu.addImport("pools", pools.module("pools"));
-
     const tracy = b.dependency("tracy", .{
         .target = target,
         .optimize = optimize,
     });
     gpu.addImport("tracy", tracy.module("tracy"));
-
-    const vulkan_docs = b.dependency("Vulkan-Docs", .{});
-    const vulkan_zig = b.dependency("vulkan_zig", .{
-        .target = native_target,
-        .optimize = optimize,
-    });
-    const generator = vulkan_zig.artifact("vulkan-zig-generator");
-    var run_generator = b.addRunArtifact(generator);
-    run_generator.addFileArg(vulkan_docs.path("xml/vk.xml"));
-    const vk_zig = run_generator.addOutputFileArg("vk.zig");
-    const vulkan = b.addModule("vulkan", .{ .root_source_file = vk_zig });
-    gpu.addImport("vulkan", vulkan);
 
     const lib_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/root.zig"),

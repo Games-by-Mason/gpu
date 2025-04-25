@@ -2,16 +2,16 @@
 //!
 //! See the README for more information.
 
+const std = @import("std");
 const root = @import("root");
 
 pub const tracy = @import("tracy");
-pub const pools = @import("pools");
 
 /// Compile time options for the library. You must declare a constant of this type in your root file
 /// named `gpu_options` to configure the library.
 pub const Options = struct {
     /// Must implement `IBackend`
-    Backend: type = VulkanBackend,
+    Backend: type,
     /// Pipeline layouts can be created at runtime, but specifying them at compile time offers
     /// additional type safety.
     combined_pipeline_layouts: []const *const Ctx.CombinedPipelineLayout.InitOptions = &.{},
@@ -40,4 +40,3 @@ pub const Ctx = @import("Ctx.zig");
 pub const writers = @import("writers.zig");
 
 pub const IBackend = @import("ibackend.zig").IBackend;
-pub const VulkanBackend = @import("VulkanBackend.zig");

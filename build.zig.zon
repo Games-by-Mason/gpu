@@ -8,18 +8,6 @@
             .url = "git+https://github.com/Games-By-Mason/tracy_zig#0cad4646be2791982f692a7a47716ec92b62eb2e",
             .hash = "tracy-0.0.0-R7l8BdlCAQBFp6uysnan3Alaxap65HBF1mzGdabdKe8z",
         },
-        .pools = .{
-            .url = "git+https://github.com/Games-By-Mason/pools#bb79cadcc13462ab1e0f69d7ed81e7c3a678cc99",
-            .hash = "pools-0.0.0-2a1OXU1OAAB-wfJtD1DRhQymL9cuppV5DG0Lxs8gEmhu",
-        },
-        .vulkan_zig = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/dcd538828c513919c3abf0bd55afacdce0576c61.zip",
-            .hash = "vulkan-0.0.0-r7Ytxy5bAwASnqFlLMD4V42z3LolS8n7xv3RlbXhAhv0",
-        },
-        .@"Vulkan-Docs" = .{
-            .url = "https://github.com/KhronosGroup/Vulkan-Docs/archive/refs/tags/v1.3.289.tar.gz",
-            .hash = "1220b16e8536dede72b8c87833a00f591eb118a1fd3d3f333a7398947275c6948966",
-        },
     },
     .paths = .{
         "build.zig",

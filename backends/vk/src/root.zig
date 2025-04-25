@@ -1,16 +1,16 @@
+pub const pools = @import("pools");
+
 const std = @import("std");
 const math = std.math;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
-const utility = @import("utility.zig");
-const log = utility.log;
-const pools = @import("pools");
-const Ctx = @import("Ctx.zig");
-const tracy = @import("tracy");
+const log = std.log.scoped(.gpu_vk);
+const gpu = @import("gpu");
+const Ctx = gpu.Ctx;
+const tracy = gpu.tracy;
 const Zone = tracy.Zone;
 const TracyQueue = tracy.GpuQueue;
-const gpu = @import("root.zig");
 const global_options = gpu.options;
 
 pub const vulkan = @import("vulkan");
@@ -348,7 +348,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             break :b .{ surface_capabilities, best_surface_format, best_present_mode };
         } else .{ null, null, null };
 
-        log.info("  {}. {s}:", .{ i, utility.bufToStr(&properties.device_name) });
+        log.info("  {}. {s}:", .{ i, bufToStr(&properties.device_name) });
         log.info("    * device type: {}", .{properties.device_type});
         log.info("    * has graphics+present queue: {?}", .{supports_graphics_present});
         log.info("    * present mode: {?}", .{present_mode});
@@ -425,7 +425,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         @panic("NoSupportedDevices");
     }
 
-    log.info("device {} chosen: {s}", .{ best_physical_device.index, utility.bufToStr(&best_physical_device.name) });
+    log.info("device {} chosen: {s}", .{ best_physical_device.index, bufToStr(&best_physical_device.name) });
     devices_zone.end();
 
     // Iterate over the available queues, and find indices for the various queue types requested
@@ -2929,4 +2929,14 @@ inline fn setName(
         .object_handle = @intFromEnum(object),
         .p_object_name = name,
     }) catch |err| @panic(@errorName(err));
+}
+
+/// Assumes a buffer is null terminated, and returns the string it contains. If it turns out not to
+/// be null terminated, the whole buffer is returned.
+fn bufToStr(buf: anytype) []const u8 {
+    comptime assert(@typeInfo(@TypeOf(buf)) == .pointer);
+    for (buf, 0..) |c, i| {
+        if (c == 0) return buf[0..i];
+    }
+    return buf;
 }

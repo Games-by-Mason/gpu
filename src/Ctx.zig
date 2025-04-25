@@ -3,8 +3,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const utility = @import("utility.zig");
-const log = utility.log;
+const log = std.log.scoped(.gpu);
 const writers = @import("writers.zig");
 const OwnedWriterVolatile = writers.OwnedWriterVolatile;
 const tracy = @import("tracy");
@@ -876,7 +875,7 @@ pub const BufKind = packed struct {
     shader_device_address: bool = false,
 
     inline fn checkCast(comptime self: @This(), comptime rtype: @This()) void {
-        if (comptime !utility.containsBits(self, rtype)) {
+        if (comptime !containsBits(self, rtype)) {
             @compileError(std.fmt.comptimePrint("cannot cast {} to {}", .{ self, rtype }));
         }
     }
@@ -2182,4 +2181,11 @@ pub const TransferCmd = union(enum) {
 
 pub fn waitIdle(self: *const @This()) void {
     Backend.waitIdle(self);
+}
+
+fn containsBits(self: anytype, other: @TypeOf(self)) bool {
+    const Int = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(self)));
+    const self_bits: Int = @bitCast(self);
+    const other_bits: Int = @bitCast(other);
+    return self_bits & other_bits == other_bits;
 }
