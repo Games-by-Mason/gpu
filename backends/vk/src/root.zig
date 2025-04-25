@@ -1637,7 +1637,6 @@ pub fn imageCreate(
             .block_texel_view_compatible_bit = options.flags.block_texel_view_compatible,
             .extended_usage_bit = options.flags.extended_usage,
             .protected_bit = options.flags.protected,
-            .disjoint_bit = options.flags.disjoint,
         },
         .image_type = switch (options.dimensions) {
             .@"1d" => .@"1d",
@@ -1754,36 +1753,40 @@ pub fn deviceMemoryCreate(
             // property is VK_FALSE, handleTypes member of VkExternalMemoryImageCreateInfo, and the
             // VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT of the usage member in the VkImageCreateInfo
             // structure passed to vkCreateImage."
-            const dummy = self.backend.device.createImage(&.{
-                .flags = .{},
-                .image_type = .@"2d",
-                .format = .r8g8b8a8_uint, // Supported by all DX12 hardware
-                .extent = .{
-                    .width = 16,
-                    .height = 16,
-                    .depth = 1,
+            var reqs: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
+            self.backend.device.getDeviceImageMemoryRequirements(
+                &.{
+                    .p_create_info = &.{
+                        .flags = .{},
+                        .image_type = .@"2d",
+                        .format = .r8g8b8a8_uint, // Supported by all DX12 hardware
+                        .extent = .{
+                            .width = 16,
+                            .height = 16,
+                            .depth = 1,
+                        },
+                        .mip_levels = 1,
+                        .array_layers = 1,
+                        .samples = .{ .@"1_bit" = true },
+                        .tiling = switch (image.tiling) {
+                            .optimal => .optimal,
+                            .linear => .linear,
+                        },
+                        .usage = .{
+                            .transient_attachment_bit = image.transient_attachment,
+                            .sampled_bit = true,
+                        },
+                        .sharing_mode = .exclusive,
+                        .queue_family_index_count = 0,
+                        .p_queue_family_indices = null,
+                        .initial_layout = .undefined,
+                    },
+                    .plane_aspect = .{},
                 },
-                .mip_levels = 1,
-                .array_layers = 1,
-                .samples = .{ .@"1_bit" = true },
-                .tiling = switch (image.tiling) {
-                    .optimal => .optimal,
-                    .linear => .linear,
-                },
-                .usage = .{
-                    .transient_attachment_bit = image.transient_attachment,
-                    .sampled_bit = true,
-                },
-                .sharing_mode = .exclusive,
-                .queue_family_index_count = 0,
-                .p_queue_family_indices = null,
-                .initial_layout = .undefined,
-            }, null) catch |err| @panic(@errorName(err));
-            setName(self.backend.debug_device, dummy, .{ .str = "Color Dummy" });
-            defer self.backend.device.destroyImage(dummy, null);
-            const memory_requirements = self.backend.device.getImageMemoryRequirements(dummy);
+                &reqs,
+            );
             const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
-                .mask = memory_requirements.memory_type_bits,
+                .mask = reqs.memory_requirements.memory_type_bits,
             };
             break :b memory_type_bits;
         },
@@ -1798,38 +1801,42 @@ pub fn deviceMemoryCreate(
             // is VK_FALSE, handleTypes member of VkExternalMemoryImageCreateInfo, and the
             // VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT of the usage member in the VkImageCreateInfo
             // structure passed to vkCreateImage."
-            const dummy = self.backend.device.createImage(&.{
-                .flags = .{},
-                .image_type = .@"2d",
-                .format = switch (image.format) {
-                    .d24_unorm_s8_uint => .d24_unorm_s8_uint,
+            var reqs: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
+            self.backend.device.getDeviceImageMemoryRequirements(
+                &.{
+                    .p_create_info = &.{
+                        .flags = .{},
+                        .image_type = .@"2d",
+                        .format = switch (image.format) {
+                            .d24_unorm_s8_uint => .d24_unorm_s8_uint,
+                        },
+                        .extent = .{
+                            .width = 16,
+                            .height = 16,
+                            .depth = 1,
+                        },
+                        .mip_levels = 1,
+                        .array_layers = 1,
+                        .samples = .{ .@"1_bit" = true },
+                        .tiling = switch (image.tiling) {
+                            .optimal => .optimal,
+                            .linear => .linear,
+                        },
+                        .usage = .{
+                            .transient_attachment_bit = image.transient_attachment,
+                            .sampled_bit = true,
+                        },
+                        .sharing_mode = .exclusive,
+                        .queue_family_index_count = 0,
+                        .p_queue_family_indices = null,
+                        .initial_layout = .undefined,
+                    },
+                    .plane_aspect = .{},
                 },
-                .extent = .{
-                    .width = 16,
-                    .height = 16,
-                    .depth = 1,
-                },
-                .mip_levels = 1,
-                .array_layers = 1,
-                .samples = .{ .@"1_bit" = true },
-                .tiling = switch (image.tiling) {
-                    .optimal => .optimal,
-                    .linear => .linear,
-                },
-                .usage = .{
-                    .transient_attachment_bit = image.transient_attachment,
-                    .sampled_bit = true,
-                },
-                .sharing_mode = .exclusive,
-                .queue_family_index_count = 0,
-                .p_queue_family_indices = null,
-                .initial_layout = .undefined,
-            }, null) catch |err| @panic(@errorName(err));
-            setName(self.backend.debug_device, dummy, .{ .str = "Depth Stencil Dummy" });
-            defer self.backend.device.destroyImage(dummy, null);
-            const memory_requirements = self.backend.device.getImageMemoryRequirements(dummy);
+                &reqs,
+            );
             const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
-                .mask = memory_requirements.memory_type_bits,
+                .mask = reqs.memory_requirements.memory_type_bits,
             };
             break :b memory_type_bits;
         },
@@ -1847,18 +1854,20 @@ pub fn deviceMemoryCreate(
                 .shader_device_address_bit = buffer_usage.shader_device_address,
             };
             assert(@as(u32, @bitCast(usage_flags)) != 0);
-            const dummy = self.backend.device.createBuffer(&.{
-                .size = options.size,
-                .usage = usage_flags,
-                .sharing_mode = .exclusive,
-                .flags = .{},
-            }, null) catch |err| @panic(@errorName(err));
-            setName(self.backend.debug_device, dummy, .{ .str = "Dummy" });
-            defer self.backend.device.destroyBuffer(dummy, null);
-
-            const memory_requirements = self.backend.device.getBufferMemoryRequirements(dummy);
+            var reqs: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
+            self.backend.device.getDeviceBufferMemoryRequirements(
+                &.{
+                    .p_create_info = &.{
+                        .size = options.size,
+                        .usage = usage_flags,
+                        .sharing_mode = .exclusive,
+                        .flags = .{},
+                    },
+                },
+                &reqs,
+            );
             const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
-                .mask = memory_requirements.memory_type_bits,
+                .mask = reqs.memory_requirements.memory_type_bits,
             };
             break :b memory_type_bits;
         },

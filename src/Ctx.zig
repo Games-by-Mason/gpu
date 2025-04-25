@@ -1374,7 +1374,6 @@ pub const ImageOptions = struct {
         block_texel_view_compatible: bool = false,
         extended_usage: bool = false,
         protected: bool = false,
-        disjoint: bool = false,
     };
 
     name: DebugName,
