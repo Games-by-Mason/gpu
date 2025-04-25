@@ -120,11 +120,6 @@ pub fn IBackend(Self: type) type {
 
         getDevice: fn (self: *const Self) Ctx.Device,
 
-        imageBind: fn (
-            self: *Ctx,
-            image: Ctx.Image(.{}),
-            memory_view: Ctx.DeviceMemViewUnsized(.{}),
-        ) void,
         imageCreate: fn (
             self: *Ctx,
             options: Ctx.ImageOptions,

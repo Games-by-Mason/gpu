@@ -1123,6 +1123,7 @@ pub fn Image(kind: ImageKind) type {
             exclusive: bool,
             initial_layout: ImageOptions.Layout,
             usage: Usage,
+            location: DeviceMemViewUnsized(.{ .usage = .{ .image = kind } }),
         };
 
         pub const InitDepthStencilOptions = struct {
@@ -1159,6 +1160,7 @@ pub fn Image(kind: ImageKind) type {
             exclusive: bool,
             initial_layout: ImageOptions.Layout,
             usage: Usage = .{},
+            location: DeviceMemViewUnsized(.{ .usage = .{ .image = kind } }),
         };
 
         pub const InitOptions = if (kind.format) |format| switch (format) {
@@ -1213,20 +1215,13 @@ pub fn Image(kind: ImageKind) type {
                         .transient_attachment = kind.transient_attachment.?,
                     },
                 },
+                .location = options.location.as(.{}),
             });
             return @enumFromInt(@intFromEnum(handle));
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
             Backend.imageDestroy(gx, self.as(.{}));
-        }
-
-        pub inline fn bind(
-            self: @This(),
-            gx: *Ctx,
-            memory: DeviceMemViewUnsized(.{ .usage = .{ .image = kind } }),
-        ) void {
-            Backend.imageBind(gx, self.as(.{}), memory.as(.{}));
         }
 
         pub fn memReqs(self: @This(), gx: *Ctx) MemReqs {
@@ -1388,6 +1383,7 @@ pub const ImageOptions = struct {
     exclusive: bool,
     initial_layout: Layout,
     usage: Usage,
+    location: DeviceMemViewUnsized(.{}),
 };
 
 pub const ImageView = enum(u64) {

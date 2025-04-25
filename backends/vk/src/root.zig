@@ -1608,18 +1608,6 @@ pub fn getDevice(self: *const @This()) Ctx.Device {
     };
 }
 
-pub fn imageBind(
-    self: *Ctx,
-    image: Ctx.Image(.{}),
-    memory_view: Ctx.DeviceMemViewUnsized(.{}),
-) void {
-    self.backend.device.bindImageMemory(
-        image.asBackendType(),
-        memory_view.memory.asBackendType(),
-        memory_view.offset,
-    ) catch |err| @panic(@errorName(err));
-}
-
 pub fn imageCreate(
     self: *Ctx,
     options: Ctx.ImageOptions,
@@ -1680,6 +1668,11 @@ pub fn imageCreate(
         .initial_layout = layoutToVk(options.initial_layout),
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_device, image, options.name);
+    self.backend.device.bindImageMemory(
+        image,
+        options.location.memory.asBackendType(),
+        options.location.offset,
+    ) catch |err| @panic(@errorName(err));
     return .fromBackendType(image);
 }
 
