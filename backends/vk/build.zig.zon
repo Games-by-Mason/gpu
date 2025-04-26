@@ -9,12 +9,12 @@
             .hash = "pools-0.0.0-2a1OXU1OAAB-wfJtD1DRhQymL9cuppV5DG0Lxs8gEmhu",
         },
         .vulkan_zig = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/dcd538828c513919c3abf0bd55afacdce0576c61.zip",
-            .hash = "vulkan-0.0.0-r7Ytxy5bAwASnqFlLMD4V42z3LolS8n7xv3RlbXhAhv0",
+            .url = "git+https://github.com/Snektron/vulkan-zig#42e7a8409b8150e1cbd57a8ff8cec219114bac74",
+            .hash = "vulkan-0.0.0-r7Ytx2dUAwDhoUvuIqliqPUbyDZZi0bl_CQIwspUpHs_",
         },
         .@"Vulkan-Docs" = .{
-            .url = "https://github.com/KhronosGroup/Vulkan-Docs/archive/refs/tags/v1.3.289.tar.gz",
-            .hash = "1220b16e8536dede72b8c87833a00f591eb118a1fd3d3f333a7398947275c6948966",
+            .url = "https://github.com/KhronosGroup/Vulkan-Docs/archive/refs/tags/v1.4.313.tar.gz",
+            .hash = "N-V-__8AAA0MhwHkWVWzILxPaZsmdTLMMl3kA6o6hHaJRPZ6",
         },
         .gpu = .{
             .path = "../../",

@@ -15,54 +15,11 @@ const global_options = gpu.options;
 
 pub const vulkan = @import("vulkan");
 
-const vk_apis: []const vk.ApiInfo = &.{
-    .{
-        .instance_commands = .{
-            .getPhysicalDeviceFeatures2 = true,
-        },
-    },
-    vk.features.version_1_0,
-    vk.features.version_1_2,
-    vk.features.version_1_3,
-    vk.extensions.khr_surface,
-    vk.extensions.khr_swapchain,
-};
-
-const vk_apis_debug: []const vk.ApiInfo = &.{
-    .{
-        .instance_commands = .{
-            .createDebugUtilsMessengerEXT = true,
-            .destroyDebugUtilsMessengerEXT = true,
-            .getDeviceProcAddr = true,
-        },
-        .device_commands = .{
-            .setDebugUtilsObjectNameEXT = true,
-            .cmdBeginDebugUtilsLabelEXT = true,
-            .cmdEndDebugUtilsLabelEXT = true,
-        },
-    },
-};
-
-const vk_apis_timers: []const vk.ApiInfo = &.{
-    .{
-        .instance_commands = .{
-            .getDeviceProcAddr = true,
-        },
-        .device_commands = .{
-            .getCalibratedTimestampsKHR = true,
-        },
-    },
-};
-
 // Context
 surface: vk.SurfaceKHR,
-base_wrapper: vk.BaseWrapper(vk_apis),
-device: vk.DeviceProxy(vk_apis),
-instance: vk.InstanceProxy(vk_apis),
-debug_device: ?vk.DeviceProxy(vk_apis_debug),
-debug_instance: ?vk.InstanceProxy(vk_apis_debug),
-timers_device: ?vk.DeviceProxy(vk_apis_timers),
-timers_instance: ?vk.InstanceProxy(vk_apis_timers),
+base_wrapper: vk.BaseWrapper,
+device: vk.DeviceProxy,
+instance: vk.InstanceProxy,
 physical_device: PhysicalDevice,
 swapchain: Swapchain,
 debug_messenger: vk.DebugUtilsMessengerEXT,
@@ -90,6 +47,8 @@ image_index: ?u32 = null,
 // Tracy info
 zones: pools.ArrayBacked(u8, TracyQueue, undefined),
 tracy_query_pool: vk.QueryPool,
+
+timestamp_queries: bool,
 
 pub const InitOptions = struct {
     pub const GetInstanceProcAddress = *const fn (
@@ -138,7 +97,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     // Load the base dispatch function pointers
     const fp_zone = tracy.Zone.begin(.{ .name = "load fps", .src = @src() });
     const getInstProcAddr = options.backend.getInstanceProcAddress;
-    const base_wrapper = vk.BaseWrapper(vk_apis).load(getInstProcAddr) catch |err| @panic(@errorName(err));
+    const base_wrapper = vk.BaseWrapper.load(getInstProcAddr);
     fp_zone.end();
 
     // Determine the required layers and extensions
@@ -162,21 +121,21 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     const inst_handle_zone = tracy.Zone.begin(.{ .name = "create instance handle", .src = @src() });
     const instance_handle = base_wrapper.createInstance(&.{
         .p_application_info = &.{
-            .api_version = vk.makeApiVersion(0, 1, 3, 0),
+            .api_version = @bitCast(vk.makeApiVersion(0, 1, 3, 0)),
             .p_application_name = if (options.application_name) |n| n.ptr else null,
-            .application_version = vk.makeApiVersion(
+            .application_version = @bitCast(vk.makeApiVersion(
                 0,
                 options.application_version.major,
                 options.application_version.minor,
                 options.application_version.patch,
-            ),
+            )),
             .p_engine_name = if (options.engine_name) |n| n.ptr else null,
-            .engine_version = vk.makeApiVersion(
+            .engine_version = @bitCast(vk.makeApiVersion(
                 0,
                 options.engine_version.major,
                 options.engine_version.minor,
                 options.engine_version.patch,
-            ),
+            )),
         },
         .enabled_layer_count = math.cast(u32, layers.items.len) orelse @panic("overflow"),
         .pp_enabled_layer_names = layers.items.ptr,
@@ -187,39 +146,20 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     inst_handle_zone.end();
 
     const instance_wrapper_zone = tracy.Zone.begin(.{ .name = "create instance wrapper", .src = @src() });
-    const instance_wrapper = gpa.create(vk.InstanceWrapper(vk_apis)) catch @panic("OOM");
-    instance_wrapper.* = vk.InstanceWrapper(vk_apis).load(
+    const instance_wrapper = gpa.create(vk.InstanceWrapper) catch @panic("OOM");
+    instance_wrapper.* = vk.InstanceWrapper.load(
         instance_handle,
-        base_wrapper.dispatch.vkGetInstanceProcAddr,
-    ) catch |err| @panic(@errorName(err));
-    const instance_proxy = vk.InstanceProxy(vk_apis).init(instance_handle, instance_wrapper);
+        base_wrapper.dispatch.vkGetInstanceProcAddr.?,
+    );
+    const instance_proxy = vk.InstanceProxy.init(instance_handle, instance_wrapper);
     instance_wrapper_zone.end();
 
-    const alt_inst_zone = tracy.Zone.begin(.{ .name = "create alt instances", .src = @src() });
-    const debug_instance = if (options.validation) b: {
-        const debug_instance_wrapper = gpa.create(vk.InstanceWrapper(vk_apis_debug)) catch @panic("OOM");
-        debug_instance_wrapper.* = vk.InstanceWrapper(vk_apis_debug).load(
-            instance_proxy.handle,
-            base_wrapper.dispatch.vkGetInstanceProcAddr,
-        ) catch |err| @panic(@errorName(err));
-        const debug_instance = vk.InstanceProxy(vk_apis_debug).init(instance_proxy.handle, debug_instance_wrapper);
-        break :b debug_instance;
-    } else null;
-    const debug_messenger = if (debug_instance) |di| di.createDebugUtilsMessengerEXT(
+    const debug_messenger_zone = tracy.Zone.begin(.{ .name = "create debug messenger", .src = @src() });
+    const debug_messenger = if (options.validation) instance_proxy.createDebugUtilsMessengerEXT(
         &create_debug_messenger_info,
         null,
     ) catch |err| @panic(@errorName(err)) else .null_handle;
-
-    const timers_instance = if (options.timestamp_queries) b: {
-        const timers_instance_wrapper = gpa.create(vk.InstanceWrapper(vk_apis_timers)) catch @panic("OOM");
-        timers_instance_wrapper.* = vk.InstanceWrapper(vk_apis_timers).load(
-            instance_proxy.handle,
-            base_wrapper.dispatch.vkGetInstanceProcAddr,
-        ) catch |err| @panic(@errorName(err));
-        const timers_instance = vk.InstanceProxy(vk_apis_timers).init(instance_proxy.handle, timers_instance_wrapper);
-        break :b timers_instance;
-    } else null;
-    alt_inst_zone.end();
+    debug_messenger_zone.end();
 
     const surface_zone = tracy.Zone.begin(.{ .name = "create surface", .src = @src() });
     const surface = options.backend.createSurface(
@@ -538,39 +478,13 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     device_proxy_zone.end();
 
     const device_wrapper_zone = tracy.Zone.begin(.{ .name = "create device wrapper", .src = @src() });
-    const device_wrapper = gpa.create(vk.DeviceWrapper(vk_apis)) catch @panic("OOM");
-    device_wrapper.* = vk.DeviceWrapper(vk_apis).load(
+    const device_wrapper = gpa.create(vk.DeviceWrapper) catch @panic("OOM");
+    device_wrapper.* = vk.DeviceWrapper.load(
         device_handle,
-        instance_proxy.wrapper.dispatch.vkGetDeviceProcAddr,
-    ) catch |err| @panic(@errorName(err));
-    const device = vk.DeviceProxy(vk_apis).init(device_handle, device_wrapper);
+        instance_proxy.wrapper.dispatch.vkGetDeviceProcAddr.?,
+    );
+    const device = vk.DeviceProxy.init(device_handle, device_wrapper);
     device_wrapper_zone.end();
-
-    const alt_device_create_zone = tracy.Zone.begin(.{ .name = "alt device creation", .src = @src() });
-    const debug_device = if (debug_instance) |inst| b: {
-        const debug_device_wrapper = gpa.create(vk.DeviceWrapper(vk_apis_debug)) catch @panic("OOM");
-        debug_device_wrapper.* = vk.DeviceWrapper(vk_apis_debug).load(
-            device_handle,
-            inst.wrapper.dispatch.vkGetDeviceProcAddr,
-        ) catch |err| @panic(@errorName(err));
-        break :b vk.DeviceProxy(vk_apis_debug).init(
-            device_handle,
-            debug_device_wrapper,
-        );
-    } else null;
-
-    const timers_device = if (timers_instance) |inst| b: {
-        const timers_device_wrapper = gpa.create(vk.DeviceWrapper(vk_apis_timers)) catch @panic("OOM");
-        timers_device_wrapper.* = vk.DeviceWrapper(vk_apis_timers).load(
-            device_handle,
-            inst.wrapper.dispatch.vkGetDeviceProcAddr,
-        ) catch |err| @panic(@errorName(err));
-        break :b vk.DeviceProxy(vk_apis_timers).init(
-            device_handle,
-            timers_device_wrapper,
-        );
-    } else null;
-    alt_device_create_zone.end();
 
     const timestamp_zone = tracy.Zone.begin(.{ .name = "gpu timestamp setup", .src = @src() });
     const timestamp_period = if (options.timestamp_queries) b: {
@@ -589,7 +503,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         break :b properties.limits.timestamp_period;
     } else 0.0;
 
-    const calibration = timestampCalibrationImpl(timers_device);
+    const calibration = timestampCalibrationImpl(device, options.timestamp_queries);
     var tracy_queues: u8 = 0;
     timestamp_zone.end();
 
@@ -608,7 +522,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
                 qfi,
                 @intCast(q),
             );
-            setName(debug_device, queue, .{ .str = "Graphics Queue", .index = q });
+            setName(device, queue, .{ .str = "Graphics Queue", .index = q }, options.validation);
             combined_queues.graphics_family.appendAssumeCapacity(.{
                 .queue = .fromBackendType(queue),
                 .tracy_queue = TracyQueue.init(.{
@@ -630,7 +544,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
                 qfi,
                 @intCast(q),
             );
-            setName(debug_device, queue, .{ .str = "Compute Queue", .index = q });
+            setName(device, queue, .{ .str = "Compute Queue", .index = q }, options.validation);
             combined_queues.compute_family.appendAssumeCapacity(.{
                 .queue = .fromBackendType(queue),
                 .tracy_queue = TracyQueue.init(.{
@@ -652,7 +566,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
                 qfi,
                 @intCast(q),
             );
-            setName(debug_device, queue, .{ .str = "Transfer Queue", .index = q });
+            setName(device, queue, .{ .str = "Transfer Queue", .index = q }, options.validation);
             combined_queues.transfer_family.appendAssumeCapacity(.{
                 .queue = .fromBackendType(queue),
                 .tracy_queue = TracyQueue.init(.{
@@ -717,7 +631,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     };
 
     const render_pass = device.createRenderPass(&render_pass_info, null) catch |err| @panic(@errorName(err));
-    setName(debug_device, render_pass, .{ .str = "Main" });
+    setName(device, render_pass, .{ .str = "Main" }, options.validation);
     render_pass_zone.end();
 
     const swapchain = Swapchain.init(
@@ -728,7 +642,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         surface,
         render_pass,
         .null_handle,
-        debug_device,
+        options.validation,
     );
 
     const command_pools_zone = tracy.Zone.begin(.{ .name = "create command pools", .src = @src() });
@@ -738,7 +652,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             .flags = .{ .transient_bit = true },
             .queue_family_index = graphics_queue_family_index,
         }, null) catch |err| @panic(@errorName(err));
-        setName(debug_device, pool.*, .{ .str = "Graphics", .index = i });
+        setName(device, pool.*, .{ .str = "Graphics", .index = i }, options.validation);
     }
 
     var compute_command_pools: [global_options.max_frames_in_flight]vk.CommandPool = undefined;
@@ -747,7 +661,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             .flags = .{ .transient_bit = true },
             .queue_family_index = compute_queue_family_index orelse graphics_queue_family_index,
         }, null) catch |err| @panic(@errorName(err));
-        setName(debug_device, pool.*, .{ .str = "Compute", .index = i });
+        setName(device, pool.*, .{ .str = "Compute", .index = i }, options.validation);
     }
 
     var transfer_command_pools: [global_options.max_frames_in_flight]vk.CommandPool = undefined;
@@ -756,7 +670,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             .flags = .{ .transient_bit = true },
             .queue_family_index = transfer_queue_family_index orelse compute_queue_family_index orelse graphics_queue_family_index,
         }, null) catch |err| @panic(@errorName(err));
-        setName(debug_device, pool.*, .{ .str = "Transfer", .index = i });
+        setName(device, pool.*, .{ .str = "Transfer", .index = i }, options.validation);
     }
     command_pools_zone.end();
 
@@ -764,24 +678,23 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     var image_availables: [global_options.max_frames_in_flight]vk.Semaphore = undefined;
     for (0..global_options.max_frames_in_flight) |i| {
         image_availables[i] = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
-        setName(debug_device, image_availables[i], .{ .str = "Image Available", .index = i });
+        setName(device, image_availables[i], .{ .str = "Image Available", .index = i }, options.validation);
     }
 
     var ready_for_present: [global_options.max_frames_in_flight]std.BoundedArray(vk.Semaphore, global_options.max_cmdbufs_per_frame) = @splat(.{});
     for (&ready_for_present, 0..) |*semaphores, frame| {
         for (0..global_options.max_cmdbufs_per_frame) |cb| {
             const semaphore = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
-            setName(debug_device, semaphore, .{
+            setName(device, semaphore, .{
                 .str = "Ready For Present",
                 .index = frame * global_options.max_cmdbufs_per_frame * cb,
-            });
+            }, options.validation);
             semaphores.appendAssumeCapacity(semaphore);
         }
     }
     sync_primitives_zone.end();
 
-    const tracy_query_pool = if (timers_device != null and
-        tracy.enabled and
+    const tracy_query_pool = if (tracy.enabled and
         global_options.tracy_query_pool_capacity > 0)
     b: {
         const query_pool_zone = tracy.Zone.begin(.{ .name = "create tracy query pool", .src = @src() });
@@ -791,7 +704,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             .query_type = .timestamp,
             .query_count = global_options.tracy_query_pool_capacity,
         }, null) catch |err| @panic(@errorName(err));
-        setName(debug_device, tracy_query_pool, .{ .str = "Tracy" });
+        setName(device, tracy_query_pool, .{ .str = "Tracy" }, options.validation);
         device.resetQueryPool(
             tracy_query_pool,
             0,
@@ -810,10 +723,6 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .debug_messenger = debug_messenger,
         .instance = instance_proxy,
         .device = device,
-        .debug_instance = debug_instance,
-        .debug_device = debug_device,
-        .timers_instance = timers_instance,
-        .timers_device = timers_device,
         .swapchain = swapchain,
         .render_pass = render_pass,
         .graphics_command_pools = graphics_command_pools,
@@ -829,6 +738,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .compute_queue_family_index = compute_queue_family_index,
         .zones = zones,
         .tracy_query_pool = tracy_query_pool,
+        .timestamp_queries = options.timestamp_queries,
     };
 }
 
@@ -865,22 +775,18 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     // Destroy device state
     self.backend.device.destroyDevice(null);
     gpa.destroy(self.backend.device.wrapper);
-    if (self.backend.debug_device) |d| gpa.destroy(d.wrapper);
-    if (self.backend.timers_device) |d| gpa.destroy(d.wrapper);
 
     // Destroy the surface
     self.backend.instance.destroySurfaceKHR(self.backend.surface, null);
 
     // Destroy the debug messenger
-    if (self.backend.debug_instance) |debug_instance| {
-        debug_instance.destroyDebugUtilsMessengerEXT(self.backend.debug_messenger, null);
+    if (self.backend.debug_messenger != .null_handle) {
+        self.backend.instance.destroyDebugUtilsMessengerEXT(self.backend.debug_messenger, null);
     }
 
-    // Destroy the instnace
+    // Destroy the instance
     self.backend.instance.destroyInstance(null);
     gpa.destroy(self.backend.instance.wrapper);
-    if (self.backend.debug_instance) |i| gpa.destroy(i.wrapper);
-    if (self.backend.timers_instance) |i| gpa.destroy(i.wrapper);
 
     // Mark as undefined
     self.backend = undefined;
@@ -900,7 +806,7 @@ pub fn dedicatedBufCreate(
         .sharing_mode = .exclusive,
         .flags = .{},
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, buffer, name);
+    setName(self.backend.device, buffer, name, self.backend.debug_messenger != .null_handle);
 
     // Allocate memory for the buffer
     const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
@@ -919,7 +825,7 @@ pub fn dedicatedBufCreate(
         .allocation_size = reqs.size,
         .memory_type_index = memory_type_index,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, memory, name);
+    setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
 
     // Bind the buffer to the memory
     self.backend.device.bindBufferMemory(
@@ -950,7 +856,7 @@ pub fn dedicatedUploadBufCreate(
         .sharing_mode = .exclusive,
         .flags = .{},
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, buffer, name);
+    setName(self.backend.device, buffer, name, self.backend.debug_messenger != .null_handle);
 
     // Create the memory
     const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
@@ -969,7 +875,7 @@ pub fn dedicatedUploadBufCreate(
         .allocation_size = reqs.size,
         .memory_type_index = memory_type_index,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, memory, name);
+    setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
 
     // Bind the buffer to the memory
     self.backend.device.bindBufferMemory(
@@ -1010,7 +916,7 @@ pub fn dedicatedReadbackBufCreate(
         .sharing_mode = .exclusive,
         .flags = .{},
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, buffer, name);
+    setName(self.backend.device, buffer, name, self.backend.debug_messenger != .null_handle);
 
     // Create the memory
     const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
@@ -1029,7 +935,7 @@ pub fn dedicatedReadbackBufCreate(
         .allocation_size = reqs.size,
         .memory_type_index = memory_type_index,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, memory, name);
+    setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
 
     // Bind the buffer to the memory
     self.backend.device.bindBufferMemory(
@@ -1102,14 +1008,14 @@ pub fn combinedPipelineLayoutCreate(
         .binding_count = @intCast(descriptors.len),
         .p_bindings = &descriptors.buffer,
     }, null) catch @panic("OOM");
-    setName(self.backend.debug_device, descriptor_set_layout, options.name);
+    setName(self.backend.device, descriptor_set_layout, options.name, self.backend.debug_messenger != .null_handle);
 
     // Create the pipeline layout
     const pipeline_layout = self.backend.device.createPipelineLayout(&.{
         .set_layout_count = 1,
         .p_set_layouts = &.{descriptor_set_layout},
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, pipeline_layout, options.name);
+    setName(self.backend.device, pipeline_layout, options.name, self.backend.debug_messenger != .null_handle);
 
     return .{
         .descriptor_set = .fromBackendType(descriptor_set_layout),
@@ -1129,8 +1035,8 @@ pub fn zoneBegin(
     self: *Ctx,
     options: Ctx.Zone.BeginOptions,
 ) Ctx.Zone {
-    if (self.backend.debug_device) |d| {
-        d.cmdBeginDebugUtilsLabelEXT(options.command_buffer.asBackendType(), &.{
+    if (self.backend.debug_messenger != .null_handle) {
+        self.backend.device.cmdBeginDebugUtilsLabelEXT(options.command_buffer.asBackendType(), &.{
             .p_label_name = options.loc.name orelse options.loc.function,
             .color = .{
                 @as(f32, @floatFromInt(options.loc.color.r)) / 255.0,
@@ -1175,9 +1081,9 @@ pub fn combinedCmdBufCreate(
         .command_buffer_count = command_buffers.len,
     }, &command_buffers) catch |err| @panic(@errorName(err));
     const command_buffer = command_buffers[0];
-    setName(self.backend.debug_device, command_buffer, .{
+    setName(self.backend.device, command_buffer, .{
         .str = options.loc.name orelse options.loc.function,
-    });
+    }, self.backend.debug_messenger != .null_handle);
 
     self.backend.device.beginCommandBuffer(command_buffer, &.{
         .flags = .{ .one_time_submit_bit = true },
@@ -1226,8 +1132,8 @@ pub fn zoneEnd(
     zone: Ctx.Zone,
     options: Ctx.Zone.EndOptions,
 ) void {
-    if (self.backend.debug_device) |d| {
-        d.cmdEndDebugUtilsLabelEXT(options.command_buffer.asBackendType());
+    if (self.backend.debug_messenger != .null_handle) {
+        self.backend.device.cmdEndDebugUtilsLabelEXT(options.command_buffer.asBackendType());
     }
 
     if (tracy.enabled and self.backend.tracy_query_pool != .null_handle) {
@@ -1485,7 +1391,7 @@ pub fn descriptorPoolCreate(
             .flags = .{},
             .max_sets = @intCast(options.cmds.len),
         }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.debug_device, descriptor_pool, options.name);
+        setName(self.backend.device, descriptor_pool, options.name, self.backend.debug_messenger != .null_handle);
 
         break :b descriptor_pool;
     };
@@ -1509,7 +1415,7 @@ pub fn descriptorPoolCreate(
         // Write the results
         for (options.cmds, results[0..options.cmds.len]) |cmd, result| {
             cmd.result.* = .fromBackendType(result);
-            setName(self.backend.debug_device, result, cmd.name);
+            setName(self.backend.device, result, cmd.name, self.backend.debug_messenger != .null_handle);
         }
     }
 
@@ -1781,7 +1687,7 @@ pub fn imageCreate(
         .p_queue_family_indices = null,
         .initial_layout = layoutToVk(options.initial_layout),
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, image, options.name);
+    setName(self.backend.device, image, options.name, self.backend.debug_messenger != .null_handle);
     self.backend.device.bindImageMemory(
         image,
         options.location.memory.asBackendType(),
@@ -1835,7 +1741,7 @@ pub fn imageViewCreate(
             .layer_count = options.layer_count,
         },
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, image_view, options.name);
+    setName(self.backend.device, image_view, options.name, self.backend.debug_messenger != .null_handle);
     return .fromBackendType(image_view);
 }
 
@@ -1963,7 +1869,7 @@ pub fn memoryCreate(
         .allocation_size = options.size,
         .memory_type_index = memory_type_index,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, memory, options.name);
+    setName(self.backend.device, memory, options.name, self.backend.debug_messenger != .null_handle);
     return .fromBackendType(memory);
 }
 
@@ -2107,7 +2013,7 @@ pub fn combinedPipelinesCreate(
             .code_size = cmd.stages.vertex.spv.len * @sizeOf(u32),
             .p_code = cmd.stages.vertex.spv.ptr,
         }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.debug_device, vertex_module, cmd.stages.vertex.name);
+        setName(self.backend.device, vertex_module, cmd.stages.vertex.name, self.backend.debug_messenger != .null_handle);
 
         shader_stages_buf.appendAssumeCapacity(.{
             .stage = .{ .vertex_bit = true },
@@ -2119,7 +2025,7 @@ pub fn combinedPipelinesCreate(
             .code_size = cmd.stages.fragment.spv.len * @sizeOf(u32),
             .p_code = cmd.stages.fragment.spv.ptr,
         }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.debug_device, fragment_module, cmd.stages.fragment.name);
+        setName(self.backend.device, fragment_module, cmd.stages.fragment.name, self.backend.debug_messenger != .null_handle);
 
         shader_stages_buf.appendAssumeCapacity(.{
             .stage = .{ .fragment_bit = true },
@@ -2161,7 +2067,7 @@ pub fn combinedPipelinesCreate(
         else => |err| @panic(@tagName(err)),
     }
     for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
-        setName(self.backend.debug_device, pipeline, cmd.pipeline_name);
+        setName(self.backend.device, pipeline, cmd.pipeline_name, self.backend.debug_messenger != .null_handle);
         cmd.result.* = .{
             .layout = cmd.layout.pipeline,
             .pipeline = .fromBackendType(pipeline),
@@ -2261,7 +2167,7 @@ pub fn samplerCreate(
         },
         .unnormalized_coordinates = @intFromBool(options.unnormalized_coordinates),
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, sampler, options.name);
+    setName(self.backend.device, sampler, options.name, self.backend.debug_messenger != .null_handle);
     return .fromBackendType(sampler);
 }
 
@@ -2270,7 +2176,7 @@ pub fn samplerDestroy(self: *Ctx, sampler: Ctx.Sampler) void {
 }
 
 pub fn timestampCalibration(self: *Ctx) Ctx.TimestampCalibration {
-    return timestampCalibrationImpl(self.backend.timers_device);
+    return timestampCalibrationImpl(self.backend.device, self.backend.timestamp_queries);
 }
 
 pub fn semaphoreCreate(self: *Ctx, initial_value: u64) Ctx.Semaphore {
@@ -2315,14 +2221,17 @@ pub fn semaphoresWait(self: *Ctx, semaphores: []const Ctx.Semaphore, values: []c
     if (result != .success) @panic(@tagName(result));
 }
 
-pub fn timestampCalibrationImpl(maybe_timers_device: ?vk.DeviceProxy(vk_apis_timers)) Ctx.TimestampCalibration {
-    const timers_device = maybe_timers_device orelse return .{
+pub fn timestampCalibrationImpl(
+    device: vk.DeviceProxy,
+    timestamp_queries: bool,
+) Ctx.TimestampCalibration {
+    if (!timestamp_queries) return .{
         .cpu = 0,
         .gpu = 0,
         .max_deviation = 0,
     };
     var calibration_results: [2]u64 = undefined;
-    const max_deviation = timers_device.getCalibratedTimestampsKHR(
+    const max_deviation = device.getCalibratedTimestampsKHR(
         2,
         &.{
             .{ .time_domain = .clock_monotonic_raw_khr },
@@ -2619,14 +2528,14 @@ const Swapchain = struct {
     external_framebuf_size: struct { u32, u32 },
 
     pub fn init(
-        instance: vk.InstanceProxy(vk_apis),
+        instance: vk.InstanceProxy,
         framebuf_size: struct { u32, u32 },
-        device: vk.DeviceProxy(vk_apis),
+        device: vk.DeviceProxy,
         physical_device: PhysicalDevice,
         surface: vk.SurfaceKHR,
         render_pass: vk.RenderPass,
         old_swapchain: vk.SwapchainKHR,
-        debug_device: ?vk.DeviceProxy(vk_apis_debug),
+        validation: bool,
     ) @This() {
         const zone = tracy.Zone.begin(.{ .name = "swapchain init", .src = @src() });
         defer zone.end();
@@ -2676,7 +2585,7 @@ const Swapchain = struct {
         };
 
         const swapchain = device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
-        setName(debug_device, swapchain, .{ .str = "Main" });
+        setName(device, swapchain, .{ .str = "Main" }, validation);
         var images: std.BoundedArray(vk.Image, max_swapchain_depth) = .{};
         var image_count: u32 = max_swapchain_depth;
         const get_images_result = device.getSwapchainImagesKHR(
@@ -2688,7 +2597,7 @@ const Swapchain = struct {
         images.len = image_count;
         var views: std.BoundedArray(vk.ImageView, max_swapchain_depth) = .{};
         for (images.constSlice(), 0..) |image, i| {
-            setName(debug_device, image, .{ .str = "Swapchain", .index = i });
+            setName(device, image, .{ .str = "Swapchain", .index = i }, validation);
             const create_info: vk.ImageViewCreateInfo = .{
                 .image = image,
                 .view_type = .@"2d",
@@ -2708,7 +2617,7 @@ const Swapchain = struct {
                 },
             };
             const view = device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
-            setName(debug_device, view, .{ .str = "Swapchain", .index = i });
+            setName(device, view, .{ .str = "Swapchain", .index = i }, validation);
             views.appendAssumeCapacity(view);
         }
 
@@ -2726,7 +2635,7 @@ const Swapchain = struct {
             };
 
             const framebuf = device.createFramebuffer(&framebuffer_info, null) catch |err| @panic(@errorName(err));
-            setName(debug_device, framebuf, .{ .str = "Swapchain", .index = i });
+            setName(device, framebuf, .{ .str = "Swapchain", .index = i }, validation);
             framebufs.appendAssumeCapacity(framebuf);
         }
 
@@ -2740,12 +2649,12 @@ const Swapchain = struct {
         };
     }
 
-    pub fn destroyEverythingExceptSwapchain(self: *@This(), device: vk.DeviceProxy(vk_apis)) void {
+    pub fn destroyEverythingExceptSwapchain(self: *@This(), device: vk.DeviceProxy) void {
         for (self.framebufs.constSlice()) |f| device.destroyFramebuffer(f, null);
         for (self.views.constSlice()) |v| device.destroyImageView(v, null);
     }
 
-    pub fn deinit(self: *@This(), device: vk.DeviceProxy(vk_apis)) void {
+    pub fn deinit(self: *@This(), device: vk.DeviceProxy) void {
         self.destroyEverythingExceptSwapchain(device);
         device.destroySwapchainKHR(self.swapchain, null);
         self.* = undefined;
@@ -2774,7 +2683,7 @@ const Swapchain = struct {
             gx.backend.surface,
             gx.backend.render_pass,
             retired,
-            gx.backend.debug_device,
+            gx.backend.debug_messenger != .null_handle,
         );
         gx.backend.device.destroySwapchainKHR(retired, null);
     }
@@ -2802,7 +2711,7 @@ const PhysicalDevice = struct {
 };
 
 fn queueFamilyHasPresent(
-    instance: vk.InstanceProxy(vk_apis),
+    instance: vk.InstanceProxy,
     device: vk.PhysicalDevice,
     surface: vk.SurfaceKHR,
     qfi: u32,
@@ -3003,11 +2912,12 @@ fn vkDebugCallback(
 }
 
 inline fn setName(
-    maybe_debug_device: ?vk.DeviceProxy(vk_apis_debug),
+    device: vk.DeviceProxy,
     object: anytype,
     debug_name: Ctx.DebugName,
+    validation: bool,
 ) void {
-    const debug_device = maybe_debug_device orelse return;
+    if (!validation) return;
 
     const type_name, const object_type = switch (@TypeOf(object)) {
         vk.Buffer => .{ "Buffer", .buffer },
@@ -3045,7 +2955,7 @@ inline fn setName(
         };
     };
 
-    debug_device.setDebugUtilsObjectNameEXT(&.{
+    device.setDebugUtilsObjectNameEXT(&.{
         .object_type = object_type,
         .object_handle = @intFromEnum(object),
         .p_object_name = name,
