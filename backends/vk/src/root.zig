@@ -121,7 +121,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     const inst_handle_zone = tracy.Zone.begin(.{ .name = "create instance handle", .src = @src() });
     const instance_handle = base_wrapper.createInstance(&.{
         .p_application_info = &.{
-            .api_version = @bitCast(vk.makeApiVersion(0, 1, 3, 0)),
+            .api_version = @bitCast(vk.makeApiVersion(0, 1, 4, 0)),
             .p_application_name = if (options.application_name) |n| n.ptr else null,
             .application_version = @bitCast(vk.makeApiVersion(
                 0,
