@@ -44,7 +44,7 @@ pub const Semaphore = enum(u64) {
     }
 
     pub fn waitAll(gx: *Ctx, semaphores: []const Semaphore) void {
-        var wait_values_buf: [global_options.max_command_buffers_per_frame]u64 = undefined;
+        var wait_values_buf: [global_options.max_cmdbufs_per_frame]u64 = undefined;
         const wait_values = wait_values_buf[0..semaphores.len];
         for (wait_values) |*value| {
             value.* = gx.frame + gx.frames_in_flight;
@@ -55,9 +55,9 @@ pub const Semaphore = enum(u64) {
 
 pub const Device = struct {
     // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
-    pub const max_uniform_buffer_offset_alignment = 256;
+    pub const max_uniform_buf_offset_alignment = 256;
     // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
-    pub const max_storage_buffer_offset_alignment = 256;
+    pub const max_storage_buf_offset_alignment = 256;
 
     pub const Kind = enum {
         other,
@@ -142,8 +142,8 @@ framebuf_size: FramebufSize = .{ 0.0, 0.0 },
 
 combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
 
-cmdbuf_bindings: [global_options.max_frames_in_flight]std.BoundedArray(CmdBufBindings, global_options.max_command_buffers_per_frame) = @splat(.{}),
-cmdbuf_semaphores: [global_options.max_frames_in_flight]std.BoundedArray(Semaphore, global_options.max_command_buffers_per_frame) = @splat(.{}),
+cmdbuf_bindings: [global_options.max_frames_in_flight]std.BoundedArray(CmdBufBindings, global_options.max_cmdbufs_per_frame) = @splat(.{}),
+cmdbuf_semaphores: [global_options.max_frames_in_flight]std.BoundedArray(Semaphore, global_options.max_cmdbufs_per_frame) = @splat(.{}),
 
 max_alignment: bool,
 
@@ -228,8 +228,8 @@ pub fn init(options: InitOptions) @This() {
     }
 
     if (gx.max_alignment) {
-        gx.device.uniform_buf_offset_alignment = Device.max_uniform_buffer_offset_alignment;
-        gx.device.storage_buf_offset_alignment = Device.max_storage_buffer_offset_alignment;
+        gx.device.uniform_buf_offset_alignment = Device.max_uniform_buf_offset_alignment;
+        gx.device.storage_buf_offset_alignment = Device.max_storage_buf_offset_alignment;
     }
 
     comptime var max_descriptors = 0;
@@ -280,8 +280,8 @@ pub inline fn getBackendConst(self: *const @This(), T: type) *const T {
 
 pub fn DedicatedBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .usage = .{ .buffer = kind } }),
-        buffer: Buf(kind),
+        memory: Memory(.{ .usage = .{ .buf = kind } }),
+        buf: Buf(kind),
 
         pub const InitOptions = struct {
             name: DebugName,
@@ -292,39 +292,26 @@ pub fn DedicatedBuf(kind: BufKind) type {
             gx: *Ctx,
             options: @This().InitOptions,
         ) DedicatedBuf(kind) {
-            comptime kind.assertNonZero();
-
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-
-            const buffer = Buf(kind).init(gx, .{
-                .name = options.name,
-                .size = options.size,
-            });
-            const memory_requirements = buffer.memReqs(gx);
-            const memory = Memory(.{ .usage = .{ .buffer = kind } }).init(gx, .{
-                .name = options.name,
-                .size = memory_requirements.size,
-            });
-            buffer.bind(gx, .{
-                .memory = memory,
-                .offset = 0,
-            });
+            comptime kind.assertNonZero();
+            assert(options.size > 0); // Vulkan doesn't support zero sized buffers
+            const untyped = Backend.dedicatedBufCreate(gx, options.name, kind, options.size);
             return .{
-                .buffer = buffer,
-                .memory = memory,
+                .memory = @enumFromInt(@intFromEnum(untyped.memory)),
+                .buf = @enumFromInt(@intFromEnum(untyped.buf)),
             };
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            self.buffer.deinit(gx);
+            Backend.bufDestroy(gx, self.buf.as(.{}));
             self.memory.deinit(gx);
         }
 
         pub inline fn as(self: @This(), comptime result_kind: BufKind) DedicatedBuf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .usage = .{ .buffer = result_kind } }),
-                .buffer = self.buffer.as(result_kind),
+                .memory = self.memory.as(.{ .usage = .{ .buf = result_kind } }),
+                .buf = self.buf.as(result_kind),
             };
         }
     };
@@ -332,8 +319,8 @@ pub fn DedicatedBuf(kind: BufKind) type {
 
 pub fn DedicatedReadbackBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .usage = .{ .buffer = kind }, .access = .read }),
-        buffer: Buf(kind),
+        memory: Memory(.{ .usage = .{ .buf = kind }, .access = .read }),
+        buf: Buf(kind),
         data: []const u8,
 
         pub const InitOptions = struct {
@@ -345,44 +332,26 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
             gx: *Ctx,
             options: @This().InitOptions,
         ) @This() {
-            comptime kind.assertNonZero();
-
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-
-            const buffer = Buf(kind).init(gx, .{
-                .name = options.name,
-                .size = options.size,
-            });
-            const memory_requirements = buffer.memReqs(gx);
-            const memory = Memory(.{
-                .usage = .{ .buffer = kind },
-                .access = .read,
-            }).init(gx, .{
-                .name = options.name,
-                .size = memory_requirements.size,
-            });
-            const data = buffer.bindReadback(gx, .{
-                .memory = memory,
-                .offset = 0,
-                .size = options.size,
-            });
+            comptime kind.assertNonZero();
+            const untyped = Backend.dedicatedReadbackBufCreate(gx, options.name, kind, options.size);
             return .{
-                .buffer = buffer,
-                .memory = memory,
-                .data = data,
+                .memory = @enumFromInt(@intFromEnum(untyped.memory)),
+                .buf = @enumFromInt(@intFromEnum(untyped.buf)),
+                .data = untyped.data,
             };
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            self.buffer.deinit(gx);
+            Backend.bufDestroy(gx, self.buf.as(.{}));
             self.memory.deinit(gx);
         }
 
         pub inline fn as(self: @This(), comptime result_kind: BufKind) DedicatedReadbackBuf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .access = .read, .usage = .{ .buffer = result_kind } }),
-                .buffer = self.buffer.as(result_kind),
+                .memory = self.memory.as(.{ .access = .read, .usage = .{ .buf = result_kind } }),
+                .buf = self.buf.as(result_kind),
                 .ptr = self.ptr,
                 .size = self.size,
             };
@@ -390,8 +359,8 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
 
         pub inline fn asDedicated(self: @This(), comptime result_kind: BufKind) DedicatedBuf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .usage = .{ .buffer = result_kind } }),
-                .buffer = self.buffer.as(result_kind),
+                .memory = self.memory.as(.{ .usage = .{ .buf = result_kind } }),
+                .buf = self.buf.as(result_kind),
             };
         }
     };
@@ -399,8 +368,8 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
 
 pub fn DedicatedUploadBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .usage = .{ .buffer = kind }, .access = .write }),
-        buffer: Buf(kind),
+        memory: Memory(.{ .usage = .{ .buf = kind }, .access = .write }),
+        buf: Buf(kind),
         data: []volatile anyopaque,
 
         pub const InitOptions = struct {
@@ -413,53 +382,40 @@ pub fn DedicatedUploadBuf(kind: BufKind) type {
             gx: *Ctx,
             options: @This().InitOptions,
         ) DedicatedUploadBuf(kind) {
-            comptime kind.assertNonZero();
-
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-
-            const buffer = Buf(kind).init(gx, .{
-                .name = options.name,
-                .size = options.size,
-            });
-            const memory_requirements = buffer.memReqs(gx);
-            const memory = Memory(.{
-                .usage = .{ .buffer = kind },
-                .access = .write,
-            }).init(gx, .{
-                .name = options.name,
-                .size = memory_requirements.size,
-                .prefer_device_local = options.prefer_device_local,
-            });
-            const data = buffer.bindUpload(gx, .{
-                .memory = memory,
-                .offset = 0,
-                .size = options.size,
-            });
+            comptime kind.assertNonZero();
+            const untyped = Backend.dedicatedUploadBufCreate(
+                gx,
+                options.name,
+                kind,
+                options.size,
+                options.prefer_device_local,
+            );
             return .{
-                .buffer = buffer,
-                .memory = memory,
-                .data = data,
+                .memory = @enumFromInt(@intFromEnum(untyped.memory)),
+                .buf = @enumFromInt(@intFromEnum(untyped.buf)),
+                .data = untyped.data,
             };
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            self.buffer.deinit(gx);
+            Backend.bufDestroy(gx, self.buf.as(.{}));
             self.memory.deinit(gx);
         }
 
         pub inline fn as(self: @This(), comptime result_kind: BufKind) DedicatedUploadBuf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .access = .write, .kind = .{ .buffer = result_kind } }),
-                .buffer = self.buffer.as(result_kind),
+                .memory = self.memory.as(.{ .access = .write, .kind = .{ .buf = result_kind } }),
+                .buf = self.buf.as(result_kind),
                 .data = self.data,
             };
         }
 
         pub inline fn asDedicated(self: @This(), comptime result_kind: BufKind) DedicatedBuf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .usage = .{ .buffer = result_kind } }),
-                .buffer = self.buffer.as(result_kind),
+                .memory = self.memory.as(.{ .usage = .{ .buf = result_kind } }),
+                .buf = self.buf.as(result_kind),
             };
         }
 
@@ -553,7 +509,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
 
             return .{
                 .cmds = .{
-                    .buffer = untyped.cmds.buffer,
+                    .buf = untyped.cmds.buf,
                     .bindings = untyped.cmds.bindings,
                     .tracy_queue = untyped.cmds.tracy_queue,
                 },
@@ -574,7 +530,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             defer zone.end();
 
             // Not <= as you can't wait on the final submission!
-            assert(wait.len < global_options.max_command_buffers_per_frame);
+            assert(wait.len < global_options.max_cmdbufs_per_frame);
 
             Backend.combinedCmdBufSubmit(gx, self.asUntyped(), kind.?, wait);
         }
@@ -592,7 +548,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
 
 pub fn Cmds(family: ?QueueFamily) type {
     return struct {
-        buffer: CmdBuf,
+        buf: CmdBuf,
         /// Cached bindings for de-duplicating commands. If you write to the command buffer
         /// externally, you should update this to reflect your changes. You can set fields to their
         /// defaults to indicate that the state is unknown.
@@ -607,7 +563,7 @@ pub fn Cmds(family: ?QueueFamily) type {
                 @compileError(std.fmt.comptimePrint("cannot cast {?} to {?}", .{ family, result_queue_family }));
             }
             return .{
-                .buffer = self.buffer,
+                .buf = self.buf,
                 .bindings = self.bindings,
                 .tracy_queue = self.tracy_queue,
             };
@@ -898,7 +854,7 @@ pub fn Buf(kind: BufKind) type {
         const Self = @This();
 
         pub const View = struct {
-            buffer: Buf(kind),
+            buf: Buf(kind),
             offset: u64,
             size: u64,
 
@@ -907,7 +863,7 @@ pub fn Buf(kind: BufKind) type {
                 comptime result_kind: BufKind,
             ) Buf(result_kind).View {
                 return .{
-                    .buffer = self.buffer.as(result_kind),
+                    .buf = self.buf.as(result_kind),
                     .offset = self.offset,
                     .size = self.size,
                 };
@@ -915,14 +871,14 @@ pub fn Buf(kind: BufKind) type {
 
             pub fn unsized(self: @This()) UnsizedView {
                 return .{
-                    .buffer = self.buffer,
+                    .buf = self.buf,
                     .offset = self.offset,
                 };
             }
         };
 
         pub const UnsizedView = struct {
-            buffer: Buf(kind),
+            buf: Buf(kind),
             offset: u64,
 
             pub fn as(
@@ -930,14 +886,14 @@ pub fn Buf(kind: BufKind) type {
                 comptime result_kind: BufKind,
             ) UnsizedView(result_kind) {
                 return .{
-                    .buffer = self.buffer,
+                    .buf = self.buf,
                     .offset = self.offset,
                 };
             }
 
             pub fn sized(self: @This(), size: u64) View {
                 return .{
-                    .buffer = self.buffer,
+                    .buf = self.buf,
                     .offset = self.offset,
                     .size = size,
                 };
@@ -948,19 +904,6 @@ pub fn Buf(kind: BufKind) type {
             name: DebugName,
             size: u64,
         };
-
-        pub inline fn init(gx: *Ctx, options: @This().InitOptions) Buf(kind) {
-            comptime kind.assertNonZero();
-            const zone = tracy.Zone.begin(.{ .src = @src() });
-            defer zone.end();
-            assert(options.size > 0);
-            const untyped = Backend.bufCreate(gx, options.name, kind, options.size);
-            return @enumFromInt(@intFromEnum(untyped));
-        }
-
-        pub fn deinit(self: @This(), gx: *Ctx) void {
-            Backend.bufDestroy(gx, self.as(.{}));
-        }
 
         pub inline fn as(self: Self, comptime result_kind: BufKind) Buf(result_kind) {
             kind.checkCast(result_kind);
@@ -975,38 +918,6 @@ pub fn Buf(kind: BufKind) type {
         pub inline fn asBackendType(self: @This()) Backend.Buf {
             comptime assert(@sizeOf(Backend.Buf) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(self));
-        }
-
-        pub inline fn bind(
-            self: @This(),
-            gx: *Ctx,
-            memory_view: DeviceMemViewUnsized(.{ .usage = .{ .buffer = kind } }),
-        ) void {
-            Backend.bufBind(gx, self.as(.{}), memory_view.as(.{}));
-        }
-
-        pub inline fn bindReadback(
-            self: @This(),
-            gx: *Ctx,
-            memory_view: DeviceMemView(.{ .access = .read, .usage = .{ .buffer = kind } }),
-        ) []const u8 {
-            return Backend.bufBindAndMap(gx, self.as(.{}), memory_view.as(.{}));
-        }
-
-        pub inline fn bindUpload(
-            self: @This(),
-            gx: *Ctx,
-            memory_view: DeviceMemView(.{ .access = .write, .usage = .{ .buffer = kind } }),
-        ) []volatile anyopaque {
-            const slice = Backend.bufBindAndMap(gx, self.as(.{}), memory_view.as(.{}));
-            var result: []volatile anyopaque = undefined;
-            result.ptr = @ptrCast(slice.ptr);
-            result.len = slice.len;
-            return result;
-        }
-
-        pub fn memReqs(self: @This(), gx: *Ctx) MemReqs {
-            return Backend.bufMemReqs(gx, self.as(.{}));
         }
 
         _,
@@ -1060,7 +971,7 @@ pub fn frameStart(self: *@This()) ?u64 {
 
     const block_ns = b: {
         const semaphores = self.cmdbuf_semaphores[self.frameInFlight()].constSlice();
-        var wait_values_buf: [global_options.max_command_buffers_per_frame]u64 = undefined;
+        var wait_values_buf: [global_options.max_cmdbufs_per_frame]u64 = undefined;
         const wait_values = wait_values_buf[0..semaphores.len];
         for (wait_values) |*value| {
             value.* = self.frame;
@@ -1491,7 +1402,7 @@ pub fn Memory(k: DeviceMemKind) type {
         };
 
         pub const InitOptions = if (kind.usage) |usage| switch (usage) {
-            .buffer => if (kind.access == .write) InitNoFormatWriteOptions else InitNoFormatOptions,
+            .buf => if (kind.access == .write) InitNoFormatWriteOptions else InitNoFormatOptions,
             .image => |image| if (image.format) |format| switch (format) {
                 .color => if (kind.access == .write) InitNoFormatWriteOptions else InitNoFormatOptions,
                 .depth_stencil => if (kind.access == .write) InitDepthStencilFormatWriteOptions else InitDepthStencilFormatOptions,
@@ -1501,7 +1412,7 @@ pub fn Memory(k: DeviceMemKind) type {
         pub inline fn init(gx: *Ctx, options: @This().InitOptions) @This() {
             comptime assert(kind.usage != null);
             comptime switch (kind.usage.?) {
-                .buffer => |buffer_kind| buffer_kind.assertNonZero(),
+                .buf => |buffer_kind| buffer_kind.assertNonZero(),
                 .image => |image| {
                     assert(image.nonNull());
                 },
@@ -1512,10 +1423,10 @@ pub fn Memory(k: DeviceMemKind) type {
 
             assert(options.size > 0);
 
-            const untyped = Backend.deviceMemoryCreate(gx, .{
+            const untyped = Backend.memoryCreate(gx, .{
                 .name = options.name,
                 .usage = switch (kind.usage.?) {
-                    .buffer => |buffer| .{ .buffer = buffer },
+                    .buf => |buf| .{ .buf = buf },
                     .image => |image| switch (image.format.?) {
                         .color => .{
                             .color_image = .{
@@ -1578,7 +1489,7 @@ pub fn Memory(k: DeviceMemKind) type {
 pub const DeviceMemKind = struct {
     pub const Usage = union(enum) {
         image: ImageKind,
-        buffer: BufKind,
+        buf: BufKind,
 
         inline fn checkCast(comptime self: ?@This(), comptime rtype: ?@This()) void {
             if (rtype == null) return;
@@ -1586,7 +1497,7 @@ pub const DeviceMemKind = struct {
                 if (std.meta.activeTag(ltype) == std.meta.activeTag(rtype.?)) {
                     switch (ltype) {
                         .image => |image| return image.checkCast(rtype.?.image),
-                        .buffer => |buffer| return buffer.checkCast(rtype.?.buffer),
+                        .buf => |buf| return buf.checkCast(rtype.?.buf),
                     }
                 }
             };
@@ -1654,7 +1565,7 @@ pub fn DeviceMemViewUnsized(kind: DeviceMemKind) type {
     };
 }
 
-pub const DeviceMemCreateUntypedOptions = struct {
+pub const MemoryCreateUntypedOptions = struct {
     pub const Access = union(enum) {
         none: void,
         write: struct { prefer_device_local: bool },
@@ -1672,7 +1583,6 @@ pub const DeviceMemCreateUntypedOptions = struct {
     pub const Usage = union(enum) {
         color_image: Image(.{}).InitColorOptions.Kind,
         depth_stencil_image: Image(.{}).InitDepthStencilOptions.Kind,
-        buffer: BufKind,
 
         fn asUsage(self: @This()) DeviceMemKind.Usage {
             return switch (self) {
@@ -1686,7 +1596,6 @@ pub const DeviceMemCreateUntypedOptions = struct {
                     .tiling = image.tiling,
                     .transient_attachment = image.transient_attachment,
                 } },
-                .buffer => |buffer| .{ .buffer = buffer.asKind() },
             };
         }
     };
@@ -1851,7 +1760,7 @@ pub const CombinedPipelineLayout = struct {
                 .index = index,
                 .value = switch (desc.kind) {
                     .uniform_buffer => |uniform_buffer| .{ .uniform_buffer_view = .{
-                        .buffer = options.value.buffer.as(.{}),
+                        .buf = options.value.buf.as(.{}),
                         .offset = options.value.offset,
                         .size = uniform_buffer.size,
                     } },
@@ -2160,7 +2069,7 @@ pub const TransferCmd = union(enum) {
 
         const Offset = struct { x: i32, y: i32, z: i32 };
 
-        buffer: Buf(.{ .transfer_src = true }),
+        buf: Buf(.{ .transfer_src = true }),
         image: Image(.{ .format = .color }),
         base_mip_level: u32 = 0,
         level_count: u32 = 1,

@@ -33,30 +33,30 @@ pub fn IBackend(Self: type) type {
             gpa: Allocator,
         ) void,
 
-        bufBind: fn (
-            self: *Ctx,
-            buffer: Ctx.Buf(.{}),
-            memory_view: Ctx.DeviceMemViewUnsized(.{}),
-        ) void,
-        bufBindAndMap: fn (
-            self: *Ctx,
-            buffer: Ctx.Buf(.{}),
-            memory_view: Ctx.DeviceMemView(.{}),
-        ) []u8,
-        bufCreate: fn (
+        dedicatedBufCreate: fn (
             self: *Ctx,
             name: Ctx.DebugName,
             kind: Ctx.BufKind,
             size: u64,
-        ) Ctx.Buf(.{}),
+        ) Ctx.DedicatedBuf(.{}),
+        dedicatedUploadBufCreate: fn (
+            self: *Ctx,
+            name: Ctx.DebugName,
+            kind: Ctx.BufKind,
+            size: u64,
+            prefer_device_local: bool,
+        ) Ctx.DedicatedUploadBuf(.{}),
+        dedicatedReadbackBufCreate: fn (
+            self: *Ctx,
+            name: Ctx.DebugName,
+            kind: Ctx.BufKind,
+            size: u64,
+        ) Ctx.DedicatedReadbackBuf(.{}),
+
         bufDestroy: fn (
             self: *Ctx,
             buffer: Ctx.Buf(.{}),
         ) void,
-        bufMemReqs: fn (
-            self: *Ctx,
-            buffer: Ctx.Buf(.{}),
-        ) Ctx.MemReqs,
 
         combinedPipelineLayoutCreate: fn (
             self: *Ctx,
@@ -141,9 +141,9 @@ pub fn IBackend(Self: type) type {
             image_view: Ctx.ImageView,
         ) void,
 
-        deviceMemoryCreate: fn (
+        memoryCreate: fn (
             self: *Ctx,
-            options: Ctx.DeviceMemCreateUntypedOptions,
+            options: Ctx.MemoryCreateUntypedOptions,
         ) Ctx.Memory(.{}),
         deviceMemoryDestroy: fn (
             self: *Ctx,

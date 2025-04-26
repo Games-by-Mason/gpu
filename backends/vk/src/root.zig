@@ -82,7 +82,7 @@ transfer_command_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
 // Synchronization
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
-ready_for_present: [global_options.max_frames_in_flight]std.BoundedArray(vk.Semaphore, global_options.max_command_buffers_per_frame),
+ready_for_present: [global_options.max_frames_in_flight]std.BoundedArray(vk.Semaphore, global_options.max_cmdbufs_per_frame),
 
 // Frame info
 image_index: ?u32 = null,
@@ -767,13 +767,13 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         setName(debug_device, image_availables[i], .{ .str = "Image Available", .index = i });
     }
 
-    var ready_for_present: [global_options.max_frames_in_flight]std.BoundedArray(vk.Semaphore, global_options.max_command_buffers_per_frame) = @splat(.{});
+    var ready_for_present: [global_options.max_frames_in_flight]std.BoundedArray(vk.Semaphore, global_options.max_cmdbufs_per_frame) = @splat(.{});
     for (&ready_for_present, 0..) |*semaphores, frame| {
-        for (0..global_options.max_command_buffers_per_frame) |cb| {
+        for (0..global_options.max_cmdbufs_per_frame) |cb| {
             const semaphore = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
             setName(debug_device, semaphore, .{
                 .str = "Ready For Present",
-                .index = frame * global_options.max_command_buffers_per_frame * cb,
+                .index = frame * global_options.max_cmdbufs_per_frame * cb,
             });
             semaphores.appendAssumeCapacity(semaphore);
         }
@@ -886,44 +886,176 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     self.backend = undefined;
 }
 
-pub fn bufBind(
-    self: *Ctx,
-    buffer: Ctx.Buf(.{}),
-    memory_view: Ctx.DeviceMemViewUnsized(.{}),
-) void {
-    self.backend.device.bindBufferMemory(
-        buffer.asBackendType(),
-        memory_view.memory.asBackendType(),
-        memory_view.offset,
-    ) catch |err| @panic(@errorName(err));
-}
-
-pub fn bufBindAndMap(
-    self: *Ctx,
-    buffer: Ctx.Buf(.{}),
-    memory_view: Ctx.DeviceMemView(.{}),
-) []u8 {
-    self.backend.device.bindBufferMemory(
-        buffer.asBackendType(),
-        memory_view.memory.asBackendType(),
-        memory_view.offset,
-    ) catch |err| @panic(@errorName(err));
-    const ptr: [*]u8 = @ptrCast(self.backend.device.mapMemory(
-        memory_view.memory.asBackendType(),
-        memory_view.offset,
-        memory_view.size,
-        .{},
-    ) catch |err| @panic(@errorName(err)).?);
-    return @ptrCast(ptr[0..memory_view.size]);
-}
-
-pub fn bufCreate(
+pub fn dedicatedBufCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
     size: u64,
-) Ctx.Buf(.{}) {
-    const usage_flags: vk.BufferUsageFlags = .{
+) Ctx.DedicatedBuf(.{}) {
+    // Create the buffer
+    const usage_flags = bufUsageFlagsFromKind(kind);
+    const buffer = self.backend.device.createBuffer(&.{
+        .size = size,
+        .usage = usage_flags,
+        .sharing_mode = .exclusive,
+        .flags = .{},
+    }, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_device, buffer, name);
+
+    // Allocate memory for the buffer
+    const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
+    const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
+        .mask = reqs.memory_type_bits,
+    };
+    const device_memory_properties = self.backend.instance.getPhysicalDeviceMemoryProperties(
+        self.backend.physical_device.device,
+    );
+    const memory_type_index = findMemoryType(
+        device_memory_properties,
+        memory_type_bits,
+        .none,
+    ) orelse @panic("unsupported memory type");
+    const memory = self.backend.device.allocateMemory(&.{
+        .allocation_size = reqs.size,
+        .memory_type_index = memory_type_index,
+    }, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_device, memory, name);
+
+    // Bind the buffer to the memory
+    self.backend.device.bindBufferMemory(
+        buffer,
+        memory,
+        0,
+    ) catch |err| @panic(@errorName(err));
+
+    // Return the dedicated buffer
+    return .{
+        .buf = .fromBackendType(buffer),
+        .memory = .fromBackendType(memory),
+    };
+}
+
+pub fn dedicatedUploadBufCreate(
+    self: *Ctx,
+    name: Ctx.DebugName,
+    kind: Ctx.BufKind,
+    size: u64,
+    prefer_device_local: bool,
+) Ctx.DedicatedUploadBuf(.{}) {
+    // Create the buffer
+    const usage = bufUsageFlagsFromKind(kind);
+    const buffer = self.backend.device.createBuffer(&.{
+        .size = size,
+        .usage = usage,
+        .sharing_mode = .exclusive,
+        .flags = .{},
+    }, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_device, buffer, name);
+
+    // Create the memory
+    const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
+    const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
+        .mask = reqs.memory_type_bits,
+    };
+    const device_memory_properties = self.backend.instance.getPhysicalDeviceMemoryProperties(
+        self.backend.physical_device.device,
+    );
+    const memory_type_index = findMemoryType(
+        device_memory_properties,
+        memory_type_bits,
+        .{ .write = .{ .prefer_device_local = prefer_device_local } },
+    ) orelse @panic("unsupported memory type");
+    const memory = self.backend.device.allocateMemory(&.{
+        .allocation_size = reqs.size,
+        .memory_type_index = memory_type_index,
+    }, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_device, memory, name);
+
+    // Bind the buffer to the memory
+    self.backend.device.bindBufferMemory(
+        buffer,
+        memory,
+        0,
+    ) catch |err| @panic(@errorName(err));
+
+    // Map the memory
+    const mapping: [*]u8 = @ptrCast(self.backend.device.mapMemory(
+        memory,
+        0,
+        size,
+        .{},
+    ) catch |err| @panic(@errorName(err)).?);
+
+    // Return the dedicated buffer
+    var data: []volatile anyopaque = undefined;
+    data.ptr = @ptrCast(mapping);
+    data.len = size;
+    return .{
+        .buf = .fromBackendType(buffer),
+        .memory = .fromBackendType(memory),
+        .data = data,
+    };
+}
+
+pub fn dedicatedReadbackBufCreate(
+    self: *Ctx,
+    name: Ctx.DebugName,
+    kind: Ctx.BufKind,
+    size: u64,
+) Ctx.DedicatedReadbackBuf(.{}) {
+    // Create the buffer
+    const buffer = self.backend.device.createBuffer(&.{
+        .size = size,
+        .usage = bufUsageFlagsFromKind(kind),
+        .sharing_mode = .exclusive,
+        .flags = .{},
+    }, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_device, buffer, name);
+
+    // Create the memory
+    const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
+    const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
+        .mask = reqs.memory_type_bits,
+    };
+    const device_memory_properties = self.backend.instance.getPhysicalDeviceMemoryProperties(
+        self.backend.physical_device.device,
+    );
+    const memory_type_index = findMemoryType(
+        device_memory_properties,
+        memory_type_bits,
+        .read,
+    ) orelse @panic("unsupported memory type");
+    const memory = self.backend.device.allocateMemory(&.{
+        .allocation_size = reqs.size,
+        .memory_type_index = memory_type_index,
+    }, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_device, memory, name);
+
+    // Bind the buffer to the memory
+    self.backend.device.bindBufferMemory(
+        buffer,
+        memory,
+        0,
+    ) catch |err| @panic(@errorName(err));
+
+    // Map the buffer
+    const mapping: [*]u8 = @ptrCast(self.backend.device.mapMemory(
+        memory,
+        0,
+        size,
+        .{},
+    ) catch |err| @panic(@errorName(err)).?);
+
+    // Return the dedicated buffer
+    return .{
+        .buf = .fromBackendType(buffer),
+        .memory = .fromBackendType(memory),
+        .data = mapping[0..size],
+    };
+}
+
+fn bufUsageFlagsFromKind(kind: Ctx.BufKind) vk.BufferUsageFlags {
+    const result: vk.BufferUsageFlags = .{
         .transfer_src_bit = kind.transfer_src,
         .transfer_dst_bit = kind.transfer_dst,
         .uniform_texel_buffer_bit = kind.uniform_texel,
@@ -935,30 +1067,12 @@ pub fn bufCreate(
         .indirect_buffer_bit = kind.indirect,
         .shader_device_address_bit = kind.shader_device_address,
     };
-    assert(@as(u32, @bitCast(usage_flags)) != 0);
-    const buffer = self.backend.device.createBuffer(&.{
-        .size = size,
-        .usage = usage_flags,
-        .sharing_mode = .exclusive,
-        .flags = .{},
-    }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_device, buffer, name);
-    return .fromBackendType(buffer);
+    assert(@as(u32, @bitCast(result)) != 0);
+    return result;
 }
 
 pub fn bufDestroy(self: *Ctx, buffer: Ctx.Buf(.{})) void {
     self.backend.device.destroyBuffer(buffer.asBackendType(), null);
-}
-
-pub fn bufMemReqs(
-    self: *Ctx,
-    buffer: Ctx.Buf(.{}),
-) Ctx.MemReqs {
-    const requirements = self.backend.device.getBufferMemoryRequirements(buffer.asBackendType());
-    return .{
-        .size = requirements.size,
-        .alignment = requirements.alignment,
-    };
 }
 
 pub fn combinedPipelineLayoutCreate(
@@ -1097,7 +1211,7 @@ pub fn combinedCmdBufCreate(
 
     return .{
         .cmds = .{
-            .buffer = .fromBackendType(command_buffer),
+            .buf = .fromBackendType(command_buffer),
             .bindings = options.bindings,
             .tracy_queue = options.combined_queue.tracy_queue,
         },
@@ -1133,15 +1247,15 @@ pub fn cmdBufGraphicsAppend(
     cmds: Ctx.Cmds(null),
     options: Ctx.Cmds(null).AppendGraphicsCmdsOptions,
 ) void {
-    const command_buffer = cmds.buffer.asBackendType();
+    const command_buffer = cmds.buf.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = cmds.buffer,
+        .command_buffer = cmds.buf,
         .tracy_queue = cmds.tracy_queue,
         .loc = options.loc,
     });
     defer zone.end(self, .{
-        .command_buffer = cmds.buffer,
+        .command_buffer = cmds.buf,
         .tracy_queue = cmds.tracy_queue,
     });
 
@@ -1211,7 +1325,7 @@ pub fn cmdBufGraphicsAppend(
 
             self.backend.device.cmdDrawIndexedIndirect(
                 command_buffer,
-                draw.args.buffer.asBackendType(),
+                draw.args.buf.asBackendType(),
                 draw.args.offset,
                 draw.args_count,
                 @sizeOf(Ctx.DrawCmd.IndexedIndirect),
@@ -1219,7 +1333,7 @@ pub fn cmdBufGraphicsAppend(
         } else {
             self.backend.device.cmdDrawIndirect(
                 command_buffer,
-                draw.args.buffer.asBackendType(),
+                draw.args.buf.asBackendType(),
                 draw.args.offset,
                 draw.args_count,
                 @sizeOf(Ctx.DrawCmd.Indirect),
@@ -1234,13 +1348,13 @@ pub fn combinedCmdBufSubmit(
     kind: Ctx.CmdBufKind,
     wait: []const Ctx.Wait,
 ) void {
-    const command_buffer = combined_command_buffer.cmds.buffer.asBackendType();
+    const command_buffer = combined_command_buffer.cmds.buf.asBackendType();
 
     if (kind == .present) {
         self.backend.device.cmdEndRenderPass(command_buffer);
     }
     combined_command_buffer.zone.end(self, .{
-        .command_buffer = combined_command_buffer.cmds.buffer,
+        .command_buffer = combined_command_buffer.cmds.buf,
         .tracy_queue = combined_command_buffer.cmds.tracy_queue,
     });
     self.backend.device.endCommandBuffer(command_buffer) catch |err| @panic(@errorName(err));
@@ -1251,7 +1365,7 @@ pub fn combinedCmdBufSubmit(
 
         // Max is the number of command buffers, minus one since you can't wait on the final one,
         // plus one for the possibility of the image available semaphore.
-        const max_waits = global_options.max_command_buffers_per_frame;
+        const max_waits = global_options.max_cmdbufs_per_frame;
         var wait_stages: std.BoundedArray(vk.PipelineStageFlags, max_waits) = .{};
         var wait_semaphores: std.BoundedArray(vk.Semaphore, max_waits) = .{};
         if (kind == .present) {
@@ -1427,12 +1541,12 @@ pub fn descriptorSetsUpdate(
 
             switch (update_curr.value) {
                 .uniform_buffer_view => |view| buffer_infos.appendAssumeCapacity(.{
-                    .buffer = view.buffer.asBackendType(),
+                    .buffer = view.buf.asBackendType(),
                     .offset = view.offset,
                     .range = view.size,
                 }),
                 .storage_buffer_view => |view| buffer_infos.appendAssumeCapacity(.{
-                    .buffer = view.buffer.asBackendType(),
+                    .buffer = view.buf.asBackendType(),
                     .offset = view.offset,
                     .range = view.size,
                 }),
@@ -1729,9 +1843,9 @@ pub fn imageViewDestroy(self: *Ctx, image_view: Ctx.ImageView) void {
     self.backend.device.destroyImageView(image_view.asBackendType(), null);
 }
 
-pub fn deviceMemoryCreate(
+pub fn memoryCreate(
     self: *Ctx,
-    options: Ctx.DeviceMemCreateUntypedOptions,
+    options: Ctx.MemoryCreateUntypedOptions,
 ) Ctx.Memory(.{}) {
     // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
     // able to do this, but we don't need to actually bind it to any memory it's just a handle.
@@ -1833,37 +1947,6 @@ pub fn deviceMemoryCreate(
             };
             break :b memory_type_bits;
         },
-        .buffer => |buffer_usage| b: {
-            const usage_flags: vk.BufferUsageFlags = .{
-                .transfer_src_bit = buffer_usage.transfer_src,
-                .transfer_dst_bit = buffer_usage.transfer_dst,
-                .uniform_texel_buffer_bit = buffer_usage.uniform_texel,
-                .storage_texel_buffer_bit = buffer_usage.storage_texel,
-                .uniform_buffer_bit = buffer_usage.uniform,
-                .storage_buffer_bit = buffer_usage.storage,
-                .index_buffer_bit = buffer_usage.index,
-                .vertex_buffer_bit = buffer_usage.vertex,
-                .indirect_buffer_bit = buffer_usage.indirect,
-                .shader_device_address_bit = buffer_usage.shader_device_address,
-            };
-            assert(@as(u32, @bitCast(usage_flags)) != 0);
-            var reqs: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
-            self.backend.device.getDeviceBufferMemoryRequirements(
-                &.{
-                    .p_create_info = &.{
-                        .size = options.size,
-                        .usage = usage_flags,
-                        .sharing_mode = .exclusive,
-                        .flags = .{},
-                    },
-                },
-                &reqs,
-            );
-            const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
-                .mask = reqs.memory_requirements.memory_type_bits,
-            };
-            break :b memory_type_bits;
-        },
     };
 
     const device_memory_properties = self.backend.instance.getPhysicalDeviceMemoryProperties(
@@ -1873,7 +1956,7 @@ pub fn deviceMemoryCreate(
         device_memory_properties,
         memory_type_bits,
         options.access,
-    ) orelse @panic("memory type not supported");
+    ) orelse @panic("unsupported memory type");
 
     // Allocate the memory
     const memory = self.backend.device.allocateMemory(&.{
@@ -2260,7 +2343,7 @@ pub fn cmdBufTransferAppend(
     comptime max_regions: u32,
     options: Ctx.Cmds(null).AppendTransferCmdsOptions,
 ) void {
-    const command_buffer = cmds.buffer.asBackendType();
+    const command_buffer = cmds.buf.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
         .command_buffer = .fromBackendType(command_buffer),
@@ -2334,7 +2417,7 @@ pub fn cmdBufTransferAppend(
                 }
                 self.backend.device.cmdCopyBufferToImage(
                     command_buffer,
-                    cmd_options.buffer.asBackendType(),
+                    cmd_options.buf.asBackendType(),
                     cmd_options.image.asBackendType(),
                     .transfer_dst_optimal,
                     @intCast(regions.len),
@@ -2479,7 +2562,7 @@ fn addressModeToVk(mode: Ctx.Sampler.InitOptions.AddressMode) vk.SamplerAddressM
 fn findMemoryType(
     device_memory_properties: vk.PhysicalDeviceMemoryProperties,
     required_type_bits: std.bit_set.IntegerBitSet(32),
-    access: Ctx.DeviceMemCreateUntypedOptions.Access,
+    access: Ctx.MemoryCreateUntypedOptions.Access,
 ) ?u32 {
     const host_visible = switch (access) {
         .read, .write => true,
@@ -2697,7 +2780,7 @@ const Swapchain = struct {
     }
 };
 
-const CommandBufferSemaphores = std.BoundedArray(vk.Semaphore, global_options.max_command_buffers_per_frame);
+const CommandBufferSemaphores = std.BoundedArray(vk.Semaphore, global_options.max_cmdbufs_per_frame);
 
 // r: clean up...undefined, and way it's used, etc
 const PhysicalDevice = struct {
@@ -2858,6 +2941,40 @@ fn vkDebugCallback(
     data: [*c]const vk.DebugUtilsMessengerCallbackDataEXT,
     user_data: ?*anyopaque,
 ) callconv(.C) vk.Bool32 {
+    var level: std.log.Level = if (severity.error_bit_ext)
+        .err
+    else if (severity.warning_bit_ext)
+        .warn
+    else if (severity.info_bit_ext)
+        .info
+    else if (severity.verbose_bit_ext)
+        .debug
+    else b: {
+        log.err("unknown severity {}", .{severity});
+        break :b .err;
+    };
+
+    // Ignore or reduce the severity of some AMD warnings
+    if (level == .warn) {
+        if (data) |d| switch (d.*.message_id_number) {
+            // Ignore `BestPractices-vkBindBufferMemory-small-dedicated-allocation` and
+            // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering strategy is
+            // designed around this but we often have so little total memory that we trip it anyway!
+            280337739, -40745094 => return vk.FALSE,
+            // Don't warn us that validation is on every time validation is on, but do log it as
+            // debug
+            615892639, 2132353751, 1734198062 => level = .debug,
+            // Don't warn us about skipping unsupported drivers, but do log it as debug
+            0 => if (d.*.p_message_id_name) |name| {
+                if (std.mem.eql(u8, std.mem.span(name), "Loader Message")) {
+                    level = .debug;
+                }
+            },
+            else => {},
+        };
+    }
+
+    // Otherwise log them
     const format = "{}";
     const args = .{fmtDebugMessage(.{
         .severity = severity,
@@ -2865,20 +2982,24 @@ fn vkDebugCallback(
         .data = data,
         .user_data = user_data,
     })};
-    if (severity.error_bit_ext) {
-        log.err(format, args);
-    } else if (severity.warning_bit_ext) {
-        log.warn(format, args);
-    } else if (severity.info_bit_ext) {
-        log.info(format, args);
-    } else if (severity.verbose_bit_ext) {
-        log.debug(format, args);
-    } else {
-        log.err("unknown severity: {}", .{severity});
-        log.err(format, args);
+    switch (level) {
+        .err => {
+            log.err(format, args);
+            return vk.TRUE;
+        },
+        .warn => {
+            log.warn(format, args);
+            return vk.FALSE;
+        },
+        .info => {
+            log.info(format, args);
+            return vk.FALSE;
+        },
+        .debug => {
+            log.debug(format, args);
+            return vk.FALSE;
+        },
     }
-
-    return vk.FALSE;
 }
 
 inline fn setName(

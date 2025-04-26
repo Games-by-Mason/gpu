@@ -22,7 +22,7 @@ pub const Options = struct {
         transfer: u6 = 1,
     },
     tracy_query_pool_capacity: u16 = 256,
-    max_command_buffers_per_frame: u8,
+    max_cmdbufs_per_frame: u8,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
 };
 
