@@ -26,16 +26,13 @@ debug_messenger: vk.DebugUtilsMessengerEXT,
 
 // Queues
 timestamp_period: f32,
-combined_queues: Ctx.Device.CombinedQueues,
-graphics_queue_family_index: u32,
-compute_queue_family_index: ?u32,
-transfer_queue_family_index: ?u32,
+queue: vk.Queue,
+tracy_queue: TracyQueue,
+queue_family_index: u32,
 
 // Command buffers and render passes
 render_pass: vk.RenderPass,
-graphics_command_pools: [global_options.max_frames_in_flight]vk.CommandPool,
-compute_command_pools: [global_options.max_frames_in_flight]vk.CommandPool,
-transfer_command_pools: [global_options.max_frames_in_flight]vk.CommandPool,
+cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
 // Synchronization
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
@@ -221,11 +218,19 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
 
         const queue_family_properties = instance_proxy.getPhysicalDeviceQueueFamilyPropertiesAlloc(device, gpa) catch |err| @panic(@errorName(err));
         defer gpa.free(queue_family_properties);
-        const supports_graphics_present = for (queue_family_properties, 0..) |qfp, qfi| {
-            if (queueFamilyHasGraphics(qfp) and queueFamilyHasPresent(instance_proxy, device, surface, @intCast(qfi))) {
-                break true;
-            }
-        } else false;
+        const queue_family_index: ?u32 = for (queue_family_properties, 0..) |qfp, qfi| {
+            // Check for present
+            if (instance_proxy.getPhysicalDeviceSurfaceSupportKHR(
+                device,
+                @intCast(qfi),
+                surface,
+            ) catch |err| @panic(@errorName(err)) != vk.TRUE) continue;
+            // Check for graphics and compute. We don't check the transfer bit since graphics and
+            // compute imply it, and it's not required to be set if they are.
+            if (!qfp.queue_flags.graphics_bit or !qfp.queue_flags.compute_bit) continue;
+            // Break with the first compatible queue
+            break @intCast(qfi);
+        } else null;
 
         var missing_device_extensions: std.StringHashMapUnmanaged(void) = .{};
         defer missing_device_extensions.deinit(gpa);
@@ -288,7 +293,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
 
         log.info("  {}. {s}:", .{ i, bufToStr(&properties.device_name) });
         log.info("    * device type: {}", .{properties.device_type});
-        log.info("    * has graphics+present queue: {?}", .{supports_graphics_present});
+        log.info("    * queue family index: {?}", .{queue_family_index});
         log.info("    * present mode: {?}", .{present_mode});
         log.info("    * surface format: {?}", .{surface_format});
         log.info("    * features: {}", .{all_features});
@@ -322,7 +327,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             break :b null;
         };
 
-        const compatible = supports_graphics_present and extensions_supported and composite_alpha != null and supports_required_features;
+        const compatible = queue_family_index != null and extensions_supported and composite_alpha != null and supports_required_features;
 
         if (compatible) {
             log.info("    * rank: {}", .{rank});
@@ -355,6 +360,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
                 .max_draw_indirect_count = properties.limits.max_draw_indirect_count,
                 .sampler_anisotropy = features.features.sampler_anisotropy == vk.TRUE,
                 .max_sampler_anisotropy = properties.limits.max_sampler_anisotropy,
+                .queue_family_index = queue_family_index.?,
             };
         }
     }
@@ -371,79 +377,15 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     const queue_family_properties = instance_proxy.getPhysicalDeviceQueueFamilyPropertiesAlloc(best_physical_device.device, gpa) catch |err| @panic(@errorName(err));
     defer gpa.free(queue_family_properties);
 
-    const graphics_queue_family_index: u32 = for (queue_family_properties, 0..) |qfp, qfi| {
-        if (queueFamilyHasGraphics(qfp) and
-            queueFamilyHasPresent(instance_proxy, best_physical_device.device, surface, @intCast(qfi)) and
-            queueFamilyHasCompute(qfp) and
-            queueFamilyHasTransfer(qfp))
-        {
-            break @intCast(qfi);
-        }
-    } else {
-        // If none existed, we would have ruled out this device
-        unreachable;
-    };
-
-    const compute_queue_family_index: ?u32 = for (queue_family_properties, 0..) |qfp, qfi| {
-        if (queueFamilyHasCompute(qfp) and
-            queueFamilyHasTransfer(qfp) and
-            !queueFamilyHasGraphics(qfp))
-        {
-            break @intCast(qfi);
-        }
-    } else null;
-
-    const transfer_queue_family_index: ?u32 = for (queue_family_properties, 0..) |qfp, qfi| {
-        if (queueFamilyHasTransfer(qfp) and
-            !queueFamilyHasGraphics(qfp) and
-            !queueFamilyHasCompute(qfp))
-        {
-            break @intCast(qfi);
-        }
-    } else null;
-
     const queue_family_allocated: []u8 = gpa.alloc(u8, queue_family_properties.len) catch @panic("OOM");
     defer gpa.free(queue_family_allocated);
     for (queue_family_allocated) |*c| c.* = 0;
 
-    const queue_priorities: [gpu.max_queues]f32 = .{1.0} ** gpu.max_queues;
-    var queue_create_infos: std.BoundedArray(vk.DeviceQueueCreateInfo, 3) = .{};
-    {
-        const queue_count = @min(
-            queue_family_properties[graphics_queue_family_index].queue_count,
-            global_options.max_queues.graphics,
-        );
-        log.info("graphics queues: {} queue(s) from queue family {}", .{ queue_count, graphics_queue_family_index });
-        queue_create_infos.appendAssumeCapacity(.{
-            .queue_family_index = graphics_queue_family_index,
-            .queue_count = queue_count,
-            .p_queue_priorities = queue_priorities[0..].ptr,
-        });
-    }
-    if (compute_queue_family_index) |qfi| {
-        const queue_count = @min(
-            queue_family_properties[qfi].queue_count,
-            global_options.max_queues.compute,
-        );
-        log.info("compute queues: {} queue(s) from queue family {}", .{ queue_count, qfi });
-        queue_create_infos.appendAssumeCapacity(.{
-            .queue_family_index = qfi,
-            .queue_count = queue_count,
-            .p_queue_priorities = queue_priorities[0..].ptr,
-        });
-    }
-    if (transfer_queue_family_index) |qfi| {
-        const queue_count = @min(
-            queue_family_properties[qfi].queue_count,
-            global_options.max_queues.transfer,
-        );
-        log.info("transfer queues: {} queue(s) from queue family {}", .{ queue_count, qfi });
-        queue_create_infos.appendAssumeCapacity(.{
-            .queue_family_index = qfi,
-            .queue_count = queue_count,
-            .p_queue_priorities = queue_priorities[0..].ptr,
-        });
-    }
+    const queue_create_infos: [1]vk.DeviceQueueCreateInfo = .{.{
+        .queue_family_index = best_physical_device.queue_family_index,
+        .queue_count = 1,
+        .p_queue_priorities = &.{1.0},
+    }};
     queue_zone.end();
 
     const device_proxy_zone = tracy.Zone.begin(.{ .name = "create device proxy", .src = @src() });
@@ -463,7 +405,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .sampler_anisotropy = @intFromBool(best_physical_device.sampler_anisotropy),
     };
     const device_create_info: vk.DeviceCreateInfo = .{
-        .p_queue_create_infos = &queue_create_infos.buffer,
+        .p_queue_create_infos = &queue_create_infos,
         .queue_create_info_count = @intCast(queue_create_infos.len),
         .p_enabled_features = &device_features,
         .enabled_extension_count = @intCast(required_device_extensions.items.len),
@@ -504,83 +446,19 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     } else 0.0;
 
     const calibration = timestampCalibrationImpl(device, options.timestamp_queries);
-    var tracy_queues: u8 = 0;
     timestamp_zone.end();
 
-    var combined_queues: Ctx.Device.CombinedQueues = .{
-        .graphics_family = .{},
-        .compute_family = .{},
-        .transfer_family = .{},
-    };
     const get_queue_zone = tracy.Zone.begin(.{ .name = "get queues", .src = @src() });
-    {
-        const qfi = graphics_queue_family_index;
-        inline for (0..global_options.max_queues.graphics) |q| {
-            if (q >= queue_family_properties[qfi].queue_count) break;
-
-            const queue = device.getDeviceQueue(
-                qfi,
-                @intCast(q),
-            );
-            setName(device, queue, .{ .str = "Graphics Queue", .index = q }, options.validation);
-            combined_queues.graphics_family.appendAssumeCapacity(.{
-                .queue = .fromBackendType(queue),
-                .tracy_queue = TracyQueue.init(.{
-                    .gpu_time = calibration.gpu,
-                    .period = timestamp_period,
-                    .context = tracy_queues,
-                    .flags = .{},
-                    .type = .vulkan,
-                    .name = std.fmt.comptimePrint("Graphics Queue {}", .{q}),
-                }),
-            });
-            tracy_queues += 1;
-        }
-    }
-    if (compute_queue_family_index) |qfi| {
-        inline for (0..global_options.max_queues.compute) |q| {
-            if (q >= queue_family_properties[qfi].queue_count) break;
-            const queue = device.getDeviceQueue(
-                qfi,
-                @intCast(q),
-            );
-            setName(device, queue, .{ .str = "Compute Queue", .index = q }, options.validation);
-            combined_queues.compute_family.appendAssumeCapacity(.{
-                .queue = .fromBackendType(queue),
-                .tracy_queue = TracyQueue.init(.{
-                    .gpu_time = calibration.gpu,
-                    .period = timestamp_period,
-                    .context = tracy_queues,
-                    .flags = .{},
-                    .type = .vulkan,
-                    .name = std.fmt.comptimePrint("Compute Queue {}", .{q}),
-                }),
-            });
-            tracy_queues += 1;
-        }
-    }
-    if (transfer_queue_family_index) |qfi| {
-        inline for (0..global_options.max_queues.transfer) |q| {
-            if (q >= queue_family_properties[qfi].queue_count) break;
-            const queue = device.getDeviceQueue(
-                qfi,
-                @intCast(q),
-            );
-            setName(device, queue, .{ .str = "Transfer Queue", .index = q }, options.validation);
-            combined_queues.transfer_family.appendAssumeCapacity(.{
-                .queue = .fromBackendType(queue),
-                .tracy_queue = TracyQueue.init(.{
-                    .gpu_time = calibration.gpu,
-                    .period = timestamp_period,
-                    .context = tracy_queues,
-                    .flags = .{},
-                    .type = .vulkan,
-                    .name = std.fmt.comptimePrint("Transfer Queue {}", .{q}),
-                }),
-            });
-            tracy_queues += 1;
-        }
-    }
+    const queue = device.getDeviceQueue(best_physical_device.queue_family_index, 0);
+    setName(device, queue, .{ .str = "Graphics Queue", .index = 0 }, options.validation);
+    const tracy_queue = TracyQueue.init(.{
+        .gpu_time = calibration.gpu,
+        .period = timestamp_period,
+        .context = 0,
+        .flags = .{},
+        .type = .vulkan,
+        .name = std.fmt.comptimePrint("Graphics Queue {}", .{0}),
+    });
     get_queue_zone.end();
 
     const render_pass_zone = tracy.Zone.begin(.{ .name = "create render pass", .src = @src() });
@@ -646,31 +524,13 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     );
 
     const command_pools_zone = tracy.Zone.begin(.{ .name = "create command pools", .src = @src() });
-    var graphics_command_pools: [global_options.max_frames_in_flight]vk.CommandPool = undefined;
-    for (&graphics_command_pools, 0..) |*pool, i| {
+    var cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool = undefined;
+    for (&cmd_pools, 0..) |*pool, i| {
         pool.* = device.createCommandPool(&.{
             .flags = .{ .transient_bit = true },
-            .queue_family_index = graphics_queue_family_index,
+            .queue_family_index = best_physical_device.queue_family_index,
         }, null) catch |err| @panic(@errorName(err));
         setName(device, pool.*, .{ .str = "Graphics", .index = i }, options.validation);
-    }
-
-    var compute_command_pools: [global_options.max_frames_in_flight]vk.CommandPool = undefined;
-    for (&compute_command_pools, 0..) |*pool, i| {
-        pool.* = device.createCommandPool(&.{
-            .flags = .{ .transient_bit = true },
-            .queue_family_index = compute_queue_family_index orelse graphics_queue_family_index,
-        }, null) catch |err| @panic(@errorName(err));
-        setName(device, pool.*, .{ .str = "Compute", .index = i }, options.validation);
-    }
-
-    var transfer_command_pools: [global_options.max_frames_in_flight]vk.CommandPool = undefined;
-    for (&transfer_command_pools, 0..) |*pool, i| {
-        pool.* = device.createCommandPool(&.{
-            .flags = .{ .transient_bit = true },
-            .queue_family_index = transfer_queue_family_index orelse compute_queue_family_index orelse graphics_queue_family_index,
-        }, null) catch |err| @panic(@errorName(err));
-        setName(device, pool.*, .{ .str = "Transfer", .index = i }, options.validation);
     }
     command_pools_zone.end();
 
@@ -725,17 +585,14 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .device = device,
         .swapchain = swapchain,
         .render_pass = render_pass,
-        .graphics_command_pools = graphics_command_pools,
-        .compute_command_pools = compute_command_pools,
-        .transfer_command_pools = transfer_command_pools,
+        .cmd_pools = cmd_pools,
         .image_availables = image_availables,
         .ready_for_present = ready_for_present,
         .physical_device = best_physical_device,
         .timestamp_period = timestamp_period,
-        .combined_queues = combined_queues,
-        .graphics_queue_family_index = graphics_queue_family_index,
-        .transfer_queue_family_index = transfer_queue_family_index,
-        .compute_queue_family_index = compute_queue_family_index,
+        .queue = queue,
+        .tracy_queue = tracy_queue,
+        .queue_family_index = best_physical_device.queue_family_index,
         .zones = zones,
         .tracy_query_pool = tracy_query_pool,
         .timestamp_queries = options.timestamp_queries,
@@ -756,13 +613,7 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     for (self.backend.image_availables) |s| self.backend.device.destroySemaphore(s, null);
 
     // Destroy command state
-    for (self.backend.graphics_command_pools) |pool| {
-        self.backend.device.destroyCommandPool(pool, null);
-    }
-    for (self.backend.compute_command_pools) |pool| {
-        self.backend.device.destroyCommandPool(pool, null);
-    }
-    for (self.backend.transfer_command_pools) |pool| {
+    for (self.backend.cmd_pools) |pool| {
         self.backend.device.destroyCommandPool(pool, null);
     }
 
@@ -1073,9 +924,7 @@ pub fn combinedCmdBufCreate(
     var command_buffers = [_]vk.CommandBuffer{.null_handle};
     self.backend.device.allocateCommandBuffers(&.{
         .command_pool = switch (options.kind) {
-            .graphics, .present => self.backend.graphics_command_pools[self.frameInFlight()],
-            .compute => self.backend.compute_command_pools[self.frameInFlight()],
-            .transfer => self.backend.transfer_command_pools[self.frameInFlight()],
+            .graphics, .present => self.backend.cmd_pools[self.frameInFlight()],
         },
         .level = .primary,
         .command_buffer_count = command_buffers.len,
@@ -1092,7 +941,7 @@ pub fn combinedCmdBufCreate(
 
     const zone = Ctx.Zone.begin(self, .{
         .command_buffer = .fromBackendType(command_buffer),
-        .tracy_queue = options.combined_queue.tracy_queue,
+        .tracy_queue = self.backend.tracy_queue,
         .loc = options.loc,
     });
 
@@ -1119,9 +968,7 @@ pub fn combinedCmdBufCreate(
         .cmds = .{
             .buf = .fromBackendType(command_buffer),
             .bindings = options.bindings,
-            .tracy_queue = options.combined_queue.tracy_queue,
         },
-        .queue = options.combined_queue.queue,
         .signal = options.signal,
         .zone = zone,
     };
@@ -1150,19 +997,19 @@ pub fn zoneEnd(
 
 pub fn cmdBufGraphicsAppend(
     self: *Ctx,
-    cmds: Ctx.Cmds(null),
-    options: Ctx.Cmds(null).AppendGraphicsCmdsOptions,
+    cmds: Ctx.Cmds,
+    options: Ctx.Cmds.AppendGraphicsCmdsOptions,
 ) void {
     const command_buffer = cmds.buf.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
         .command_buffer = cmds.buf,
-        .tracy_queue = cmds.tracy_queue,
+        .tracy_queue = self.backend.tracy_queue,
         .loc = options.loc,
     });
     defer zone.end(self, .{
         .command_buffer = cmds.buf,
-        .tracy_queue = cmds.tracy_queue,
+        .tracy_queue = self.backend.tracy_queue,
     });
 
     const bindings = cmds.bindings;
@@ -1261,7 +1108,7 @@ pub fn combinedCmdBufSubmit(
     }
     combined_command_buffer.zone.end(self, .{
         .command_buffer = combined_command_buffer.cmds.buf,
-        .tracy_queue = combined_command_buffer.cmds.tracy_queue,
+        .tracy_queue = self.backend.tracy_queue,
     });
     self.backend.device.endCommandBuffer(command_buffer) catch |err| @panic(@errorName(err));
 
@@ -1330,7 +1177,7 @@ pub fn combinedCmdBufSubmit(
             .p_next = &timeline_semaphore_submit_info,
         }};
         self.backend.device.queueSubmit(
-            combined_command_buffer.queue.asBackendType(),
+            self.backend.queue,
             submit_infos.len,
             &submit_infos,
             .null_handle,
@@ -1559,14 +1406,8 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
 pub fn frameStart(self: *Ctx) void {
     self.backend.image_index = null;
 
-    const graphics_command_pool = self.backend.graphics_command_pools[self.frameInFlight()];
+    const graphics_command_pool = self.backend.cmd_pools[self.frameInFlight()];
     self.backend.device.resetCommandPool(graphics_command_pool, .{}) catch |err| @panic(@errorName(err));
-
-    const compute_command_pool = self.backend.compute_command_pools[self.frameInFlight()];
-    self.backend.device.resetCommandPool(compute_command_pool, .{}) catch |err| @panic(@errorName(err));
-
-    const transfer_command_pool = self.backend.transfer_command_pools[self.frameInFlight()];
-    self.backend.device.resetCommandPool(transfer_command_pool, .{}) catch |err| @panic(@errorName(err));
 
     self.backend.ready_for_present[self.frameInFlight()].clear();
 
@@ -1624,7 +1465,6 @@ pub fn getDevice(self: *const @This()) Ctx.Device {
         .uniform_buf_offset_alignment = self.physical_device.min_uniform_buffer_offset_alignment,
         .storage_buf_offset_alignment = self.physical_device.min_storage_buffer_offset_alignment,
         .timestamp_period = self.timestamp_period,
-        .combined_queues = self.combined_queues,
     };
 }
 
@@ -2075,7 +1915,7 @@ pub fn combinedPipelinesCreate(
     }
 }
 
-pub fn present(self: *Ctx, queue: Ctx.Queue(.graphics)) u64 {
+pub fn present(self: *Ctx) u64 {
     const suboptimal_out_of_date, const present_ns = b: {
         const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
         defer queue_present_zone.end();
@@ -2101,7 +1941,7 @@ pub fn present(self: *Ctx, queue: Ctx.Queue(.graphics)) u64 {
             defer blocking_zone.end();
 
             const suboptimal_out_of_date = if (self.backend.device.queuePresentKHR(
-                queue.asBackendType(),
+                self.backend.queue,
                 &present_info,
             )) |result|
                 result == .suboptimal_khr
@@ -2248,21 +2088,36 @@ pub fn timestampCalibrationImpl(
 
 pub fn cmdBufTransferAppend(
     self: *Ctx,
-    cmds: Ctx.Cmds(null),
+    cmds: Ctx.Cmds,
     comptime max_regions: u32,
-    options: Ctx.Cmds(null).AppendTransferCmdsOptions,
+    options: Ctx.Cmds.AppendTransferCmdsOptions,
 ) void {
     const command_buffer = cmds.buf.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
         .command_buffer = .fromBackendType(command_buffer),
-        .tracy_queue = cmds.tracy_queue,
+        .tracy_queue = self.backend.tracy_queue,
         .loc = options.loc,
     });
 
     for (options.cmds) |cmd| {
         switch (cmd) {
             .copy_buffer_to_color_image => |cmd_options| {
+                const subresource_range: vk.ImageSubresourceRange = .{
+                    // Note: "If the queue family used to create the VkCommandPool which
+                    // CmdBuf was allocated from does not support
+                    // VK_QUEUE_GRAPHICS_BIT, for each element of pRegions, the aspectMask
+                    // member of imageSubresource must not be VK_IMAGE_ASPECT_DEPTH_BIT or
+                    // VK_IMAGE_ASPECT_STENCIL_BIT"
+                    //
+                    // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdCopyBufferToImage.html
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = cmd_options.base_mip_level,
+                    .level_count = cmd_options.level_count,
+                    .base_array_layer = cmd_options.base_array_layer,
+                    .layer_count = cmd_options.layer_count,
+                };
+
                 // Transition the image to transfer dst optimal
                 self.backend.device.cmdPipelineBarrier(
                     command_buffer,
@@ -2282,20 +2137,7 @@ pub fn cmdBufTransferAppend(
                         .src_queue_family_index = 0, // Ignored
                         .dst_queue_family_index = 0, // Ignored
                         .image = cmd_options.image.asBackendType(),
-                        .subresource_range = .{
-                            // Note: "If the queue family used to create the VkCommandPool which
-                            // CmdBuf was allocated from does not support
-                            // VK_QUEUE_GRAPHICS_BIT, for each element of pRegions, the aspectMask
-                            // member of imageSubresource must not be VK_IMAGE_ASPECT_DEPTH_BIT or
-                            // VK_IMAGE_ASPECT_STENCIL_BIT"
-                            //
-                            // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdCopyBufferToImage.html
-                            .aspect_mask = .{ .color_bit = true },
-                            .base_mip_level = cmd_options.base_mip_level,
-                            .level_count = cmd_options.level_count,
-                            .base_array_layer = cmd_options.base_array_layer,
-                            .layer_count = cmd_options.layer_count,
-                        },
+                        .subresource_range = subresource_range,
                     }},
                 );
 
@@ -2337,7 +2179,7 @@ pub fn cmdBufTransferAppend(
                 self.backend.device.cmdPipelineBarrier(
                     command_buffer,
                     .{ .transfer_bit = true },
-                    .{ .transfer_bit = true },
+                    .{ .fragment_shader_bit = true },
                     .{},
                     0,
                     null,
@@ -2346,19 +2188,13 @@ pub fn cmdBufTransferAppend(
                     1,
                     &.{.{
                         .src_access_mask = .{ .transfer_write_bit = true },
-                        .dst_access_mask = .{ .transfer_write_bit = true },
+                        .dst_access_mask = .{ .shader_read_bit = true },
                         .old_layout = .transfer_dst_optimal,
                         .new_layout = layoutToVk(cmd_options.new_layout),
                         .src_queue_family_index = 0, // Ignored
                         .dst_queue_family_index = 0, // Ignored
                         .image = cmd_options.image.asBackendType(),
-                        .subresource_range = .{
-                            .aspect_mask = .{ .color_bit = true },
-                            .base_mip_level = cmd_options.base_mip_level,
-                            .level_count = cmd_options.level_count,
-                            .base_array_layer = cmd_options.base_array_layer,
-                            .layer_count = cmd_options.layer_count,
-                        },
+                        .subresource_range = subresource_range,
                     }},
                 );
             },
@@ -2384,7 +2220,7 @@ pub fn cmdBufTransferAppend(
 
     zone.end(self, .{
         .command_buffer = .fromBackendType(command_buffer),
-        .tracy_queue = cmds.tracy_queue,
+        .tracy_queue = self.backend.tracy_queue,
     });
 }
 
@@ -2708,34 +2544,8 @@ const PhysicalDevice = struct {
     max_draw_indirect_count: u32 = undefined,
     sampler_anisotropy: bool = undefined,
     max_sampler_anisotropy: f32 = undefined,
+    queue_family_index: u32 = undefined,
 };
-
-fn queueFamilyHasPresent(
-    instance: vk.InstanceProxy,
-    device: vk.PhysicalDevice,
-    surface: vk.SurfaceKHR,
-    qfi: u32,
-) bool {
-    return (instance.getPhysicalDeviceSurfaceSupportKHR(
-        device,
-        @intCast(qfi),
-        surface,
-    ) catch |err| @panic(@errorName(err))) == vk.TRUE;
-}
-
-fn queueFamilyHasGraphics(properties: vk.QueueFamilyProperties) bool {
-    return properties.queue_flags.graphics_bit;
-}
-
-fn queueFamilyHasCompute(properties: vk.QueueFamilyProperties) bool {
-    return properties.queue_flags.compute_bit;
-}
-
-fn queueFamilyHasTransfer(properties: vk.QueueFamilyProperties) bool {
-    return properties.queue_flags.transfer_bit or
-        queueFamilyHasGraphics(properties) or
-        queueFamilyHasCompute(properties);
-}
 
 const TimestampQueries = struct {
     pool: vk.QueryPool,

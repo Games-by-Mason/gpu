@@ -67,68 +67,10 @@ pub const Device = struct {
         cpu,
     };
 
-    pub const CombinedQueues = struct {
-        /// The graphics queue family supports graphics, present, compute, and transfer operations.
-        /// All supported devices support this queue family.
-        ///
-        ///
-        /// At the time of writing in 2024:
-        /// * When running Vulkan, the top 10 integrated cards on the Steam Hardware Survey only
-        ///   support this queue family, and only support it with a capacity of 1. APIs like Direct
-        ///   X multiplex queues in software which obscures these limits.
-        /// * The top 10 discrete graphics cards on the Steam Hardware Survey support all queue
-        ///   families, often with capacities greater than one. For non graphics queues this likely
-        ///   maps well to the underlying hardware, multiple graphics queues however likely compete
-        ///   for the same underlying resources.
-        graphics_family: std.BoundedArray(CombinedQueue(.graphics), global_options.max_queues.graphics),
-        /// The compute queue family supports compute and transfer, but not graphics. Support
-        /// varies.
-        compute_family: std.BoundedArray(CombinedQueue(.compute), global_options.max_queues.compute),
-        /// The transfer family supports transfer, but not compute or graphics. Support varies.
-        transfer_family: std.BoundedArray(CombinedQueue(.transfer), global_options.max_queues.transfer),
-
-        /// See `getUntyped`.
-        pub inline fn get(self: @This(), comptime family: QueueFamily, index: u8) CombinedQueue(family) {
-            const result = self.getUntyped(family, index);
-            return .{
-                .queue = @enumFromInt(@intFromEnum(result.queue)),
-                .tracy_queue = result.tracy_queue,
-            };
-        }
-
-        /// Gets a queue of the given family, or the least general compatible queue family if the
-        /// dedicated family is missing.
-        ///
-        /// Modulo of the index is taken with the size of the given queue family
-        ///
-        /// Guaranteed to succeed for all inputs on all devices.
-        pub fn getUntyped(self: @This(), family: QueueFamily, index: u8) CombinedQueue(null) {
-            switch (family) {
-                .graphics => {
-                    comptime assert(global_options.max_queues.graphics > 0);
-                    return self.graphics_family.buffer[index % self.graphics_family.len].asUntyped();
-                },
-                .compute => {
-                    if (self.compute_family.len > 0) {
-                        return self.compute_family.buffer[index % self.compute_family.len].asUntyped();
-                    }
-                    return self.getUntyped(.graphics, index);
-                },
-                .transfer => {
-                    if (self.transfer_family.len > 0) {
-                        return self.transfer_family.buffer[index % self.transfer_family.len].asUntyped();
-                    }
-                    return self.getUntyped(.compute, index);
-                },
-            }
-        }
-    };
-
     kind: Kind,
     uniform_buf_offset_alignment: u16,
     storage_buf_offset_alignment: u16,
     timestamp_period: f32,
-    combined_queues: CombinedQueues,
 };
 
 backend: global_options.Backend,
@@ -469,24 +411,16 @@ pub const CombinedCmdBufCreateOptions = struct {
     bindings: *Ctx.CmdBufBindings,
     signal: Ctx.Semaphore,
     kind: Ctx.CmdBufKind,
-    combined_queue: Ctx.CombinedQueue(null),
     loc: *const tracy.SourceLocation,
 };
 
 pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
     return struct {
-        cmds: Cmds(CmdBufKind.queueFamily(kind)),
-
+        cmds: Cmds,
         signal: Semaphore,
         zone: Zone,
-        queue: Queue(CmdBufKind.queueFamily(kind)),
 
-        pub const InitOptions = struct {
-            combined_queue: CombinedQueue(CmdBufKind.queueFamily(kind)),
-            loc: *const tracy.SourceLocation,
-        };
-
-        pub inline fn init(gx: *Ctx, options: @This().InitOptions) @This() {
+        pub inline fn init(gx: *Ctx, loc: *const tracy.SourceLocation) @This() {
             comptime assert(kind != null);
 
             const zone = tracy.Zone.begin(.{ .src = @src() });
@@ -500,22 +434,16 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
                 .bindings = bindings,
                 .signal = signal,
                 .kind = kind.?,
-                .combined_queue = .{
-                    .queue = @enumFromInt(@intFromEnum(options.combined_queue.queue)),
-                    .tracy_queue = options.combined_queue.tracy_queue,
-                },
-                .loc = options.loc,
+                .loc = loc,
             });
 
             return .{
                 .cmds = .{
                     .buf = untyped.cmds.buf,
                     .bindings = untyped.cmds.bindings,
-                    .tracy_queue = untyped.cmds.tracy_queue,
                 },
                 .signal = untyped.signal,
                 .zone = untyped.zone,
-                .queue = @enumFromInt(@intFromEnum(untyped.queue)),
             };
         }
 
@@ -537,8 +465,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
 
         inline fn asUntyped(self: @This()) CombinedCmdBuf(null) {
             return .{
-                .cmds = self.cmds.as(null),
-                .queue = self.queue.asUntyped(),
+                .cmds = self.cmds,
                 .signal = self.signal,
                 .zone = self.zone,
             };
@@ -546,89 +473,68 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
     };
 }
 
-pub fn Cmds(family: ?QueueFamily) type {
-    return struct {
-        buf: CmdBuf,
-        /// Cached bindings for de-duplicating commands. If you write to the command buffer
-        /// externally, you should update this to reflect your changes. You can set fields to their
-        /// defaults to indicate that the state is unknown.
-        bindings: *CmdBufBindings,
-        tracy_queue: TracyQueue,
+pub const Cmds = struct {
+    buf: CmdBuf,
+    /// Cached bindings for de-duplicating commands. If you write to the command buffer
+    /// externally, you should update this to reflect your changes. You can set fields to their
+    /// defaults to indicate that the state is unknown.
+    bindings: *CmdBufBindings,
 
-        pub inline fn as(
-            self: @This(),
-            comptime result_queue_family: ?QueueFamily,
-        ) Cmds(result_queue_family) {
-            if (comptime !QueueFamily.castAllowed(family, result_queue_family)) {
-                @compileError(std.fmt.comptimePrint("cannot cast {?} to {?}", .{ family, result_queue_family }));
+    pub const AppendGraphicsCmdsOptions = struct {
+        cmds: []const DrawCmd,
+        loc: *const tracy.SourceLocation,
+    };
+
+    pub fn appendGraphicsCmds(
+        self: @This(),
+        gx: *Ctx,
+        options: AppendGraphicsCmdsOptions,
+    ) void {
+        const zone = CpuZone.begin(.{ .src = @src() });
+        defer zone.end();
+        if (std.debug.runtime_safety) {
+            for (options.cmds) |draw_call| {
+                assert(draw_call.args.offset % 4 == 0);
             }
-            return .{
-                .buf = self.buf,
-                .bindings = self.bindings,
-                .tracy_queue = self.tracy_queue,
+        }
+        Backend.cmdBufGraphicsAppend(gx, self, options);
+    }
+
+    pub const AppendTransferCmdsOptions = struct {
+        cmds: []const TransferCmd,
+        loc: *const tracy.SourceLocation,
+    };
+
+    pub fn appendTransferCmds(
+        self: @This(),
+        gx: *Ctx,
+        comptime max_regions: u32,
+        options: AppendTransferCmdsOptions,
+    ) void {
+        if (std.debug.runtime_safety) {
+            for (options.cmds) |cmd| switch (cmd) {
+                .copy_buffer_to_color_image => |cmd_options| {
+                    assert(cmd_options.regions.len > 0);
+                    assert(cmd_options.regions.len <= max_regions);
+                    for (cmd_options.regions) |region| {
+                        assert(region.buffer_row_length != 0);
+                        assert(region.buffer_image_height != 0);
+                        assert(region.layer_count > 0);
+                    }
+                },
+                .copy_buffer_to_buffer => |cmd_options| {
+                    assert(cmd_options.regions.len > 0);
+                    assert(cmd_options.regions.len <= max_regions);
+                    for (cmd_options.regions) |region| {
+                        assert(region.size > 0);
+                    }
+                },
             };
         }
 
-        pub const AppendGraphicsCmdsOptions = struct {
-            cmds: []const DrawCmd,
-            loc: *const tracy.SourceLocation,
-        };
-
-        pub fn appendGraphicsCmds(
-            self: @This(),
-            gx: *Ctx,
-            options: AppendGraphicsCmdsOptions,
-        ) void {
-            comptime assert(family == .graphics);
-
-            const zone = CpuZone.begin(.{ .src = @src() });
-            defer zone.end();
-            if (std.debug.runtime_safety) {
-                for (options.cmds) |draw_call| {
-                    assert(draw_call.args.offset % 4 == 0);
-                }
-            }
-            Backend.cmdBufGraphicsAppend(gx, self.as(null), options);
-        }
-
-        pub const AppendTransferCmdsOptions = struct {
-            cmds: []const TransferCmd,
-            loc: *const tracy.SourceLocation,
-        };
-
-        pub fn appendTransferCmds(
-            self: @This(),
-            gx: *Ctx,
-            comptime max_regions: u32,
-            options: AppendTransferCmdsOptions,
-        ) void {
-            comptime assert(family != null);
-
-            if (std.debug.runtime_safety) {
-                for (options.cmds) |cmd| switch (cmd) {
-                    .copy_buffer_to_color_image => |cmd_options| {
-                        assert(cmd_options.regions.len > 0);
-                        assert(cmd_options.regions.len <= max_regions);
-                        for (cmd_options.regions) |region| {
-                            assert(region.buffer_row_length != 0);
-                            assert(region.buffer_image_height != 0);
-                            assert(region.layer_count > 0);
-                        }
-                    },
-                    .copy_buffer_to_buffer => |cmd_options| {
-                        assert(cmd_options.regions.len > 0);
-                        assert(cmd_options.regions.len <= max_regions);
-                        for (cmd_options.regions) |region| {
-                            assert(region.size > 0);
-                        }
-                    },
-                };
-            }
-
-            Backend.cmdBufTransferAppend(gx, self.as(null), max_regions, options);
-        }
-    };
-}
+        Backend.cmdBufTransferAppend(gx, self, max_regions, options);
+    }
+};
 
 pub const CmdBuf = enum(u64) {
     _,
@@ -647,16 +553,6 @@ pub const CmdBuf = enum(u64) {
 pub const CmdBufKind = enum {
     present,
     graphics,
-    compute,
-    transfer,
-
-    fn queueFamily(self: ?@This()) ?QueueFamily {
-        return switch (self orelse return null) {
-            .graphics, .present => .graphics,
-            .compute => .compute,
-            .transfer => .transfer,
-        };
-    }
 };
 
 /// Profiling zones are created automatically when creating or appending to a command buffer. It may
@@ -720,10 +616,10 @@ pub const DrawCmd = struct {
 /// Presents the rendered image. Some drivers under some circumstances will block here  waiting for
 /// the swapchain image instead of when acquiring it. Returns the number of nanoseconds spent
 /// blocking.
-pub fn present(self: *@This(), queue: Queue(.graphics)) u64 {
+pub fn present(self: *@This()) u64 {
     const zone = CpuZone.begin(.{ .src = @src() });
     defer zone.end();
-    return Backend.present(self, queue);
+    return Backend.present(self);
 }
 
 /// Acquires the next swapchain image, blocking until it's available if necessary. Returns the
@@ -1883,67 +1779,6 @@ pub fn initCombinedPipelines(
     defer zone.end();
     if (cmds.len == 0) return;
     Backend.combinedPipelinesCreate(self, max_cmds, cmds);
-}
-
-pub const QueueFamily = enum {
-    /// The graphics queue family supports at least graphics, present, compute, and transfer
-    /// operations.
-    graphics,
-    /// The compute queue family supports at least compute and transfer operations.
-    compute,
-    /// The transfer queue family supports at least transfer operations.
-    transfer,
-
-    fn castAllowed(comptime self: ?@This(), comptime maybe_as: ?@This()) bool {
-        const as = maybe_as orelse return true;
-        return if (self) |s| switch (s) {
-            .graphics => true,
-            .compute => switch (as) {
-                .compute, .transfer => true,
-                else => false,
-            },
-            .transfer => switch (as) {
-                .transfer => true,
-                else => false,
-            },
-        } else false;
-    }
-};
-
-pub fn Queue(family: ?QueueFamily) type {
-    return enum(u64) {
-        const type_dependency = family;
-
-        _,
-
-        pub inline fn fromBackendType(value: Backend.Queue) @This() {
-            comptime assert(@sizeOf(Backend.Queue) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(value));
-        }
-
-        pub inline fn asBackendType(self: @This()) Backend.Queue {
-            comptime assert(@sizeOf(Backend.Queue) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(self));
-        }
-
-        pub inline fn asUntyped(self: @This()) Queue(null) {
-            return @enumFromInt(@intFromEnum(self));
-        }
-    };
-}
-
-pub fn CombinedQueue(family: ?QueueFamily) type {
-    return struct {
-        queue: Queue(family),
-        tracy_queue: TracyQueue,
-
-        pub inline fn asUntyped(self: @This()) CombinedQueue(null) {
-            return .{
-                .queue = self.queue.asUntyped(),
-                .tracy_queue = self.tracy_queue,
-            };
-        }
-    };
 }
 
 pub const Sampler = enum(u64) {

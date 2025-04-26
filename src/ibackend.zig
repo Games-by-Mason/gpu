@@ -80,14 +80,14 @@ pub fn IBackend(Self: type) type {
 
         cmdBufGraphicsAppend: fn (
             self: *Ctx,
-            cmds: Ctx.Cmds(null),
-            options: Ctx.Cmds(null).AppendGraphicsCmdsOptions,
+            cmds: Ctx.Cmds,
+            options: Ctx.Cmds.AppendGraphicsCmdsOptions,
         ) void,
         cmdBufTransferAppend: fn (
             self: *Ctx,
-            cmds: Ctx.Cmds(null),
+            cmds: Ctx.Cmds,
             comptime max_regions: u32,
-            options: Ctx.Cmds(null).AppendTransferCmdsOptions,
+            options: Ctx.Cmds.AppendTransferCmdsOptions,
         ) void,
 
         combinedCmdBufCreate: fn (
@@ -160,7 +160,7 @@ pub fn IBackend(Self: type) type {
             cmds: []const Ctx.InitCombinedPipelineCmd,
         ) void,
 
-        present: fn (self: *Ctx, queue: Ctx.Queue(.graphics)) u64,
+        present: fn (self: *Ctx) u64,
 
         acquireNextImage: fn (self: *Ctx) ?u64,
 
