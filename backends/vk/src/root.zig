@@ -36,6 +36,7 @@ cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 // Synchronization
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
 ready_for_present: [global_options.max_frames_in_flight]vk.Semaphore,
+cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 
 // Frame info
 image_index: ?u32 = null,
@@ -80,7 +81,6 @@ pub const Queue = vk.Queue;
 pub const Pipeline = vk.Pipeline;
 pub const PipelineLayout = vk.PipelineLayout;
 pub const Sampler = vk.Sampler;
-pub const Semaphore = vk.Semaphore;
 
 pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     const zone = tracy.Zone.begin(.{ .src = @src() });
@@ -403,9 +403,6 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     };
     var device_features_12: vk.PhysicalDeviceVulkan12Features = .{
         .host_query_reset = @intFromBool(options.timestamp_queries),
-        // Party of DX12, so it seems reasonable to assume all Vulkan 1.3 hardware supports these in
-        // practice.
-        .timeline_semaphore = vk.TRUE,
         .p_next = &device_features_11,
     };
     const device_features_13: vk.PhysicalDeviceVulkan13Features = .{
@@ -511,6 +508,18 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             .index = frame,
         }, options.validation);
     }
+
+    var cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence = undefined;
+    for (&cmd_pool_ready, 0..) |*fence, frame| {
+        fence.* = device.createFence(&.{
+            .p_next = null,
+            .flags = .{ .signaled_bit = true },
+        }, null) catch |err| @panic(@errorName((err)));
+        setName(device, fence.*, .{
+            .str = "Command Pool Fence",
+            .index = frame,
+        }, options.validation);
+    }
     sync_primitives_zone.end();
 
     const tracy_query_pool = if (tracy.enabled and
@@ -546,6 +555,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .cmd_pools = cmd_pools,
         .image_availables = image_availables,
         .ready_for_present = ready_for_present,
+        .cmd_pool_ready = cmd_pool_ready,
         .physical_device = best_physical_device,
         .timestamp_period = timestamp_period,
         .queue = queue,
@@ -566,7 +576,12 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     for (self.backend.ready_for_present) |semaphore| {
         self.backend.device.destroySemaphore(semaphore, null);
     }
-    for (self.backend.image_availables) |s| self.backend.device.destroySemaphore(s, null);
+    for (self.backend.image_availables) |semaphore| {
+        self.backend.device.destroySemaphore(semaphore, null);
+    }
+    for (self.backend.cmd_pool_ready) |fence| {
+        self.backend.device.destroyFence(fence, null);
+    }
 
     // Destroy command state
     for (self.backend.cmd_pools) |pool| {
@@ -928,7 +943,6 @@ pub fn combinedCmdBufCreate(
             .buf = .fromBackendType(cb),
             .bindings = options.bindings,
         },
-        .signal = options.signal,
         .zone = zone,
     };
 }
@@ -1058,7 +1072,6 @@ pub fn combinedCmdBufSubmit(
     self: *Ctx,
     combined_cb: Ctx.CombinedCmdBuf(null),
     kind: Ctx.CmdBufKind,
-    wait: []const Ctx.Wait,
 ) void {
     const cb = combined_cb.cmds.buf.asBackendType();
 
@@ -1075,55 +1088,16 @@ pub fn combinedCmdBufSubmit(
     {
         const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
         defer queue_submit_zone.end();
-
-        // Max is the number of command buffers, minus one since you can't wait on the final one
-        const max_waits = global_options.max_cbs_per_frame - 1;
-        var wait_stages: std.BoundedArray(vk.PipelineStageFlags, max_waits) = .{};
-        var wait_semaphores: std.BoundedArray(vk.Semaphore, max_waits) = .{};
-        for (wait) |w| {
-            wait_semaphores.appendAssumeCapacity(w.semaphore.asBackendType());
-            wait_stages.appendAssumeCapacity(.{
-                .top_of_pipe_bit = w.stages.top_of_pipe,
-                .draw_indirect_bit = w.stages.draw_indirect,
-                .vertex_input_bit = w.stages.vertex_input,
-                .vertex_shader_bit = w.stages.vertex_shader,
-                .tessellation_control_shader_bit = w.stages.tessellation_control_shader,
-                .tessellation_evaluation_shader_bit = w.stages.tessellation_evaluation_shader,
-                .geometry_shader_bit = w.stages.geometry_shader,
-                .fragment_shader_bit = w.stages.fragment_shader,
-                .early_fragment_tests_bit = w.stages.early_fragment_tests,
-                .late_fragment_tests_bit = w.stages.late_fragment_tests,
-                .color_attachment_output_bit = w.stages.color_attachment_output,
-                .compute_shader_bit = w.stages.compute_shader,
-                .transfer_bit = w.stages.transfer,
-                .bottom_of_pipe_bit = w.stages.bottom_of_pipe,
-                .host_bit = w.stages.host,
-                .all_graphics_bit = w.stages.all_graphics,
-                .all_commands_bit = w.stages.all_commands,
-            });
-        }
-
-        const max_signals = 2;
-        var signal_semaphores: std.BoundedArray(vk.Semaphore, max_signals) = .{};
-        var signal_values: std.BoundedArray(u64, max_signals) = .{};
-
-        signal_semaphores.appendAssumeCapacity(combined_cb.signal.asBackendType());
-        signal_values.appendAssumeCapacity(self.frame + self.frames_in_flight);
-
         const cbs = [_]vk.CommandBuffer{cb};
-        const timeline_semaphore_submit_info: vk.TimelineSemaphoreSubmitInfoKHR = .{
-            .signal_semaphore_value_count = @intCast(signal_values.len),
-            .p_signal_semaphore_values = &signal_values.buffer,
-        };
         const submit_infos = [_]vk.SubmitInfo{.{
-            .wait_semaphore_count = @intCast(wait_semaphores.len),
-            .p_wait_semaphores = &wait_semaphores.buffer,
-            .p_wait_dst_stage_mask = &wait_stages.buffer,
+            .wait_semaphore_count = 0,
+            .p_wait_semaphores = &.{},
+            .p_wait_dst_stage_mask = &.{},
             .command_buffer_count = cbs.len,
             .p_command_buffers = &cbs,
-            .signal_semaphore_count = @intCast(signal_semaphores.len),
-            .p_signal_semaphores = &signal_semaphores.buffer,
-            .p_next = &timeline_semaphore_submit_info,
+            .signal_semaphore_count = 0,
+            .p_signal_semaphores = &.{},
+            .p_next = null,
         }};
         self.backend.device.queueSubmit(
             self.backend.queue,
@@ -1437,11 +1411,31 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
     return wait_ns;
 }
 
-pub fn frameStart(self: *Ctx) void {
+pub fn frameStart(self: *Ctx) u64 {
     self.backend.image_index = null;
 
-    const graphics_command_pool = self.backend.cmd_pools[self.frameInFlight()];
-    self.backend.device.resetCommandPool(graphics_command_pool, .{}) catch |err| @panic(@errorName(err));
+    const block_ns = b: {
+        var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
+        const wait_zone = Zone.begin(.{
+            .src = @src(),
+            .name = "blocking: command pool",
+            .color = global_options.blocking_zone_color,
+        });
+        defer wait_zone.end();
+        const cmd_pool_fence = self.backend.cmd_pool_ready[self.frameInFlight()];
+        assert(self.backend.device.waitForFences(
+            1,
+            &.{cmd_pool_fence},
+            vk.TRUE,
+            std.math.maxInt(u64),
+        ) catch |err| @panic(@errorName(err)) == .success);
+        self.backend.device.resetFences(1, &.{cmd_pool_fence}) catch |err| @panic(@errorName(err));
+
+        break :b wait_timer.lap();
+    };
+
+    const cmd_pool = self.backend.cmd_pools[self.frameInFlight()];
+    self.backend.device.resetCommandPool(cmd_pool, .{}) catch |err| @panic(@errorName(err));
 
     if (self.backend.tracy_query_pool != .null_handle and self.backend.zones.handles.allocated > 0) {
         var results: [@as(usize, global_options.tracy_query_pool_capacity) * 2]u64 = undefined;
@@ -1489,6 +1483,8 @@ pub fn frameStart(self: *Ctx) void {
             }
         }
     }
+
+    return block_ns;
 }
 
 pub fn getDevice(self: *const @This()) Ctx.Device {
@@ -2032,20 +2028,13 @@ pub fn present(self: *Ctx) u64 {
                     .p_wait_dst_stage_mask = &.{},
                     .command_buffer_count = 1,
                     .p_command_buffers = &.{cb},
-                    .signal_semaphore_count = 2,
+                    .signal_semaphore_count = 1,
                     .p_signal_semaphores = &.{
                         self.backend.ready_for_present[self.frameInFlight()],
-                        self.cb_semaphores[self.frameInFlight()].addOneAssumeCapacity().*.asBackendType(),
                     },
-                    .p_next = &vk.TimelineSemaphoreSubmitInfoKHR{
-                        .signal_semaphore_value_count = 2,
-                        .p_signal_semaphore_values = &.{
-                            0, // Ignored, not a timeline semaphore
-                            self.frame + self.frames_in_flight,
-                        },
-                    },
+                    .p_next = null,
                 }},
-                .null_handle,
+                self.backend.cmd_pool_ready[self.frameInFlight()],
             ) catch |err| @panic(@errorName(err));
         }
     }
@@ -2149,48 +2138,6 @@ pub fn samplerDestroy(self: *Ctx, sampler: Ctx.Sampler) void {
 
 pub fn timestampCalibration(self: *Ctx) Ctx.TimestampCalibration {
     return timestampCalibrationImpl(self.backend.device, self.backend.timestamp_queries);
-}
-
-pub fn semaphoreCreate(self: *Ctx, initial_value: u64) Ctx.Semaphore {
-    const semaphore_type_create_info: vk.SemaphoreTypeCreateInfo = .{
-        .semaphore_type = .timeline,
-        .initial_value = initial_value,
-    };
-
-    const create_info: vk.SemaphoreCreateInfo = .{
-        .p_next = &semaphore_type_create_info,
-        .flags = .{},
-    };
-
-    const semaphore = self.backend.device.createSemaphore(
-        &create_info,
-        null,
-    ) catch |err| @panic(@errorName(err));
-
-    return .fromBackendType(semaphore);
-}
-
-pub fn semaphoreDestroy(self: *Ctx, semaphore: Ctx.Semaphore) void {
-    self.backend.device.destroySemaphore(semaphore.asBackendType(), null);
-}
-
-pub fn semaphoreSignal(self: *Ctx, semaphore: Ctx.Semaphore, value: u64) void {
-    self.backend.device.signalSemaphore(&.{
-        .semaphore = semaphore.asBackendType(),
-        .value = value,
-    }) catch |err| @panic(@errorName(err));
-}
-
-pub fn semaphoresWait(self: *Ctx, semaphores: []const Ctx.Semaphore, values: []const u64) void {
-    assert(semaphores.len == values.len);
-    if (semaphores.len == 0) return;
-    const result = self.backend.device.waitSemaphores(&.{
-        .semaphore_count = @intCast(semaphores.len),
-        .p_semaphores = @ptrCast(semaphores.ptr),
-        .p_values = values.ptr,
-        .flags = .{},
-    }, std.math.maxInt(u64)) catch |err| @panic(@errorName(err));
-    if (result != .success) @panic(@tagName(result));
 }
 
 pub fn timestampCalibrationImpl(
@@ -2634,9 +2581,6 @@ const Swapchain = struct {
     }
 };
 
-const CommandBufferSemaphores = std.BoundedArray(vk.Semaphore, global_options.max_cbs_per_frame);
-
-// r: clean up...undefined, and way it's used, etc
 const PhysicalDevice = struct {
     device: vk.PhysicalDevice = .null_handle,
     name: [vk.MAX_PHYSICAL_DEVICE_NAME_SIZE]u8 = .{0} ** vk.MAX_PHYSICAL_DEVICE_NAME_SIZE,
@@ -2847,7 +2791,6 @@ inline fn setName(
         vk.DescriptorSetLayout => .{ "Descriptor Set Layout", .descriptor_set_layout },
         vk.DeviceMemory => .{ "Device Memory", .device_memory },
         vk.Fence => .{ "Fence", .fence },
-        vk.Framebuffer => .{ "Framebuf", .framebuffer },
         vk.Image => .{ "Image", .image },
         vk.ImageView => .{ "Image View", .image_view },
         vk.Pipeline => .{ "Pipeline", .pipeline },

@@ -30,29 +30,6 @@ pub const DebugName = struct {
     index: ?usize = null,
 };
 
-pub const Semaphore = enum(u64) {
-    _,
-
-    pub inline fn fromBackendType(value: Backend.Semaphore) @This() {
-        comptime assert(@sizeOf(Backend.Semaphore) == @sizeOf(@This()));
-        return @enumFromInt(@intFromEnum(value));
-    }
-
-    pub inline fn asBackendType(self: @This()) Backend.Semaphore {
-        comptime assert(@sizeOf(Backend.Semaphore) == @sizeOf(@This()));
-        return @enumFromInt(@intFromEnum(self));
-    }
-
-    pub fn waitAll(gx: *Ctx, semaphores: []const Semaphore) void {
-        var wait_values_buf: [global_options.max_cbs_per_frame]u64 = undefined;
-        const wait_values = wait_values_buf[0..semaphores.len];
-        for (wait_values) |*value| {
-            value.* = gx.frame + gx.frames_in_flight;
-        }
-        Backend.semaphoresWait(gx, semaphores, wait_values);
-    }
-};
-
 pub const Device = struct {
     // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
     pub const max_uniform_buf_offset_alignment = 256;
@@ -85,7 +62,6 @@ framebuf_size: FramebufSize = .{ 0.0, 0.0 },
 combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
 
 cb_bindings: [global_options.max_frames_in_flight]std.BoundedArray(CmdBufBindings, global_options.max_cbs_per_frame) = @splat(.{}),
-cb_semaphores: [global_options.max_frames_in_flight]std.BoundedArray(Semaphore, global_options.max_cbs_per_frame) = @splat(.{}),
 
 max_alignment: bool,
 
@@ -158,17 +134,6 @@ pub fn init(options: InitOptions) @This() {
         .timestamp_queries = options.timestamp_queries,
     };
 
-    {
-        const semaphore_zone = tracy.Zone.begin(.{ .name = "create semaphores", .src = @src() });
-        defer semaphore_zone.end();
-
-        for (&gx.cb_semaphores) |*semaphores| {
-            for (&semaphores.buffer) |*semaphore| {
-                semaphore.* = Backend.semaphoreCreate(&gx, 0);
-            }
-        }
-    }
-
     if (gx.max_alignment) {
         gx.device.uniform_buf_offset_alignment = Device.max_uniform_buf_offset_alignment;
         gx.device.storage_buf_offset_alignment = Device.max_storage_buf_offset_alignment;
@@ -194,12 +159,6 @@ pub fn init(options: InitOptions) @This() {
 pub fn deinit(self: *@This(), gpa: Allocator) void {
     for (self.combined_pipeline_layout_typed) |layout| {
         layout.deinit(self);
-    }
-
-    for (&self.cb_semaphores) |semaphores| {
-        for (semaphores.buffer) |semaphore| {
-            Backend.semaphoreDestroy(self, semaphore);
-        }
     }
 
     Backend.deinit(self, gpa);
@@ -376,30 +335,6 @@ pub fn DedicatedUploadBuf(kind: BufKind) type {
     };
 }
 
-pub const Wait = struct {
-    pub const Stages = packed struct {
-        top_of_pipe: bool,
-        draw_indirect: bool,
-        vertex_input: bool,
-        vertex_shader: bool,
-        tessellation_control_shader: bool,
-        tessellation_evaluation_shader: bool,
-        geometry_shader: bool,
-        fragment_shader: bool,
-        early_fragment_tests: bool,
-        late_fragment_tests: bool,
-        color_attachment_output: bool,
-        compute_shader: bool,
-        transfer: bool,
-        bottom_of_pipe: bool,
-        host: bool,
-        all_graphics: bool,
-        all_commands: bool,
-    };
-    semaphore: Semaphore,
-    stages: Stages,
-};
-
 pub const CmdBufBindings = struct {
     pipeline: ?Pipeline = null,
     indices: ?Buf(.{ .index = true }) = null,
@@ -409,7 +344,6 @@ pub const CmdBufBindings = struct {
 
 pub const CombinedCmdBufCreateOptions = struct {
     bindings: *Ctx.CmdBufBindings,
-    signal: Ctx.Semaphore,
     kind: Ctx.CmdBufKind,
     loc: *const tracy.SourceLocation,
 };
@@ -417,7 +351,6 @@ pub const CombinedCmdBufCreateOptions = struct {
 pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
     return struct {
         cmds: Cmds,
-        signal: Semaphore,
         zone: Zone,
 
         pub inline fn init(gx: *Ctx, loc: *const tracy.SourceLocation) @This() {
@@ -428,11 +361,9 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
 
             const bindings = gx.cb_bindings[gx.frameInFlight()].addOne() catch @panic("OOB");
             bindings.* = .{};
-            const signal = gx.cb_semaphores[gx.frameInFlight()].addOneAssumeCapacity().*;
 
             const untyped = Backend.combinedCmdBufCreate(gx, .{
                 .bindings = bindings,
-                .signal = signal,
                 .kind = kind.?,
                 .loc = loc,
             });
@@ -442,31 +373,20 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
                     .buf = untyped.cmds.buf,
                     .bindings = untyped.cmds.bindings,
                 },
-                .signal = untyped.signal,
                 .zone = untyped.zone,
             };
         }
 
-        pub inline fn submit(
-            self: @This(),
-            gx: *Ctx,
-            wait: []const Wait,
-        ) void {
+        pub inline fn submit(self: @This(), gx: *Ctx) void {
             comptime assert(kind != null);
-
             const zone = CpuZone.begin(.{ .src = @src() });
             defer zone.end();
-
-            // Not <= as you can't wait on the final submission!
-            assert(wait.len < global_options.max_cbs_per_frame);
-
-            Backend.combinedCmdBufSubmit(gx, self.asUntyped(), kind.?, wait);
+            Backend.combinedCmdBufSubmit(gx, self.asUntyped(), kind.?);
         }
 
         inline fn asUntyped(self: @This()) CombinedCmdBuf(null) {
             return .{
                 .cmds = self.cmds,
-                .signal = self.signal,
                 .zone = self.zone,
             };
         }
@@ -862,34 +782,9 @@ pub fn frameInFlight(self: *const @This()) u8 {
 pub fn frameStart(self: *@This()) ?u64 {
     const zone = CpuZone.begin(.{ .src = @src() });
     defer zone.end();
-
     self.frame += 1;
-
-    const block_ns = b: {
-        const semaphores = self.cb_semaphores[self.frameInFlight()].constSlice();
-        var wait_values_buf: [global_options.max_cbs_per_frame]u64 = undefined;
-        const wait_values = wait_values_buf[0..semaphores.len];
-        for (wait_values) |*value| {
-            value.* = self.frame;
-        }
-
-        const wait_zone = CpuZone.begin(.{
-            .src = @src(),
-            .name = "blocking: command pool",
-            .color = global_options.blocking_zone_color,
-        });
-        defer wait_zone.end();
-        var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
-        Backend.semaphoresWait(self, semaphores, wait_values);
-        break :b wait_timer.lap();
-    };
-
     self.cb_bindings[self.frameInFlight()].clear();
-    self.cb_semaphores[self.frameInFlight()].clear();
-
-    Backend.frameStart(self);
-
-    return block_ns;
+    return Backend.frameStart(self);
 }
 
 pub fn Image(kind: ImageKind) type {

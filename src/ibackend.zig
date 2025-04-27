@@ -21,7 +21,6 @@ pub fn IBackend(Self: type) type {
         Pipeline: type,
         PipelineLayout: type,
         Sampler: type,
-        Semaphore: type,
 
         InitOptions: type,
 
@@ -98,7 +97,6 @@ pub fn IBackend(Self: type) type {
             self: *Ctx,
             combined_command_buffer: Ctx.CombinedCmdBuf(null),
             kind: Ctx.CmdBufKind,
-            wait: []const Ctx.Wait,
         ) void,
 
         descriptorPoolDestroy: fn (
@@ -116,7 +114,7 @@ pub fn IBackend(Self: type) type {
             updates: []const Ctx.DescUpdateCmd,
         ) void,
 
-        frameStart: fn (self: *Ctx) void,
+        frameStart: fn (self: *Ctx) u64,
 
         getDevice: fn (self: *const Self) Ctx.Device,
 
@@ -171,25 +169,6 @@ pub fn IBackend(Self: type) type {
         samplerDestroy: fn (
             self: *Ctx,
             sampler: Ctx.Sampler,
-        ) void,
-
-        semaphoreCreate: fn (
-            self: *Ctx,
-            initial_value: u64,
-        ) Ctx.Semaphore,
-        semaphoreDestroy: fn (
-            self: *Ctx,
-            semaphore: Ctx.Semaphore,
-        ) void,
-        semaphoreSignal: fn (
-            self: *Ctx,
-            semaphore: Ctx.Semaphore,
-            value: u64,
-        ) void,
-        semaphoresWait: fn (
-            self: *Ctx,
-            semaphores: []const Ctx.Semaphore,
-            values: []const u64,
         ) void,
 
         timestampCalibration: fn (self: *Ctx) Ctx.TimestampCalibration,
