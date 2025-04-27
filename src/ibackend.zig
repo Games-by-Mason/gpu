@@ -79,14 +79,14 @@ pub fn IBackend(Self: type) type {
 
         cmdBufGraphicsAppend: fn (
             self: *Ctx,
-            cmds: Ctx.Cmds,
-            options: Ctx.Cmds.AppendGraphicsCmdsOptions,
+            cmds: Ctx.CombinedCmdBuf(null),
+            options: Ctx.CombinedCmdBuf(null).AppendGraphicsCmdsOptions,
         ) void,
         cmdBufTransferAppend: fn (
             self: *Ctx,
-            cmds: Ctx.Cmds,
+            cmds: Ctx.CombinedCmdBuf(null),
             comptime max_regions: u32,
-            options: Ctx.Cmds.AppendTransferCmdsOptions,
+            options: Ctx.CombinedCmdBuf(null).AppendTransferCmdsOptions,
         ) void,
 
         combinedCmdBufCreate: fn (
@@ -114,7 +114,7 @@ pub fn IBackend(Self: type) type {
             updates: []const Ctx.DescUpdateCmd,
         ) void,
 
-        frameStart: fn (self: *Ctx) u64,
+        startFrame: fn (self: *Ctx) void,
 
         getDevice: fn (self: *const Self) Ctx.Device,
 
@@ -160,7 +160,7 @@ pub fn IBackend(Self: type) type {
 
         present: fn (self: *Ctx) u64,
 
-        acquireNextImage: fn (self: *Ctx) ?u64,
+        acquireNextImage: fn (self: *Ctx) bool,
 
         samplerCreate: fn (
             self: *Ctx,

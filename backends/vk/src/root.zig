@@ -944,10 +944,8 @@ pub fn combinedCmdBufCreate(
     }
 
     return .{
-        .cmds = .{
-            .buf = .fromBackendType(cb),
-            .bindings = options.bindings,
-        },
+        .cb = .fromBackendType(cb),
+        .bindings = options.bindings,
         .zone = zone,
     };
 }
@@ -975,22 +973,22 @@ pub fn zoneEnd(
 
 pub fn cmdBufGraphicsAppend(
     self: *Ctx,
-    cmds: Ctx.Cmds,
-    options: Ctx.Cmds.AppendGraphicsCmdsOptions,
+    combined: Ctx.CombinedCmdBuf(null),
+    options: Ctx.CombinedCmdBuf(null).AppendGraphicsCmdsOptions,
 ) void {
-    const command_buffer = cmds.buf.asBackendType();
+    const command_buffer = combined.cb.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = cmds.buf,
+        .command_buffer = combined.cb,
         .tracy_queue = self.backend.tracy_queue,
         .loc = options.loc,
     });
     defer zone.end(self, .{
-        .command_buffer = cmds.buf,
+        .command_buffer = combined.cb,
         .tracy_queue = self.backend.tracy_queue,
     });
 
-    const bindings = cmds.bindings;
+    const bindings = combined.bindings;
 
     for (options.cmds) |draw| {
         if (draw.combined_pipeline.pipeline != bindings.pipeline) {
@@ -1075,17 +1073,17 @@ pub fn cmdBufGraphicsAppend(
 
 pub fn combinedCmdBufSubmit(
     self: *Ctx,
-    combined_cb: Ctx.CombinedCmdBuf(null),
+    combined: Ctx.CombinedCmdBuf(null),
     kind: Ctx.CmdBufKind,
 ) void {
-    const cb = combined_cb.cmds.buf.asBackendType();
+    const cb = combined.cb.asBackendType();
 
     if (kind == .graphics) {
         self.backend.device.cmdEndRendering(cb);
     }
 
-    combined_cb.zone.end(self, .{
-        .command_buffer = combined_cb.cmds.buf,
+    combined.zone.end(self, .{
+        .command_buffer = combined.cb,
         .tracy_queue = self.backend.tracy_queue,
     });
     self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
@@ -1299,14 +1297,12 @@ pub fn descriptorSetsUpdate(
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Ctx) ?u64 {
+pub fn acquireNextImage(self: *Ctx) bool {
     // Acquire the image
-    var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
     const aquire_result = b: {
         const acquire_zone = Zone.begin(.{
             .src = @src(),
-            .name = "blocking: acquire next image",
-            .color = global_options.blocking_zone_color,
+            .name = "acquire next image",
         });
         defer acquire_zone.end();
         break :b self.backend.device.acquireNextImageKHR(
@@ -1317,7 +1313,7 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
         ) catch |err| switch (err) {
             error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
                 self.backend.swapchain.recreate(self);
-                return null;
+                return false;
             },
             error.OutOfHostMemory,
             error.OutOfDeviceMemory,
@@ -1327,7 +1323,6 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
             => @panic(@errorName(err)),
         };
     };
-    const wait_ns = wait_timer.lap();
     self.backend.image_index = aquire_result.image_index;
 
     // Transition it to the right format
@@ -1413,18 +1408,16 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
         }
     }
 
-    return wait_ns;
+    return true;
 }
 
-pub fn frameStart(self: *Ctx) u64 {
+pub fn startFrame(self: *Ctx) void {
     self.backend.image_index = null;
 
-    const block_ns = b: {
-        var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
+    {
         const wait_zone = Zone.begin(.{
             .src = @src(),
-            .name = "blocking: command pool",
-            .color = global_options.blocking_zone_color,
+            .name = "wait for cmd pool",
         });
         defer wait_zone.end();
         const cmd_pool_fence = self.backend.cmd_pool_ready[self.frameInFlight()];
@@ -1435,14 +1428,22 @@ pub fn frameStart(self: *Ctx) u64 {
             std.math.maxInt(u64),
         ) catch |err| @panic(@errorName(err)) == .success);
         self.backend.device.resetFences(1, &.{cmd_pool_fence}) catch |err| @panic(@errorName(err));
+    }
 
-        break :b wait_timer.lap();
-    };
-
+    const reset_cmd_pool_zone = Zone.begin(.{
+        .src = @src(),
+        .name = "reset cmd pool",
+    });
     const cmd_pool = self.backend.cmd_pools[self.frameInFlight()];
     self.backend.device.resetCommandPool(cmd_pool, .{}) catch |err| @panic(@errorName(err));
+    reset_cmd_pool_zone.end();
 
     if (self.backend.tracy_query_pool != .null_handle and self.backend.zones.handles.allocated > 0) {
+        const tracy_query_pool_zone = Zone.begin(.{
+            .src = @src(),
+            .name = "tracy query pool",
+        });
+        defer tracy_query_pool_zone.end();
         var results: [@as(usize, global_options.tracy_query_pool_capacity) * 2]u64 = undefined;
         const result = self.backend.device.getQueryPoolResults(
             self.backend.tracy_query_pool,
@@ -1488,8 +1489,6 @@ pub fn frameStart(self: *Ctx) u64 {
             }
         }
     }
-
-    return block_ns;
 }
 
 pub fn getDevice(self: *const @This()) Ctx.Device {
@@ -2172,11 +2171,11 @@ pub fn timestampCalibrationImpl(
 
 pub fn cmdBufTransferAppend(
     self: *Ctx,
-    cmds: Ctx.Cmds,
+    combined: Ctx.CombinedCmdBuf(null),
     comptime max_regions: u32,
-    options: Ctx.Cmds.AppendTransferCmdsOptions,
+    options: Ctx.CombinedCmdBuf(null).AppendTransferCmdsOptions,
 ) void {
-    const cb = cmds.buf.asBackendType();
+    const cb = combined.cb.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
         .command_buffer = .fromBackendType(cb),

@@ -351,7 +351,11 @@ pub const CombinedCmdBufCreateOptions = struct {
 
 pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
     return struct {
-        cmds: Cmds,
+        cb: CmdBuf,
+        /// Cached bindings for de-duplicating commands. If you write to the command buffer
+        /// externally, you should update this to reflect your changes. You can set fields to their
+        /// defaults to indicate that the state is unknown.
+        bindings: *CmdBufBindings,
         zone: Zone,
 
         const GraphicsInitOptions = struct {
@@ -388,10 +392,8 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             });
 
             return .{
-                .cmds = .{
-                    .buf = untyped.cmds.buf,
-                    .bindings = untyped.cmds.bindings,
-                },
+                .cb = untyped.cb,
+                .bindings = untyped.bindings,
                 .zone = untyped.zone,
             };
         }
@@ -405,75 +407,70 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
 
         inline fn asUntyped(self: @This()) CombinedCmdBuf(null) {
             return .{
-                .cmds = self.cmds,
+                .cb = self.cb,
+                .bindings = self.bindings,
                 .zone = self.zone,
             };
         }
+
+        pub const AppendGraphicsCmdsOptions = struct {
+            cmds: []const DrawCmd,
+            loc: *const tracy.SourceLocation,
+        };
+
+        pub fn appendGraphicsCmds(
+            self: @This(),
+            gx: *Ctx,
+            options: AppendGraphicsCmdsOptions,
+        ) void {
+            comptime assert(kind == .graphics);
+            const zone = CpuZone.begin(.{ .src = @src() });
+            defer zone.end();
+            if (std.debug.runtime_safety) {
+                for (options.cmds) |draw_call| {
+                    assert(draw_call.args.offset % 4 == 0);
+                }
+            }
+            Backend.cmdBufGraphicsAppend(gx, self.asUntyped(), options);
+        }
+
+        pub const AppendTransferCmdsOptions = struct {
+            cmds: []const TransferCmd,
+            loc: *const tracy.SourceLocation,
+        };
+
+        pub fn appendTransferCmds(
+            self: @This(),
+            gx: *Ctx,
+            comptime max_regions: u32,
+            options: AppendTransferCmdsOptions,
+        ) void {
+            comptime assert(kind != null);
+            if (std.debug.runtime_safety) {
+                for (options.cmds) |cmd| switch (cmd) {
+                    .copy_buffer_to_color_image => |cmd_options| {
+                        assert(cmd_options.regions.len > 0);
+                        assert(cmd_options.regions.len <= max_regions);
+                        for (cmd_options.regions) |region| {
+                            assert(region.buffer_row_length != 0);
+                            assert(region.buffer_image_height != 0);
+                            assert(region.layer_count > 0);
+                        }
+                    },
+                    .copy_buffer_to_buffer => |cmd_options| {
+                        assert(cmd_options.regions.len > 0);
+                        assert(cmd_options.regions.len <= max_regions);
+                        for (cmd_options.regions) |region| {
+                            assert(region.size > 0);
+                        }
+                    },
+                };
+            }
+
+            Backend.cmdBufTransferAppend(gx, self.asUntyped(), max_regions, options);
+        }
     };
 }
-
-pub const Cmds = struct {
-    buf: CmdBuf,
-    /// Cached bindings for de-duplicating commands. If you write to the command buffer
-    /// externally, you should update this to reflect your changes. You can set fields to their
-    /// defaults to indicate that the state is unknown.
-    bindings: *CmdBufBindings,
-
-    pub const AppendGraphicsCmdsOptions = struct {
-        cmds: []const DrawCmd,
-        loc: *const tracy.SourceLocation,
-    };
-
-    pub fn appendGraphicsCmds(
-        self: @This(),
-        gx: *Ctx,
-        options: AppendGraphicsCmdsOptions,
-    ) void {
-        const zone = CpuZone.begin(.{ .src = @src() });
-        defer zone.end();
-        if (std.debug.runtime_safety) {
-            for (options.cmds) |draw_call| {
-                assert(draw_call.args.offset % 4 == 0);
-            }
-        }
-        Backend.cmdBufGraphicsAppend(gx, self, options);
-    }
-
-    pub const AppendTransferCmdsOptions = struct {
-        cmds: []const TransferCmd,
-        loc: *const tracy.SourceLocation,
-    };
-
-    pub fn appendTransferCmds(
-        self: @This(),
-        gx: *Ctx,
-        comptime max_regions: u32,
-        options: AppendTransferCmdsOptions,
-    ) void {
-        if (std.debug.runtime_safety) {
-            for (options.cmds) |cmd| switch (cmd) {
-                .copy_buffer_to_color_image => |cmd_options| {
-                    assert(cmd_options.regions.len > 0);
-                    assert(cmd_options.regions.len <= max_regions);
-                    for (cmd_options.regions) |region| {
-                        assert(region.buffer_row_length != 0);
-                        assert(region.buffer_image_height != 0);
-                        assert(region.layer_count > 0);
-                    }
-                },
-                .copy_buffer_to_buffer => |cmd_options| {
-                    assert(cmd_options.regions.len > 0);
-                    assert(cmd_options.regions.len <= max_regions);
-                    for (cmd_options.regions) |region| {
-                        assert(region.size > 0);
-                    }
-                },
-            };
-        }
-
-        Backend.cmdBufTransferAppend(gx, self, max_regions, options);
-    }
-};
 
 pub const CmdBuf = enum(u64) {
     _,
@@ -566,12 +563,16 @@ pub fn present(self: *@This()) u64 {
 ///
 /// Returns null if the swapchain needed to be recreated, in which case you should drop this frame.
 pub fn acquireNextImage(self: *@This(), framebuf_size: Ctx.FramebufSize) ?u64 {
-    const zone = CpuZone.begin(.{ .src = @src() });
+    const zone = CpuZone.begin(.{
+        .src = @src(),
+        .color = global_options.blocking_zone_color,
+    });
     defer zone.end();
-
     assert(framebuf_size[0] != 0 and framebuf_size[0] != 0);
+    var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
     self.framebuf_size = framebuf_size;
-    return Backend.acquireNextImage(self);
+    if (!Backend.acquireNextImage(self)) return null;
+    return wait_timer.lap();
 }
 
 pub const DescPool = enum(u64) {
@@ -798,12 +799,17 @@ pub fn frameInFlight(self: *const @This()) u8 {
 
 /// Starts a new frame. If this frame in flight's command pool is still in use, blocks until it is
 /// available. Returns the time spent blocking in nanoseconds.
-pub fn frameStart(self: *@This()) ?u64 {
-    const zone = CpuZone.begin(.{ .src = @src() });
+pub fn startFrame(self: *@This()) ?u64 {
+    const zone = CpuZone.begin(.{
+        .src = @src(),
+        .color = global_options.blocking_zone_color,
+    });
     defer zone.end();
+    var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
     self.frame = (self.frame + 1) % self.frames_in_flight;
     self.cb_bindings[self.frameInFlight()].clear();
-    return Backend.frameStart(self);
+    Backend.startFrame(self);
+    return wait_timer.lap();
 }
 
 pub fn Image(kind: ImageKind) type {
