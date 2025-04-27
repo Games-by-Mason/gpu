@@ -5,7 +5,7 @@ const math = std.math;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
-const log = std.log.scoped(.gpu_vk);
+const log = std.log.scoped(.gpu);
 const gpu = @import("gpu");
 const Ctx = gpu.Ctx;
 const tracy = gpu.tracy;
@@ -86,7 +86,12 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
 
-    log.info("Initializing Vulkan backend", .{});
+    log.info("Graphics API: Vulkan {}.{}.{} (variant {})", .{
+        vk_version.major,
+        vk_version.minor,
+        vk_version.patch,
+        vk_version.variant,
+    });
 
     const gpa = options.gpa;
 
@@ -110,8 +115,8 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         instance_extensions.append(gpa, vk.extensions.ext_debug_utils.name) catch @panic("OOM");
     }
 
-    log.info("requested instance extensions: {s}", .{instance_extensions.items});
-    log.info("requested layers: {s}", .{layers.items});
+    log.info("Instance Extensions: {s}", .{instance_extensions.items});
+    log.info("Layers: {s}", .{layers.items});
     ext_zone.end();
 
     const inst_handle_zone = tracy.Zone.begin(.{ .name = "create instance handle", .src = @src() });
@@ -178,8 +183,9 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     if (options.timestamp_queries) {
         required_device_extensions.append(gpa, vk.extensions.khr_calibrated_timestamps.name) catch @panic("OOM");
     }
+    log.info("Device Extensions: {s}", .{required_device_extensions.items});
 
-    log.info("enumerate devices:", .{});
+    log.info("All Devices:", .{});
     for (physical_devices, 0..) |device, i| {
         const properties = instance_proxy.getPhysicalDeviceProperties(device);
 
@@ -290,28 +296,28 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             break :b .{ surface_capabilities, best_surface_format, best_present_mode };
         } else .{ null, null, null };
 
-        log.info("  {}. {s}:", .{ i, bufToStr(&properties.device_name) });
-        log.info("    * device api version: {}", .{@as(vk.Version, @bitCast(properties.api_version))});
-        log.info("    * device type: {}", .{properties.device_type});
-        log.info("    * queue family index: {?}", .{queue_family_index});
-        log.info("    * present mode: {?}", .{present_mode});
-        log.info("    * surface format: {?}", .{surface_format});
-        log.info("    * features: {}", .{all_features});
-        log.info("    * max indirect draw count: {}", .{properties.limits.max_draw_indirect_count});
-        log.info("    * min uniform buffer offset alignment: {}", .{properties.limits.min_uniform_buffer_offset_alignment});
-        log.info("    * min storage buffer offset alignment: {}", .{properties.limits.min_storage_buffer_offset_alignment});
+        log.info("  {}. {s}", .{ i, bufToStr(&properties.device_name) });
+        log.debug("    * device api version: {}", .{@as(vk.Version, @bitCast(properties.api_version))});
+        log.debug("    * device type: {}", .{properties.device_type});
+        log.debug("    * queue family index: {?}", .{queue_family_index});
+        log.debug("    * present mode: {?}", .{present_mode});
+        log.debug("    * surface format: {?}", .{surface_format});
+        log.debug("    * features: {}", .{all_features});
+        log.debug("    * max indirect draw count: {}", .{properties.limits.max_draw_indirect_count});
+        log.debug("    * min uniform buffer offset alignment: {}", .{properties.limits.min_uniform_buffer_offset_alignment});
+        log.debug("    * min storage buffer offset alignment: {}", .{properties.limits.min_storage_buffer_offset_alignment});
         if (!extensions_supported) {
-            log.info("    * missing extensions:", .{});
+            log.debug("    * missing extensions:", .{});
             var key_iterator = missing_device_extensions.keyIterator();
             while (key_iterator.next()) |key| {
-                log.info("      * {s}", .{key.*});
+                log.debug("      * {s}", .{key.*});
             }
         }
 
         const composite_alpha: ?vk.CompositeAlphaFlagsKHR = b: {
             if (surface_capabilities) |sc| {
                 const supported = sc.supported_composite_alpha;
-                log.info("    * supported composite alpha: {}", .{supported});
+                log.debug("    * supported composite alpha: {}", .{supported});
                 if (supported.opaque_bit_khr) {
                     break :b .{ .opaque_bit_khr = true };
                 } else if (supported.inherit_bit_khr) {
@@ -327,12 +333,15 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             break :b null;
         };
 
-        const compatible = properties.api_version >= @as(u32, @bitCast(vk_version)) and queue_family_index != null and extensions_supported and composite_alpha != null and supports_required_features;
+        const device_version: vk.Version = @bitCast(properties.api_version);
+        const version_compatible = device_version.variant == vk_version.variant and
+            @as(u32, @bitCast(device_version)) >= @as(u32, @bitCast(vk_version));
+        const compatible = version_compatible and queue_family_index != null and extensions_supported and composite_alpha != null and supports_required_features;
 
         if (compatible) {
-            log.info("    * rank: {}", .{rank});
+            log.debug("    * rank: {}", .{rank});
         } else {
-            log.info("    * rank: incompatible", .{});
+            log.debug("    * rank: incompatible", .{});
         }
 
         if (compatible and rank > best_physical_device.rank) {
@@ -369,7 +378,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         @panic("NoSupportedDevices");
     }
 
-    log.info("device {} chosen: {s}", .{ best_physical_device.index, bufToStr(&best_physical_device.name) });
+    log.info("Best Device: {s} ({})", .{ bufToStr(&best_physical_device.name), best_physical_device.index });
     devices_zone.end();
 
     // Iterate over the available queues, and find indices for the various queue types requested

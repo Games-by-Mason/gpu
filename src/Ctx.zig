@@ -137,7 +137,7 @@ pub const InitOptions = InitOptionsImpl(Backend.InitOptions);
 pub fn init(options: InitOptions) @This() {
     const zone = tracy.Zone.begin(.{ .name = "gpu init", .src = @src() });
     defer zone.end();
-    log.info("Initializing GPU frontend", .{});
+    log.debug("Initializing GPU frontend", .{});
 
     assert(options.frames_in_flight > 0);
     assert(options.frames_in_flight <= global_options.max_frames_in_flight);
