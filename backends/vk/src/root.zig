@@ -38,7 +38,9 @@ image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
 ready_for_present: [global_options.max_frames_in_flight]vk.Semaphore,
 cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 
-// Frame info
+// The current swapchain image index. Other APIs track this automatically, Vulkan appears to allow
+// you to actually present them out of order, but we never want to do this and it wouldn't map to
+// other APIs, so we track it ourselves here.
 image_index: ?u32 = null,
 
 // Tracy info
@@ -922,7 +924,7 @@ pub fn combinedCmdBufCreate(
             .view_mask = 0,
             .color_attachment_count = 1,
             .p_color_attachments = &.{.{
-                .image_view = self.backend.swapchain.views.get(self.backend.image_index.?),
+                .image_view = options.out.asBackendType(),
                 .image_layout = .color_attachment_optimal,
                 .resolve_mode = .{},
                 .resolve_image_view = .null_handle,
@@ -1297,9 +1299,9 @@ pub fn descriptorSetsUpdate(
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Ctx) bool {
+pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
     // Acquire the image
-    const aquire_result = b: {
+    const acquire_result = b: {
         const acquire_zone = Zone.begin(.{
             .src = @src(),
             .name = "acquire next image",
@@ -1313,7 +1315,7 @@ pub fn acquireNextImage(self: *Ctx) bool {
         ) catch |err| switch (err) {
             error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
                 self.backend.swapchain.recreate(self);
-                return false;
+                return null;
             },
             error.OutOfHostMemory,
             error.OutOfDeviceMemory,
@@ -1323,7 +1325,8 @@ pub fn acquireNextImage(self: *Ctx) bool {
             => @panic(@errorName(err)),
         };
     };
-    self.backend.image_index = aquire_result.image_index;
+    assert(self.backend.image_index == null);
+    self.backend.image_index = acquire_result.image_index;
 
     // Transition it to the right format
     {
@@ -1377,7 +1380,7 @@ pub fn acquireNextImage(self: *Ctx) bool {
                     .new_layout = .color_attachment_optimal,
                     .src_queue_family_index = 0, // Ignored
                     .dst_queue_family_index = 0, // Ignored
-                    .image = self.backend.swapchain.images.get(self.backend.image_index.?),
+                    .image = self.backend.swapchain.images.get(acquire_result.image_index),
                     .subresource_range = .{
                         .aspect_mask = .{ .color_bit = true },
                         .base_mip_level = 0,
@@ -1408,7 +1411,7 @@ pub fn acquireNextImage(self: *Ctx) bool {
         }
     }
 
-    return true;
+    return .fromBackendType(self.backend.swapchain.views.get(acquire_result.image_index));
 }
 
 pub fn startFrame(self: *Ctx) void {

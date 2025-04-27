@@ -160,7 +160,7 @@ pub fn IBackend(Self: type) type {
 
         present: fn (self: *Ctx) u64,
 
-        acquireNextImage: fn (self: *Ctx) bool,
+        acquireNextImage: fn (self: *Ctx) ?Ctx.ImageView,
 
         samplerCreate: fn (
             self: *Ctx,

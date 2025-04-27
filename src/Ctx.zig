@@ -347,6 +347,7 @@ pub const CombinedCmdBufCreateOptions = struct {
     kind: Ctx.CmdBufKind,
     loc: *const tracy.SourceLocation,
     load_op: CombinedCmdBuf(null).GraphicsInitOptions.LoadOp,
+    out: ImageView,
 };
 
 pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
@@ -366,6 +367,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             };
             loc: *const tracy.SourceLocation,
             load_op: LoadOp,
+            out: ImageView,
         };
         const ComputeTransferInitOptions = struct {
             loc: *const tracy.SourceLocation,
@@ -388,7 +390,8 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
                 .bindings = bindings,
                 .kind = kind.?,
                 .loc = options.loc,
-                .load_op = if (kind == .graphics) options.load_op else .dont_care,
+                .load_op = if (kind == .graphics) options.load_op else undefined,
+                .out = if (kind == .graphics) options.out else undefined,
             });
 
             return .{
@@ -562,17 +565,15 @@ pub fn present(self: *@This()) u64 {
 /// nanoseconds spent blocking.
 ///
 /// Returns null if the swapchain needed to be recreated, in which case you should drop this frame.
-pub fn acquireNextImage(self: *@This(), framebuf_size: Ctx.FramebufSize) ?u64 {
+pub fn acquireNextImage(self: *@This(), framebuf_size: Ctx.FramebufSize) ?ImageView {
     const zone = CpuZone.begin(.{
         .src = @src(),
         .color = global_options.blocking_zone_color,
     });
     defer zone.end();
     assert(framebuf_size[0] != 0 and framebuf_size[0] != 0);
-    var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
     self.framebuf_size = framebuf_size;
-    if (!Backend.acquireNextImage(self)) return null;
-    return wait_timer.lap();
+    return Backend.acquireNextImage(self);
 }
 
 pub const DescPool = enum(u64) {
@@ -799,17 +800,15 @@ pub fn frameInFlight(self: *const @This()) u8 {
 
 /// Starts a new frame. If this frame in flight's command pool is still in use, blocks until it is
 /// available. Returns the time spent blocking in nanoseconds.
-pub fn startFrame(self: *@This()) ?u64 {
+pub fn startFrame(self: *@This()) void {
     const zone = CpuZone.begin(.{
         .src = @src(),
         .color = global_options.blocking_zone_color,
     });
     defer zone.end();
-    var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
     self.frame = (self.frame + 1) % self.frames_in_flight;
     self.cb_bindings[self.frameInFlight()].clear();
     Backend.startFrame(self);
-    return wait_timer.lap();
 }
 
 pub fn Image(kind: ImageKind) type {
