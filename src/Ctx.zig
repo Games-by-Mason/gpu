@@ -56,7 +56,7 @@ device: Device,
 
 /// May not be changed after initialization.
 frames_in_flight: u8,
-frame: u64 = 0,
+frame: u16 = 0,
 framebuf_size: FramebufSize = .{ 0.0, 0.0 },
 
 combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
@@ -346,6 +346,7 @@ pub const CombinedCmdBufCreateOptions = struct {
     bindings: *Ctx.CmdBufBindings,
     kind: Ctx.CmdBufKind,
     loc: *const tracy.SourceLocation,
+    load_op: CombinedCmdBuf(null).GraphicsInitOptions.LoadOp,
 };
 
 pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
@@ -353,7 +354,24 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
         cmds: Cmds,
         zone: Zone,
 
-        pub inline fn init(gx: *Ctx, loc: *const tracy.SourceLocation) @This() {
+        const GraphicsInitOptions = struct {
+            const LoadOp = union(enum) {
+                load: void,
+                clear_color: [4]f32,
+                dont_care: void,
+            };
+            loc: *const tracy.SourceLocation,
+            load_op: LoadOp,
+        };
+        const ComputeTransferInitOptions = struct {
+            loc: *const tracy.SourceLocation,
+        };
+        pub const InitOptions = if (kind) |k| switch (k) {
+            .graphics => GraphicsInitOptions,
+            .compute_transfer => ComputeTransferInitOptions,
+        } else void;
+
+        pub fn init(gx: *Ctx, options: @This().InitOptions) @This() {
             comptime assert(kind != null);
 
             const zone = tracy.Zone.begin(.{ .src = @src() });
@@ -365,7 +383,8 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             const untyped = Backend.combinedCmdBufCreate(gx, .{
                 .bindings = bindings,
                 .kind = kind.?,
-                .loc = loc,
+                .loc = options.loc,
+                .load_op = if (kind == .graphics) options.load_op else .dont_care,
             });
 
             return .{
@@ -377,7 +396,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             };
         }
 
-        pub inline fn submit(self: @This(), gx: *Ctx) void {
+        pub fn submit(self: @This(), gx: *Ctx) void {
             comptime assert(kind != null);
             const zone = CpuZone.begin(.{ .src = @src() });
             defer zone.end();
@@ -471,8 +490,8 @@ pub const CmdBuf = enum(u64) {
 };
 
 pub const CmdBufKind = enum {
-    present,
     graphics,
+    compute_transfer,
 };
 
 /// Profiling zones are created automatically when creating or appending to a command buffer. It may
@@ -774,7 +793,7 @@ pub fn updateDescSets(
 
 /// Returns the current frame in flight. May be used to index resources that are buffered per frame.
 pub fn frameInFlight(self: *const @This()) u8 {
-    return @intCast(self.frame % self.frames_in_flight);
+    return @intCast(self.frame);
 }
 
 /// Starts a new frame. If this frame in flight's command pool is still in use, blocks until it is
@@ -782,7 +801,7 @@ pub fn frameInFlight(self: *const @This()) u8 {
 pub fn frameStart(self: *@This()) ?u64 {
     const zone = CpuZone.begin(.{ .src = @src() });
     defer zone.end();
-    self.frame += 1;
+    self.frame = (self.frame + 1) % self.frames_in_flight;
     self.cb_bindings[self.frameInFlight()].clear();
     return Backend.frameStart(self);
 }

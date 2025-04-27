@@ -891,9 +891,7 @@ pub fn combinedCmdBufCreate(
 ) Ctx.CombinedCmdBuf(null) {
     var cbs = [_]vk.CommandBuffer{.null_handle};
     self.backend.device.allocateCommandBuffers(&.{
-        .command_pool = switch (options.kind) {
-            .graphics, .present => self.backend.cmd_pools[self.frameInFlight()],
-        },
+        .command_pool = self.backend.cmd_pools[self.frameInFlight()],
         .level = .primary,
         .command_buffer_count = cbs.len,
     }, &cbs) catch |err| @panic(@errorName(err));
@@ -913,7 +911,7 @@ pub fn combinedCmdBufCreate(
         .loc = options.loc,
     });
 
-    if (options.kind == .present) {
+    if (options.kind == .graphics) {
         self.backend.device.cmdBeginRendering(cb, &.{
             .flags = .{},
             .render_area = .{
@@ -929,9 +927,16 @@ pub fn combinedCmdBufCreate(
                 .resolve_mode = .{},
                 .resolve_image_view = .null_handle,
                 .resolve_image_layout = .undefined,
-                .load_op = .clear,
+                .load_op = switch (options.load_op) {
+                    .clear_color => .clear,
+                    .load => .load,
+                    .dont_care => .dont_care,
+                },
                 .store_op = .store,
-                .clear_value = .{ .color = .{ .float_32 = .{ 0.5, 0.5, 0.5, 1.0 } } },
+                .clear_value = switch (options.load_op) {
+                    .clear_color => |color| .{ .color = .{ .float_32 = color } },
+                    else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
+                },
             }},
             .p_depth_attachment = null,
             .p_stencil_attachment = null,
@@ -1075,7 +1080,7 @@ pub fn combinedCmdBufSubmit(
 ) void {
     const cb = combined_cb.cmds.buf.asBackendType();
 
-    if (kind == .present) {
+    if (kind == .graphics) {
         self.backend.device.cmdEndRendering(cb);
     }
 
