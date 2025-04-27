@@ -898,8 +898,6 @@ pub fn combinedCmdBufCreate(
         .loc = options.loc,
     });
 
-    // XXX: then also make separate cb for end on submit to transfer back
-    // XXX: should we do this every time? for now at least? i guess not if we're just trying to transfer...
     if (options.kind == .present) {
         self.backend.device.cmdBeginRendering(cmdbuf, &.{
             .flags = .{},
@@ -1364,7 +1362,6 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
             .level = .primary,
             .command_buffer_count = cmdbufs.len,
         }, &cmdbufs) catch |err| @panic(@errorName(err));
-        // XXX: rename to cb?
         const cmdbuf = cmdbufs[0];
         setName(self.backend.device, cmdbuf, .{
             .str = "Prepare Swapchain Image",
@@ -1959,8 +1956,6 @@ pub fn combinedPipelinesCreate(
 }
 
 pub fn present(self: *Ctx) u64 {
-    // XXX: clean this up...move to submit?
-    // XXX: CURRENT: this needs to emit a semaphore that queue present waits on
     {
         const transition_zone = Zone.begin(.{ .name = "finalize swapchain image", .src = @src() });
         defer transition_zone.end();
@@ -1971,7 +1966,6 @@ pub fn present(self: *Ctx) u64 {
             .level = .primary,
             .command_buffer_count = cmdbufs.len,
         }, &cmdbufs) catch |err| @panic(@errorName(err));
-        // XXX: rename to cb?
         const cmdbuf = cmdbufs[0];
         setName(self.backend.device, cmdbuf, .{
             .str = "Finalize Swapchain Image",
@@ -2039,7 +2033,6 @@ pub fn present(self: *Ctx) u64 {
                     .command_buffer_count = 1,
                     .p_command_buffers = &.{cmdbuf},
                     .signal_semaphore_count = 2,
-                    // XXX: simplify
                     .p_signal_semaphores = &.{
                         self.backend.ready_for_present[self.frameInFlight()],
                         self.cmdbuf_semaphores[self.frameInFlight()].addOneAssumeCapacity().*.asBackendType(),
