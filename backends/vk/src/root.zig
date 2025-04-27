@@ -874,32 +874,32 @@ pub fn combinedCmdBufCreate(
     self: *Ctx,
     options: Ctx.CombinedCmdBufCreateOptions,
 ) Ctx.CombinedCmdBuf(null) {
-    var cmdbufs = [_]vk.CommandBuffer{.null_handle};
+    var cbs = [_]vk.CommandBuffer{.null_handle};
     self.backend.device.allocateCommandBuffers(&.{
         .command_pool = switch (options.kind) {
             .graphics, .present => self.backend.cmd_pools[self.frameInFlight()],
         },
         .level = .primary,
-        .command_buffer_count = cmdbufs.len,
-    }, &cmdbufs) catch |err| @panic(@errorName(err));
-    const cmdbuf = cmdbufs[0];
-    setName(self.backend.device, cmdbuf, .{
+        .command_buffer_count = cbs.len,
+    }, &cbs) catch |err| @panic(@errorName(err));
+    const cb = cbs[0];
+    setName(self.backend.device, cb, .{
         .str = options.loc.name orelse options.loc.function,
     }, self.backend.debug_messenger != .null_handle);
 
-    self.backend.device.beginCommandBuffer(cmdbuf, &.{
+    self.backend.device.beginCommandBuffer(cb, &.{
         .flags = .{ .one_time_submit_bit = true },
         .p_inheritance_info = null,
     }) catch |err| @panic(@errorName(err));
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = .fromBackendType(cmdbuf),
+        .command_buffer = .fromBackendType(cb),
         .tracy_queue = self.backend.tracy_queue,
         .loc = options.loc,
     });
 
     if (options.kind == .present) {
-        self.backend.device.cmdBeginRendering(cmdbuf, &.{
+        self.backend.device.cmdBeginRendering(cb, &.{
             .flags = .{},
             .render_area = .{
                 .offset = .{ .x = 0, .y = 0 },
@@ -925,7 +925,7 @@ pub fn combinedCmdBufCreate(
 
     return .{
         .cmds = .{
-            .buf = .fromBackendType(cmdbuf),
+            .buf = .fromBackendType(cb),
             .bindings = options.bindings,
         },
         .signal = options.signal,
@@ -1056,28 +1056,28 @@ pub fn cmdBufGraphicsAppend(
 
 pub fn combinedCmdBufSubmit(
     self: *Ctx,
-    combined_cmdbuf: Ctx.CombinedCmdBuf(null),
+    combined_cb: Ctx.CombinedCmdBuf(null),
     kind: Ctx.CmdBufKind,
     wait: []const Ctx.Wait,
 ) void {
-    const cmdbuf = combined_cmdbuf.cmds.buf.asBackendType();
+    const cb = combined_cb.cmds.buf.asBackendType();
 
     if (kind == .present) {
-        self.backend.device.cmdEndRendering(cmdbuf);
+        self.backend.device.cmdEndRendering(cb);
     }
 
-    combined_cmdbuf.zone.end(self, .{
-        .command_buffer = combined_cmdbuf.cmds.buf,
+    combined_cb.zone.end(self, .{
+        .command_buffer = combined_cb.cmds.buf,
         .tracy_queue = self.backend.tracy_queue,
     });
-    self.backend.device.endCommandBuffer(cmdbuf) catch |err| @panic(@errorName(err));
+    self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
 
     {
         const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
         defer queue_submit_zone.end();
 
         // Max is the number of command buffers, minus one since you can't wait on the final one
-        const max_waits = global_options.max_cmdbufs_per_frame - 1;
+        const max_waits = global_options.max_cbs_per_frame - 1;
         var wait_stages: std.BoundedArray(vk.PipelineStageFlags, max_waits) = .{};
         var wait_semaphores: std.BoundedArray(vk.Semaphore, max_waits) = .{};
         for (wait) |w| {
@@ -1107,10 +1107,10 @@ pub fn combinedCmdBufSubmit(
         var signal_semaphores: std.BoundedArray(vk.Semaphore, max_signals) = .{};
         var signal_values: std.BoundedArray(u64, max_signals) = .{};
 
-        signal_semaphores.appendAssumeCapacity(combined_cmdbuf.signal.asBackendType());
+        signal_semaphores.appendAssumeCapacity(combined_cb.signal.asBackendType());
         signal_values.appendAssumeCapacity(self.frame + self.frames_in_flight);
 
-        const cmdbufs = [_]vk.CommandBuffer{cmdbuf};
+        const cbs = [_]vk.CommandBuffer{cb};
         const timeline_semaphore_submit_info: vk.TimelineSemaphoreSubmitInfoKHR = .{
             .signal_semaphore_value_count = @intCast(signal_values.len),
             .p_signal_semaphore_values = &signal_values.buffer,
@@ -1119,8 +1119,8 @@ pub fn combinedCmdBufSubmit(
             .wait_semaphore_count = @intCast(wait_semaphores.len),
             .p_wait_semaphores = &wait_semaphores.buffer,
             .p_wait_dst_stage_mask = &wait_stages.buffer,
-            .command_buffer_count = cmdbufs.len,
-            .p_command_buffers = &cmdbufs,
+            .command_buffer_count = cbs.len,
+            .p_command_buffers = &cbs,
             .signal_semaphore_count = @intCast(signal_semaphores.len),
             .p_signal_semaphores = &signal_semaphores.buffer,
             .p_next = &timeline_semaphore_submit_info,
@@ -1356,38 +1356,38 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
         const transition_zone = Zone.begin(.{ .name = "prepare swapchain image", .src = @src() });
         defer transition_zone.end();
 
-        var cmdbufs = [_]vk.CommandBuffer{.null_handle};
+        var cbs = [_]vk.CommandBuffer{.null_handle};
         self.backend.device.allocateCommandBuffers(&.{
             .command_pool = self.backend.cmd_pools[self.frameInFlight()],
             .level = .primary,
-            .command_buffer_count = cmdbufs.len,
-        }, &cmdbufs) catch |err| @panic(@errorName(err));
-        const cmdbuf = cmdbufs[0];
-        setName(self.backend.device, cmdbuf, .{
+            .command_buffer_count = cbs.len,
+        }, &cbs) catch |err| @panic(@errorName(err));
+        const cb = cbs[0];
+        setName(self.backend.device, cb, .{
             .str = "Prepare Swapchain Image",
         }, self.backend.debug_messenger != .null_handle);
 
         {
-            self.backend.device.beginCommandBuffer(cmdbuf, &.{
+            self.backend.device.beginCommandBuffer(cb, &.{
                 .flags = .{ .one_time_submit_bit = true },
                 .p_inheritance_info = null,
             }) catch |err| @panic(@errorName(err));
             defer {
-                self.backend.device.endCommandBuffer(cmdbuf) catch |err| @panic(@errorName(err));
+                self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
             }
 
             const zone = Ctx.Zone.begin(self, .{
-                .command_buffer = .fromBackendType(cmdbuf),
+                .command_buffer = .fromBackendType(cb),
                 .tracy_queue = self.backend.tracy_queue,
                 .loc = .init(.{ .name = "prepare swapchain image", .src = @src() }),
             });
             defer zone.end(self, .{
-                .command_buffer = .fromBackendType(cmdbuf),
+                .command_buffer = .fromBackendType(cb),
                 .tracy_queue = self.backend.tracy_queue,
             });
 
             self.backend.device.cmdPipelineBarrier(
-                cmdbuf,
+                cb,
                 .{ .top_of_pipe_bit = true },
                 .{ .color_attachment_output_bit = true },
                 .{},
@@ -1424,7 +1424,7 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
                     .p_wait_semaphores = &.{self.backend.image_availables[self.frameInFlight()]},
                     .p_wait_dst_stage_mask = &.{.{ .top_of_pipe_bit = true }},
                     .command_buffer_count = 1,
-                    .p_command_buffers = &.{cmdbuf},
+                    .p_command_buffers = &.{cb},
                     .signal_semaphore_count = 0,
                     .p_signal_semaphores = &.{},
                     .p_next = null,
@@ -1960,14 +1960,14 @@ pub fn present(self: *Ctx) u64 {
         const transition_zone = Zone.begin(.{ .name = "finalize swapchain image", .src = @src() });
         defer transition_zone.end();
 
-        var cmdbufs = [_]vk.CommandBuffer{.null_handle};
+        var cbs = [_]vk.CommandBuffer{.null_handle};
         self.backend.device.allocateCommandBuffers(&.{
             .command_pool = self.backend.cmd_pools[self.frameInFlight()],
             .level = .primary,
-            .command_buffer_count = cmdbufs.len,
-        }, &cmdbufs) catch |err| @panic(@errorName(err));
-        const cmdbuf = cmdbufs[0];
-        setName(self.backend.device, cmdbuf, .{
+            .command_buffer_count = cbs.len,
+        }, &cbs) catch |err| @panic(@errorName(err));
+        const cb = cbs[0];
+        setName(self.backend.device, cb, .{
             .str = "Finalize Swapchain Image",
         }, self.backend.debug_messenger != .null_handle);
 
@@ -1975,26 +1975,26 @@ pub fn present(self: *Ctx) u64 {
             const submit_zone = Zone.begin(.{ .name = "prepare", .src = @src() });
             defer submit_zone.end();
 
-            self.backend.device.beginCommandBuffer(cmdbuf, &.{
+            self.backend.device.beginCommandBuffer(cb, &.{
                 .flags = .{ .one_time_submit_bit = true },
                 .p_inheritance_info = null,
             }) catch |err| @panic(@errorName(err));
             defer {
-                self.backend.device.endCommandBuffer(cmdbuf) catch |err| @panic(@errorName(err));
+                self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
             }
 
             const zone = Ctx.Zone.begin(self, .{
-                .command_buffer = .fromBackendType(cmdbuf),
+                .command_buffer = .fromBackendType(cb),
                 .tracy_queue = self.backend.tracy_queue,
                 .loc = .init(.{ .name = "finalize swapchain image", .src = @src() }),
             });
             defer zone.end(self, .{
-                .command_buffer = .fromBackendType(cmdbuf),
+                .command_buffer = .fromBackendType(cb),
                 .tracy_queue = self.backend.tracy_queue,
             });
 
             self.backend.device.cmdPipelineBarrier(
-                cmdbuf,
+                cb,
                 .{ .color_attachment_output_bit = true },
                 .{ .bottom_of_pipe_bit = true },
                 .{},
@@ -2031,11 +2031,11 @@ pub fn present(self: *Ctx) u64 {
                     .p_wait_semaphores = &.{},
                     .p_wait_dst_stage_mask = &.{},
                     .command_buffer_count = 1,
-                    .p_command_buffers = &.{cmdbuf},
+                    .p_command_buffers = &.{cb},
                     .signal_semaphore_count = 2,
                     .p_signal_semaphores = &.{
                         self.backend.ready_for_present[self.frameInFlight()],
-                        self.cmdbuf_semaphores[self.frameInFlight()].addOneAssumeCapacity().*.asBackendType(),
+                        self.cb_semaphores[self.frameInFlight()].addOneAssumeCapacity().*.asBackendType(),
                     },
                     .p_next = &vk.TimelineSemaphoreSubmitInfoKHR{
                         .signal_semaphore_value_count = 2,
@@ -2224,10 +2224,10 @@ pub fn cmdBufTransferAppend(
     comptime max_regions: u32,
     options: Ctx.Cmds.AppendTransferCmdsOptions,
 ) void {
-    const cmdbuf = cmds.buf.asBackendType();
+    const cb = cmds.buf.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = .fromBackendType(cmdbuf),
+        .command_buffer = .fromBackendType(cb),
         .tracy_queue = self.backend.tracy_queue,
         .loc = options.loc,
     });
@@ -2252,7 +2252,7 @@ pub fn cmdBufTransferAppend(
 
                 // Transition the image to transfer dst optimal
                 self.backend.device.cmdPipelineBarrier(
-                    cmdbuf,
+                    cb,
                     .{ .top_of_pipe_bit = true },
                     .{ .transfer_bit = true },
                     .{},
@@ -2299,7 +2299,7 @@ pub fn cmdBufTransferAppend(
                     }) catch @panic("OOB");
                 }
                 self.backend.device.cmdCopyBufferToImage(
-                    cmdbuf,
+                    cb,
                     cmd_options.buf.asBackendType(),
                     cmd_options.image.asBackendType(),
                     .transfer_dst_optimal,
@@ -2309,7 +2309,7 @@ pub fn cmdBufTransferAppend(
 
                 // Transition to the destination layout
                 self.backend.device.cmdPipelineBarrier(
-                    cmdbuf,
+                    cb,
                     .{ .transfer_bit = true },
                     .{ .fragment_shader_bit = true },
                     .{},
@@ -2340,7 +2340,7 @@ pub fn cmdBufTransferAppend(
                     }) catch @panic("OOB");
                 }
                 self.backend.device.cmdCopyBuffer(
-                    cmdbuf,
+                    cb,
                     cmd_options.src.asBackendType(),
                     cmd_options.dst.asBackendType(),
                     @intCast(regions.len),
@@ -2351,7 +2351,7 @@ pub fn cmdBufTransferAppend(
     }
 
     zone.end(self, .{
-        .command_buffer = .fromBackendType(cmdbuf),
+        .command_buffer = .fromBackendType(cb),
         .tracy_queue = self.backend.tracy_queue,
     });
 }
@@ -2634,7 +2634,7 @@ const Swapchain = struct {
     }
 };
 
-const CommandBufferSemaphores = std.BoundedArray(vk.Semaphore, global_options.max_cmdbufs_per_frame);
+const CommandBufferSemaphores = std.BoundedArray(vk.Semaphore, global_options.max_cbs_per_frame);
 
 // r: clean up...undefined, and way it's used, etc
 const PhysicalDevice = struct {

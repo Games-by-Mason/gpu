@@ -44,7 +44,7 @@ pub const Semaphore = enum(u64) {
     }
 
     pub fn waitAll(gx: *Ctx, semaphores: []const Semaphore) void {
-        var wait_values_buf: [global_options.max_cmdbufs_per_frame]u64 = undefined;
+        var wait_values_buf: [global_options.max_cbs_per_frame]u64 = undefined;
         const wait_values = wait_values_buf[0..semaphores.len];
         for (wait_values) |*value| {
             value.* = gx.frame + gx.frames_in_flight;
@@ -84,8 +84,8 @@ framebuf_size: FramebufSize = .{ 0.0, 0.0 },
 
 combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
 
-cmdbuf_bindings: [global_options.max_frames_in_flight]std.BoundedArray(CmdBufBindings, global_options.max_cmdbufs_per_frame) = @splat(.{}),
-cmdbuf_semaphores: [global_options.max_frames_in_flight]std.BoundedArray(Semaphore, global_options.max_cmdbufs_per_frame) = @splat(.{}),
+cb_bindings: [global_options.max_frames_in_flight]std.BoundedArray(CmdBufBindings, global_options.max_cbs_per_frame) = @splat(.{}),
+cb_semaphores: [global_options.max_frames_in_flight]std.BoundedArray(Semaphore, global_options.max_cbs_per_frame) = @splat(.{}),
 
 max_alignment: bool,
 
@@ -162,7 +162,7 @@ pub fn init(options: InitOptions) @This() {
         const semaphore_zone = tracy.Zone.begin(.{ .name = "create semaphores", .src = @src() });
         defer semaphore_zone.end();
 
-        for (&gx.cmdbuf_semaphores) |*semaphores| {
+        for (&gx.cb_semaphores) |*semaphores| {
             for (&semaphores.buffer) |*semaphore| {
                 semaphore.* = Backend.semaphoreCreate(&gx, 0);
             }
@@ -196,7 +196,7 @@ pub fn deinit(self: *@This(), gpa: Allocator) void {
         layout.deinit(self);
     }
 
-    for (&self.cmdbuf_semaphores) |semaphores| {
+    for (&self.cb_semaphores) |semaphores| {
         for (semaphores.buffer) |semaphore| {
             Backend.semaphoreDestroy(self, semaphore);
         }
@@ -426,9 +426,9 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
 
-            const bindings = gx.cmdbuf_bindings[gx.frameInFlight()].addOne() catch @panic("OOB");
+            const bindings = gx.cb_bindings[gx.frameInFlight()].addOne() catch @panic("OOB");
             bindings.* = .{};
-            const signal = gx.cmdbuf_semaphores[gx.frameInFlight()].addOneAssumeCapacity().*;
+            const signal = gx.cb_semaphores[gx.frameInFlight()].addOneAssumeCapacity().*;
 
             const untyped = Backend.combinedCmdBufCreate(gx, .{
                 .bindings = bindings,
@@ -458,7 +458,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             defer zone.end();
 
             // Not <= as you can't wait on the final submission!
-            assert(wait.len < global_options.max_cmdbufs_per_frame);
+            assert(wait.len < global_options.max_cbs_per_frame);
 
             Backend.combinedCmdBufSubmit(gx, self.asUntyped(), kind.?, wait);
         }
@@ -866,8 +866,8 @@ pub fn frameStart(self: *@This()) ?u64 {
     self.frame += 1;
 
     const block_ns = b: {
-        const semaphores = self.cmdbuf_semaphores[self.frameInFlight()].constSlice();
-        var wait_values_buf: [global_options.max_cmdbufs_per_frame]u64 = undefined;
+        const semaphores = self.cb_semaphores[self.frameInFlight()].constSlice();
+        var wait_values_buf: [global_options.max_cbs_per_frame]u64 = undefined;
         const wait_values = wait_values_buf[0..semaphores.len];
         for (wait_values) |*value| {
             value.* = self.frame;
@@ -884,8 +884,8 @@ pub fn frameStart(self: *@This()) ?u64 {
         break :b wait_timer.lap();
     };
 
-    self.cmdbuf_bindings[self.frameInFlight()].clear();
-    self.cmdbuf_semaphores[self.frameInFlight()].clear();
+    self.cb_bindings[self.frameInFlight()].clear();
+    self.cb_semaphores[self.frameInFlight()].clear();
 
     Backend.frameStart(self);
 
