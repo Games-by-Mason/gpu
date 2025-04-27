@@ -15,6 +15,8 @@ const global_options = gpu.options;
 
 pub const vulkan = @import("vulkan");
 
+const vk_version = vk.makeApiVersion(0, 1, 3, 0);
+
 // Context
 surface: vk.SurfaceKHR,
 base_wrapper: vk.BaseWrapper,
@@ -24,14 +26,11 @@ physical_device: PhysicalDevice,
 swapchain: Swapchain,
 debug_messenger: vk.DebugUtilsMessengerEXT,
 
-// Queues
+// Queues & commands
 timestamp_period: f32,
 queue: vk.Queue,
 tracy_queue: TracyQueue,
 queue_family_index: u32,
-
-// Command buffers and render passes
-render_pass: vk.RenderPass,
 cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
 // Synchronization
@@ -118,7 +117,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     const inst_handle_zone = tracy.Zone.begin(.{ .name = "create instance handle", .src = @src() });
     const instance_handle = base_wrapper.createInstance(&.{
         .p_application_info = &.{
-            .api_version = @bitCast(vk.makeApiVersion(0, 1, 4, 0)),
+            .api_version = @bitCast(vk_version),
             .p_application_name = if (options.application_name) |n| n.ptr else null,
             .application_version = @bitCast(vk.makeApiVersion(
                 0,
@@ -292,6 +291,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         } else .{ null, null, null };
 
         log.info("  {}. {s}:", .{ i, bufToStr(&properties.device_name) });
+        log.info("    * device api version: {}", .{@as(vk.Version, @bitCast(properties.api_version))});
         log.info("    * device type: {}", .{properties.device_type});
         log.info("    * queue family index: {?}", .{queue_family_index});
         log.info("    * present mode: {?}", .{present_mode});
@@ -327,7 +327,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             break :b null;
         };
 
-        const compatible = queue_family_index != null and extensions_supported and composite_alpha != null and supports_required_features;
+        const compatible = properties.api_version >= @as(u32, @bitCast(vk_version)) and queue_family_index != null and extensions_supported and composite_alpha != null and supports_required_features;
 
         if (compatible) {
             log.info("    * rank: {}", .{rank});
@@ -392,12 +392,17 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     var device_features_11: vk.PhysicalDeviceVulkan11Features = .{
         .shader_draw_parameters = vk.TRUE,
     };
-    const device_features_12: vk.PhysicalDeviceVulkan12Features = .{
+    var device_features_12: vk.PhysicalDeviceVulkan12Features = .{
         .host_query_reset = @intFromBool(options.timestamp_queries),
         // Party of DX12, so it seems reasonable to assume all Vulkan 1.3 hardware supports these in
         // practice.
         .timeline_semaphore = vk.TRUE,
         .p_next = &device_features_11,
+    };
+    const device_features_13: vk.PhysicalDeviceVulkan13Features = .{
+        // Support required by Vulkan 1.3
+        .dynamic_rendering = vk.TRUE,
+        .p_next = &device_features_12,
     };
     const device_features: vk.PhysicalDeviceFeatures = .{
         .draw_indirect_first_instance = vk.TRUE,
@@ -410,7 +415,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .p_enabled_features = &device_features,
         .enabled_extension_count = @intCast(required_device_extensions.items.len),
         .pp_enabled_extension_names = required_device_extensions.items.ptr,
-        .p_next = &device_features_12,
+        .p_next = &device_features_13,
     };
     const device_handle = instance_proxy.createDevice(
         best_physical_device.device,
@@ -461,64 +466,12 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     });
     get_queue_zone.end();
 
-    const render_pass_zone = tracy.Zone.begin(.{ .name = "create render pass", .src = @src() });
-    const color_attachments = [_]vk.AttachmentDescription{
-        .{
-            .format = best_physical_device.surface_format.format,
-            .samples = .{ .@"1_bit" = true },
-            .load_op = .clear,
-            .store_op = .store,
-            .stencil_load_op = .dont_care,
-            .stencil_store_op = .dont_care,
-            .initial_layout = .undefined,
-            .final_layout = .present_src_khr,
-        },
-    };
-
-    const color_attachment_refs = [_]vk.AttachmentReference{
-        .{
-            .attachment = 0,
-            .layout = .color_attachment_optimal,
-        },
-    };
-
-    const subpasses = [_]vk.SubpassDescription{
-        .{
-            .pipeline_bind_point = .graphics,
-            .color_attachment_count = color_attachment_refs.len,
-            .p_color_attachments = &color_attachment_refs,
-        },
-    };
-
-    const subpass_dependencise = [_]vk.SubpassDependency{.{
-        .src_subpass = vk.SUBPASS_EXTERNAL,
-        .dst_subpass = 0,
-        .src_stage_mask = .{ .color_attachment_output_bit = true },
-        .src_access_mask = .{},
-        .dst_stage_mask = .{ .color_attachment_output_bit = true },
-        .dst_access_mask = .{ .color_attachment_write_bit = true },
-    }};
-
-    const render_pass_info: vk.RenderPassCreateInfo = .{
-        .attachment_count = color_attachments.len,
-        .p_attachments = &color_attachments,
-        .subpass_count = subpasses.len,
-        .p_subpasses = &subpasses,
-        .dependency_count = subpass_dependencise.len,
-        .p_dependencies = &subpass_dependencise,
-    };
-
-    const render_pass = device.createRenderPass(&render_pass_info, null) catch |err| @panic(@errorName(err));
-    setName(device, render_pass, .{ .str = "Main" }, options.validation);
-    render_pass_zone.end();
-
     const swapchain = Swapchain.init(
         instance_proxy,
         options.framebuf_size,
         device,
         best_physical_device,
         surface,
-        render_pass,
         .null_handle,
         options.validation,
     );
@@ -584,7 +537,6 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .instance = instance_proxy,
         .device = device,
         .swapchain = swapchain,
-        .render_pass = render_pass,
         .cmd_pools = cmd_pools,
         .image_availables = image_availables,
         .ready_for_present = ready_for_present,
@@ -616,9 +568,6 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     for (self.backend.cmd_pools) |pool| {
         self.backend.device.destroyCommandPool(pool, null);
     }
-
-    // Destroy render pass state
-    self.backend.device.destroyRenderPass(self.backend.render_pass, null);
 
     // Destroy swapchain state
     self.backend.swapchain.deinit(self.backend.device);
@@ -921,52 +870,86 @@ pub fn combinedCmdBufCreate(
     self: *Ctx,
     options: Ctx.CombinedCmdBufCreateOptions,
 ) Ctx.CombinedCmdBuf(null) {
-    var command_buffers = [_]vk.CommandBuffer{.null_handle};
+    var cmdbufs = [_]vk.CommandBuffer{.null_handle};
     self.backend.device.allocateCommandBuffers(&.{
         .command_pool = switch (options.kind) {
             .graphics, .present => self.backend.cmd_pools[self.frameInFlight()],
         },
         .level = .primary,
-        .command_buffer_count = command_buffers.len,
-    }, &command_buffers) catch |err| @panic(@errorName(err));
-    const command_buffer = command_buffers[0];
-    setName(self.backend.device, command_buffer, .{
+        .command_buffer_count = cmdbufs.len,
+    }, &cmdbufs) catch |err| @panic(@errorName(err));
+    const cmdbuf = cmdbufs[0];
+    setName(self.backend.device, cmdbuf, .{
         .str = options.loc.name orelse options.loc.function,
     }, self.backend.debug_messenger != .null_handle);
 
-    self.backend.device.beginCommandBuffer(command_buffer, &.{
+    self.backend.device.beginCommandBuffer(cmdbuf, &.{
         .flags = .{ .one_time_submit_bit = true },
         .p_inheritance_info = null,
     }) catch |err| @panic(@errorName(err));
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = .fromBackendType(command_buffer),
+        .command_buffer = .fromBackendType(cmdbuf),
         .tracy_queue = self.backend.tracy_queue,
         .loc = options.loc,
     });
 
-    const clear_values = [_]vk.ClearValue{
-        .{
-            .color = .{ .float_32 = .{ 0.5, 0.5, 0.5, 1.0 } },
-        },
-    };
     if (options.kind == .present) {
-        const render_pass_info: vk.RenderPassBeginInfo = .{
-            .render_pass = self.backend.render_pass,
-            .framebuffer = self.backend.swapchain.framebufs.get(self.backend.image_index.?),
+        self.backend.device.cmdPipelineBarrier(
+            cmdbuf,
+            .{ .top_of_pipe_bit = true },
+            .{ .color_attachment_output_bit = true },
+            .{},
+            0,
+            null,
+            0,
+            null,
+            1,
+            &.{.{
+                .src_access_mask = .{},
+                .dst_access_mask = .{ .color_attachment_write_bit = true },
+                .old_layout = .undefined,
+                .new_layout = .color_attachment_optimal,
+                .src_queue_family_index = 0, // Ignored
+                .dst_queue_family_index = 0, // Ignored
+                .image = self.backend.swapchain.images.get(self.backend.image_index.?),
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+            }},
+        );
+
+        self.backend.device.cmdBeginRendering(cmdbuf, &.{
+            .flags = .{},
             .render_area = .{
                 .offset = .{ .x = 0, .y = 0 },
                 .extent = self.backend.swapchain.swap_extent,
             },
-            .clear_value_count = clear_values.len,
-            .p_clear_values = &clear_values,
-        };
-        self.backend.device.cmdBeginRenderPass(command_buffer, &render_pass_info, .@"inline");
+            .layer_count = 1,
+            .view_mask = 0,
+            .color_attachment_count = 1,
+            .p_color_attachments = &.{.{
+                .image_view = self.backend.swapchain.views.get(self.backend.image_index.?),
+                .image_layout = .color_attachment_optimal,
+                .resolve_mode = .{},
+                .resolve_image_view = .null_handle,
+                .resolve_image_layout = .undefined,
+                .load_op = .clear,
+                .store_op = .store,
+                .clear_value = .{ .color = .{ .float_32 = .{ 0.5, 0.5, 0.5, 1.0 } } },
+            }},
+            .p_depth_attachment = null,
+            .p_stencil_attachment = null,
+        });
     }
 
     return .{
         .cmds = .{
-            .buf = .fromBackendType(command_buffer),
+            .buf = .fromBackendType(cmdbuf),
             .bindings = options.bindings,
         },
         .signal = options.signal,
@@ -1097,20 +1080,48 @@ pub fn cmdBufGraphicsAppend(
 
 pub fn combinedCmdBufSubmit(
     self: *Ctx,
-    combined_command_buffer: Ctx.CombinedCmdBuf(null),
+    combined_cmdbuf: Ctx.CombinedCmdBuf(null),
     kind: Ctx.CmdBufKind,
     wait: []const Ctx.Wait,
 ) void {
-    const command_buffer = combined_command_buffer.cmds.buf.asBackendType();
+    const cmdbuf = combined_cmdbuf.cmds.buf.asBackendType();
 
     if (kind == .present) {
-        self.backend.device.cmdEndRenderPass(command_buffer);
+        self.backend.device.cmdEndRendering(cmdbuf);
+
+        self.backend.device.cmdPipelineBarrier(
+            cmdbuf,
+            .{ .color_attachment_output_bit = true },
+            .{ .bottom_of_pipe_bit = true },
+            .{},
+            0,
+            null,
+            0,
+            null,
+            1,
+            &.{.{
+                .src_access_mask = .{ .color_attachment_write_bit = true },
+                .dst_access_mask = .{},
+                .old_layout = .color_attachment_optimal,
+                .new_layout = .present_src_khr,
+                .src_queue_family_index = 0, // Ignored
+                .dst_queue_family_index = 0, // Ignored
+                .image = self.backend.swapchain.images.get(self.backend.image_index.?),
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+            }},
+        );
     }
-    combined_command_buffer.zone.end(self, .{
-        .command_buffer = combined_command_buffer.cmds.buf,
+    combined_cmdbuf.zone.end(self, .{
+        .command_buffer = combined_cmdbuf.cmds.buf,
         .tracy_queue = self.backend.tracy_queue,
     });
-    self.backend.device.endCommandBuffer(command_buffer) catch |err| @panic(@errorName(err));
+    self.backend.device.endCommandBuffer(cmdbuf) catch |err| @panic(@errorName(err));
 
     {
         const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
@@ -1123,7 +1134,7 @@ pub fn combinedCmdBufSubmit(
         var wait_semaphores: std.BoundedArray(vk.Semaphore, max_waits) = .{};
         if (kind == .present) {
             wait_semaphores.appendAssumeCapacity(self.backend.image_availables[self.frameInFlight()]);
-            wait_stages.appendAssumeCapacity(.{ .color_attachment_output_bit = true });
+            wait_stages.appendAssumeCapacity(.{ .top_of_pipe_bit = true });
         }
         for (wait) |w| {
             wait_semaphores.appendAssumeCapacity(w.semaphore.asBackendType());
@@ -1152,7 +1163,7 @@ pub fn combinedCmdBufSubmit(
         var signal_semaphores: std.BoundedArray(vk.Semaphore, max_signals) = .{};
         var signal_values: std.BoundedArray(u64, max_signals) = .{};
 
-        signal_semaphores.appendAssumeCapacity(combined_command_buffer.signal.asBackendType());
+        signal_semaphores.appendAssumeCapacity(combined_cmdbuf.signal.asBackendType());
         signal_values.appendAssumeCapacity(self.frame + self.frames_in_flight);
 
         if (kind == .present) {
@@ -1161,7 +1172,7 @@ pub fn combinedCmdBufSubmit(
             signal_values.appendAssumeCapacity(1); // Value ignored, not a timeline semaphore
         }
 
-        const command_buffers = [_]vk.CommandBuffer{command_buffer};
+        const cmdbufs = [_]vk.CommandBuffer{cmdbuf};
         const timeline_semaphore_submit_info: vk.TimelineSemaphoreSubmitInfoKHR = .{
             .signal_semaphore_value_count = @intCast(signal_values.len),
             .p_signal_semaphore_values = &signal_values.buffer,
@@ -1170,8 +1181,8 @@ pub fn combinedCmdBufSubmit(
             .wait_semaphore_count = @intCast(wait_semaphores.len),
             .p_wait_semaphores = &wait_semaphores.buffer,
             .p_wait_dst_stage_mask = &wait_stages.buffer,
-            .command_buffer_count = command_buffers.len,
-            .p_command_buffers = &command_buffers,
+            .command_buffer_count = cmdbufs.len,
+            .p_command_buffers = &cmdbufs,
             .signal_semaphore_count = @intCast(signal_semaphores.len),
             .p_signal_semaphores = &signal_semaphores.buffer,
             .p_next = &timeline_semaphore_submit_info,
@@ -1805,6 +1816,13 @@ pub fn combinedPipelinesCreate(
     };
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, max_cmds) = .{};
     var input_assembly_buf: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, max_cmds) = .{};
+    const rendering_create_info: vk.PipelineRenderingCreateInfo = .{
+        .view_mask = 0,
+        .color_attachment_count = 1,
+        .p_color_attachment_formats = &.{self.backend.physical_device.surface_format.format},
+        .depth_attachment_format = .undefined,
+        .stencil_attachment_format = .undefined,
+    };
     for (cmds) |cmd| {
         const input_assembly = input_assembly_buf.addOneAssumeCapacity();
         input_assembly.* = switch (cmd.input_assembly) {
@@ -1886,10 +1904,11 @@ pub fn combinedPipelinesCreate(
             .p_color_blend_state = &color_blending,
             .p_dynamic_state = &dynamic_state,
             .layout = cmd.layout.pipeline.asBackendType(),
-            .render_pass = self.backend.render_pass,
+            .render_pass = .null_handle,
             .subpass = 0,
             .base_pipeline_handle = .null_handle,
             .base_pipeline_index = -1,
+            .p_next = &rendering_create_info,
         });
     }
 
@@ -2092,10 +2111,10 @@ pub fn cmdBufTransferAppend(
     comptime max_regions: u32,
     options: Ctx.Cmds.AppendTransferCmdsOptions,
 ) void {
-    const command_buffer = cmds.buf.asBackendType();
+    const cmdbuf = cmds.buf.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = .fromBackendType(command_buffer),
+        .command_buffer = .fromBackendType(cmdbuf),
         .tracy_queue = self.backend.tracy_queue,
         .loc = options.loc,
     });
@@ -2120,7 +2139,7 @@ pub fn cmdBufTransferAppend(
 
                 // Transition the image to transfer dst optimal
                 self.backend.device.cmdPipelineBarrier(
-                    command_buffer,
+                    cmdbuf,
                     .{ .top_of_pipe_bit = true },
                     .{ .transfer_bit = true },
                     .{},
@@ -2167,7 +2186,7 @@ pub fn cmdBufTransferAppend(
                     }) catch @panic("OOB");
                 }
                 self.backend.device.cmdCopyBufferToImage(
-                    command_buffer,
+                    cmdbuf,
                     cmd_options.buf.asBackendType(),
                     cmd_options.image.asBackendType(),
                     .transfer_dst_optimal,
@@ -2177,7 +2196,7 @@ pub fn cmdBufTransferAppend(
 
                 // Transition to the destination layout
                 self.backend.device.cmdPipelineBarrier(
-                    command_buffer,
+                    cmdbuf,
                     .{ .transfer_bit = true },
                     .{ .fragment_shader_bit = true },
                     .{},
@@ -2208,7 +2227,7 @@ pub fn cmdBufTransferAppend(
                     }) catch @panic("OOB");
                 }
                 self.backend.device.cmdCopyBuffer(
-                    command_buffer,
+                    cmdbuf,
                     cmd_options.src.asBackendType(),
                     cmd_options.dst.asBackendType(),
                     @intCast(regions.len),
@@ -2219,7 +2238,7 @@ pub fn cmdBufTransferAppend(
     }
 
     zone.end(self, .{
-        .command_buffer = .fromBackendType(command_buffer),
+        .command_buffer = .fromBackendType(cmdbuf),
         .tracy_queue = self.backend.tracy_queue,
     });
 }
@@ -2359,7 +2378,6 @@ const Swapchain = struct {
     swapchain: vk.SwapchainKHR,
     images: std.BoundedArray(vk.Image, max_swapchain_depth),
     views: std.BoundedArray(vk.ImageView, max_swapchain_depth),
-    framebufs: std.BoundedArray(vk.Framebuffer, max_swapchain_depth),
     swap_extent: vk.Extent2D,
     external_framebuf_size: struct { u32, u32 },
 
@@ -2369,7 +2387,6 @@ const Swapchain = struct {
         device: vk.DeviceProxy,
         physical_device: PhysicalDevice,
         surface: vk.SurfaceKHR,
-        render_pass: vk.RenderPass,
         old_swapchain: vk.SwapchainKHR,
         validation: bool,
     ) @This() {
@@ -2457,36 +2474,16 @@ const Swapchain = struct {
             views.appendAssumeCapacity(view);
         }
 
-        var framebufs: std.BoundedArray(vk.Framebuffer, max_swapchain_depth) = .{};
-        for (views.constSlice(), 0..) |view, i| {
-            const attachments = [1]vk.ImageView{view};
-
-            const framebuffer_info: vk.FramebufferCreateInfo = .{
-                .render_pass = render_pass,
-                .attachment_count = attachments.len,
-                .p_attachments = &attachments,
-                .width = swap_extent.width,
-                .height = swap_extent.height,
-                .layers = 1,
-            };
-
-            const framebuf = device.createFramebuffer(&framebuffer_info, null) catch |err| @panic(@errorName(err));
-            setName(device, framebuf, .{ .str = "Swapchain", .index = i }, validation);
-            framebufs.appendAssumeCapacity(framebuf);
-        }
-
         return .{
             .swapchain = swapchain,
             .images = images,
             .views = views,
-            .framebufs = framebufs,
             .swap_extent = swap_extent,
             .external_framebuf_size = framebuf_size,
         };
     }
 
     pub fn destroyEverythingExceptSwapchain(self: *@This(), device: vk.DeviceProxy) void {
-        for (self.framebufs.constSlice()) |f| device.destroyFramebuffer(f, null);
         for (self.views.constSlice()) |v| device.destroyImageView(v, null);
     }
 
@@ -2517,7 +2514,6 @@ const Swapchain = struct {
             gx.backend.device,
             gx.backend.physical_device,
             gx.backend.surface,
-            gx.backend.render_pass,
             retired,
             gx.backend.debug_messenger != .null_handle,
         );
@@ -2745,7 +2741,6 @@ inline fn setName(
         vk.PipelineLayout => .{ "Pipeline Layout", .pipeline_layout },
         vk.QueryPool => .{ "Query Pool", .query_pool },
         vk.Queue => .{ "Queue", .queue },
-        vk.RenderPass => .{ "Render Pass", .render_pass },
         vk.Sampler => .{ "Sampler", .sampler },
         vk.Semaphore => .{ "Semaphore", .semaphore },
         vk.ShaderModule => .{ "Shader Module", .shader_module },
