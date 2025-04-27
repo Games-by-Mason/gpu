@@ -35,7 +35,7 @@ cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
 // Synchronization
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
-ready_for_present: [global_options.max_frames_in_flight]std.BoundedArray(vk.Semaphore, global_options.max_cmdbufs_per_frame),
+ready_for_present: [global_options.max_frames_in_flight]vk.Semaphore,
 
 // Frame info
 image_index: ?u32 = null,
@@ -503,16 +503,13 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         setName(device, image_availables[i], .{ .str = "Image Available", .index = i }, options.validation);
     }
 
-    var ready_for_present: [global_options.max_frames_in_flight]std.BoundedArray(vk.Semaphore, global_options.max_cmdbufs_per_frame) = @splat(.{});
-    for (&ready_for_present, 0..) |*semaphores, frame| {
-        for (0..global_options.max_cmdbufs_per_frame) |cb| {
-            const semaphore = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
-            setName(device, semaphore, .{
-                .str = "Ready For Present",
-                .index = frame * global_options.max_cmdbufs_per_frame * cb,
-            }, options.validation);
-            semaphores.appendAssumeCapacity(semaphore);
-        }
+    var ready_for_present: [global_options.max_frames_in_flight]vk.Semaphore = undefined;
+    for (&ready_for_present, 0..) |*semaphore, frame| {
+        semaphore.* = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
+        setName(device, semaphore.*, .{
+            .str = "Ready For Present",
+            .index = frame,
+        }, options.validation);
     }
     sync_primitives_zone.end();
 
@@ -566,10 +563,8 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     self.backend.zones.deinit(gpa);
 
     // Destroy internal sync state
-    for (self.backend.ready_for_present) |semaphores| {
-        for (semaphores.buffer) |semaphore| {
-            self.backend.device.destroySemaphore(semaphore, null);
-        }
+    for (self.backend.ready_for_present) |semaphore| {
+        self.backend.device.destroySemaphore(semaphore, null);
     }
     for (self.backend.image_availables) |s| self.backend.device.destroySemaphore(s, null);
 
@@ -903,35 +898,9 @@ pub fn combinedCmdBufCreate(
         .loc = options.loc,
     });
 
+    // XXX: then also make separate cb for end on submit to transfer back
+    // XXX: should we do this every time? for now at least? i guess not if we're just trying to transfer...
     if (options.kind == .present) {
-        self.backend.device.cmdPipelineBarrier(
-            cmdbuf,
-            .{ .top_of_pipe_bit = true },
-            .{ .color_attachment_output_bit = true },
-            .{},
-            0,
-            null,
-            0,
-            null,
-            1,
-            &.{.{
-                .src_access_mask = .{},
-                .dst_access_mask = .{ .color_attachment_write_bit = true },
-                .old_layout = .undefined,
-                .new_layout = .color_attachment_optimal,
-                .src_queue_family_index = 0, // Ignored
-                .dst_queue_family_index = 0, // Ignored
-                .image = self.backend.swapchain.images.get(self.backend.image_index.?),
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-            }},
-        );
-
         self.backend.device.cmdBeginRendering(cmdbuf, &.{
             .flags = .{},
             .render_area = .{
@@ -1097,35 +1066,8 @@ pub fn combinedCmdBufSubmit(
 
     if (kind == .present) {
         self.backend.device.cmdEndRendering(cmdbuf);
-
-        self.backend.device.cmdPipelineBarrier(
-            cmdbuf,
-            .{ .color_attachment_output_bit = true },
-            .{ .bottom_of_pipe_bit = true },
-            .{},
-            0,
-            null,
-            0,
-            null,
-            1,
-            &.{.{
-                .src_access_mask = .{ .color_attachment_write_bit = true },
-                .dst_access_mask = .{},
-                .old_layout = .color_attachment_optimal,
-                .new_layout = .present_src_khr,
-                .src_queue_family_index = 0, // Ignored
-                .dst_queue_family_index = 0, // Ignored
-                .image = self.backend.swapchain.images.get(self.backend.image_index.?),
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-            }},
-        );
     }
+
     combined_cmdbuf.zone.end(self, .{
         .command_buffer = combined_cmdbuf.cmds.buf,
         .tracy_queue = self.backend.tracy_queue,
@@ -1136,15 +1078,10 @@ pub fn combinedCmdBufSubmit(
         const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
         defer queue_submit_zone.end();
 
-        // Max is the number of command buffers, minus one since you can't wait on the final one,
-        // plus one for the possibility of the image available semaphore.
-        const max_waits = global_options.max_cmdbufs_per_frame;
+        // Max is the number of command buffers, minus one since you can't wait on the final one
+        const max_waits = global_options.max_cmdbufs_per_frame - 1;
         var wait_stages: std.BoundedArray(vk.PipelineStageFlags, max_waits) = .{};
         var wait_semaphores: std.BoundedArray(vk.Semaphore, max_waits) = .{};
-        if (kind == .present) {
-            wait_semaphores.appendAssumeCapacity(self.backend.image_availables[self.frameInFlight()]);
-            wait_stages.appendAssumeCapacity(.{ .top_of_pipe_bit = true });
-        }
         for (wait) |w| {
             wait_semaphores.appendAssumeCapacity(w.semaphore.asBackendType());
             wait_stages.appendAssumeCapacity(.{
@@ -1174,12 +1111,6 @@ pub fn combinedCmdBufSubmit(
 
         signal_semaphores.appendAssumeCapacity(combined_cmdbuf.signal.asBackendType());
         signal_values.appendAssumeCapacity(self.frame + self.frames_in_flight);
-
-        if (kind == .present) {
-            const ready_for_present = (self.backend.ready_for_present[self.frameInFlight()].addOne() catch @panic("OOB")).*;
-            signal_semaphores.appendAssumeCapacity(ready_for_present);
-            signal_values.appendAssumeCapacity(1); // Value ignored, not a timeline semaphore
-        }
 
         const cmdbufs = [_]vk.CommandBuffer{cmdbuf};
         const timeline_semaphore_submit_info: vk.TimelineSemaphoreSubmitInfoKHR = .{
@@ -1392,6 +1323,7 @@ pub fn descriptorSetsUpdate(
 }
 
 pub fn acquireNextImage(self: *Ctx) ?u64 {
+    // Acquire the image
     var wait_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
     const aquire_result = b: {
         const acquire_zone = Zone.begin(.{
@@ -1420,6 +1352,91 @@ pub fn acquireNextImage(self: *Ctx) ?u64 {
     };
     const wait_ns = wait_timer.lap();
     self.backend.image_index = aquire_result.image_index;
+
+    // Transition it to the right format
+    {
+        const transition_zone = Zone.begin(.{ .name = "prepare swapchain image", .src = @src() });
+        defer transition_zone.end();
+
+        var cmdbufs = [_]vk.CommandBuffer{.null_handle};
+        self.backend.device.allocateCommandBuffers(&.{
+            .command_pool = self.backend.cmd_pools[self.frameInFlight()],
+            .level = .primary,
+            .command_buffer_count = cmdbufs.len,
+        }, &cmdbufs) catch |err| @panic(@errorName(err));
+        // XXX: rename to cb?
+        const cmdbuf = cmdbufs[0];
+        setName(self.backend.device, cmdbuf, .{
+            .str = "Prepare Swapchain Image",
+        }, self.backend.debug_messenger != .null_handle);
+
+        {
+            self.backend.device.beginCommandBuffer(cmdbuf, &.{
+                .flags = .{ .one_time_submit_bit = true },
+                .p_inheritance_info = null,
+            }) catch |err| @panic(@errorName(err));
+            defer {
+                self.backend.device.endCommandBuffer(cmdbuf) catch |err| @panic(@errorName(err));
+            }
+
+            const zone = Ctx.Zone.begin(self, .{
+                .command_buffer = .fromBackendType(cmdbuf),
+                .tracy_queue = self.backend.tracy_queue,
+                .loc = .init(.{ .name = "prepare swapchain image", .src = @src() }),
+            });
+            defer zone.end(self, .{
+                .command_buffer = .fromBackendType(cmdbuf),
+                .tracy_queue = self.backend.tracy_queue,
+            });
+
+            self.backend.device.cmdPipelineBarrier(
+                cmdbuf,
+                .{ .top_of_pipe_bit = true },
+                .{ .color_attachment_output_bit = true },
+                .{},
+                0,
+                null,
+                0,
+                null,
+                1,
+                &.{.{
+                    .src_access_mask = .{},
+                    .dst_access_mask = .{ .color_attachment_write_bit = true },
+                    .old_layout = .undefined,
+                    .new_layout = .color_attachment_optimal,
+                    .src_queue_family_index = 0, // Ignored
+                    .dst_queue_family_index = 0, // Ignored
+                    .image = self.backend.swapchain.images.get(self.backend.image_index.?),
+                    .subresource_range = .{
+                        .aspect_mask = .{ .color_bit = true },
+                        .base_mip_level = 0,
+                        .level_count = 1,
+                        .base_array_layer = 0,
+                        .layer_count = 1,
+                    },
+                }},
+            );
+        }
+
+        {
+            self.backend.device.queueSubmit(
+                self.backend.queue,
+                1,
+                &.{.{
+                    .wait_semaphore_count = 1,
+                    .p_wait_semaphores = &.{self.backend.image_availables[self.frameInFlight()]},
+                    .p_wait_dst_stage_mask = &.{.{ .top_of_pipe_bit = true }},
+                    .command_buffer_count = 1,
+                    .p_command_buffers = &.{cmdbuf},
+                    .signal_semaphore_count = 0,
+                    .p_signal_semaphores = &.{},
+                    .p_next = null,
+                }},
+                .null_handle,
+            ) catch |err| @panic(@errorName(err));
+        }
+    }
+
     return wait_ns;
 }
 
@@ -1428,8 +1445,6 @@ pub fn frameStart(self: *Ctx) void {
 
     const graphics_command_pool = self.backend.cmd_pools[self.frameInFlight()];
     self.backend.device.resetCommandPool(graphics_command_pool, .{}) catch |err| @panic(@errorName(err));
-
-    self.backend.ready_for_present[self.frameInFlight()].clear();
 
     if (self.backend.tracy_query_pool != .null_handle and self.backend.zones.handles.allocated > 0) {
         var results: [@as(usize, global_options.tracy_query_pool_capacity) * 2]u64 = undefined;
@@ -1944,20 +1959,109 @@ pub fn combinedPipelinesCreate(
 }
 
 pub fn present(self: *Ctx) u64 {
+    // XXX: clean this up...move to submit?
+    // XXX: CURRENT: this needs to emit a semaphore that queue present waits on
+    {
+        const transition_zone = Zone.begin(.{ .name = "finalize swapchain image", .src = @src() });
+        defer transition_zone.end();
+
+        var cmdbufs = [_]vk.CommandBuffer{.null_handle};
+        self.backend.device.allocateCommandBuffers(&.{
+            .command_pool = self.backend.cmd_pools[self.frameInFlight()],
+            .level = .primary,
+            .command_buffer_count = cmdbufs.len,
+        }, &cmdbufs) catch |err| @panic(@errorName(err));
+        // XXX: rename to cb?
+        const cmdbuf = cmdbufs[0];
+        setName(self.backend.device, cmdbuf, .{
+            .str = "Finalize Swapchain Image",
+        }, self.backend.debug_messenger != .null_handle);
+
+        {
+            const submit_zone = Zone.begin(.{ .name = "prepare", .src = @src() });
+            defer submit_zone.end();
+
+            self.backend.device.beginCommandBuffer(cmdbuf, &.{
+                .flags = .{ .one_time_submit_bit = true },
+                .p_inheritance_info = null,
+            }) catch |err| @panic(@errorName(err));
+            defer {
+                self.backend.device.endCommandBuffer(cmdbuf) catch |err| @panic(@errorName(err));
+            }
+
+            const zone = Ctx.Zone.begin(self, .{
+                .command_buffer = .fromBackendType(cmdbuf),
+                .tracy_queue = self.backend.tracy_queue,
+                .loc = .init(.{ .name = "finalize swapchain image", .src = @src() }),
+            });
+            defer zone.end(self, .{
+                .command_buffer = .fromBackendType(cmdbuf),
+                .tracy_queue = self.backend.tracy_queue,
+            });
+
+            self.backend.device.cmdPipelineBarrier(
+                cmdbuf,
+                .{ .color_attachment_output_bit = true },
+                .{ .bottom_of_pipe_bit = true },
+                .{},
+                0,
+                null,
+                0,
+                null,
+                1,
+                &.{.{
+                    .src_access_mask = .{ .color_attachment_write_bit = true },
+                    .dst_access_mask = .{},
+                    .old_layout = .color_attachment_optimal,
+                    .new_layout = .present_src_khr,
+                    .src_queue_family_index = 0, // Ignored
+                    .dst_queue_family_index = 0, // Ignored
+                    .image = self.backend.swapchain.images.get(self.backend.image_index.?),
+                    .subresource_range = .{
+                        .aspect_mask = .{ .color_bit = true },
+                        .base_mip_level = 0,
+                        .level_count = 1,
+                        .base_array_layer = 0,
+                        .layer_count = 1,
+                    },
+                }},
+            );
+        }
+
+        {
+            self.backend.device.queueSubmit(
+                self.backend.queue,
+                1,
+                &.{.{
+                    .wait_semaphore_count = 0,
+                    .p_wait_semaphores = &.{},
+                    .p_wait_dst_stage_mask = &.{},
+                    .command_buffer_count = 1,
+                    .p_command_buffers = &.{cmdbuf},
+                    .signal_semaphore_count = 2,
+                    // XXX: simplify
+                    .p_signal_semaphores = &.{
+                        self.backend.ready_for_present[self.frameInFlight()],
+                        self.cmdbuf_semaphores[self.frameInFlight()].addOneAssumeCapacity().*.asBackendType(),
+                    },
+                    .p_next = &vk.TimelineSemaphoreSubmitInfoKHR{
+                        .signal_semaphore_value_count = 2,
+                        .p_signal_semaphore_values = &.{
+                            0, // Ignored, not a timeline semaphore
+                            self.frame + self.frames_in_flight,
+                        },
+                    },
+                }},
+                .null_handle,
+            ) catch |err| @panic(@errorName(err));
+        }
+    }
+
     const suboptimal_out_of_date, const present_ns = b: {
         const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
         defer queue_present_zone.end();
         const swapchain = [_]vk.SwapchainKHR{self.backend.swapchain.swapchain};
         const image_index = [_]u32{self.backend.image_index.?};
-        const wait_semaphores = self.backend.ready_for_present[self.frameInFlight()].constSlice();
-        const present_info: vk.PresentInfoKHR = .{
-            .wait_semaphore_count = @intCast(wait_semaphores.len),
-            .p_wait_semaphores = wait_semaphores.ptr,
-            .swapchain_count = swapchain.len,
-            .p_swapchains = &swapchain,
-            .p_image_indices = &image_index,
-            .p_results = null,
-        };
 
         var present_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
         {
@@ -1970,7 +2074,14 @@ pub fn present(self: *Ctx) u64 {
 
             const suboptimal_out_of_date = if (self.backend.device.queuePresentKHR(
                 self.backend.queue,
-                &present_info,
+                &.{
+                    .wait_semaphore_count = 1,
+                    .p_wait_semaphores = &.{self.backend.ready_for_present[self.frameInFlight()]},
+                    .swapchain_count = swapchain.len,
+                    .p_swapchains = &swapchain,
+                    .p_image_indices = &image_index,
+                    .p_results = null,
+                },
             )) |result|
                 result == .suboptimal_khr
             else |err| switch (err) {
