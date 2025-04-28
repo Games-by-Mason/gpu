@@ -20,9 +20,11 @@ pub const tracy_gpu_pool = "gpu";
 
 pub const FramebufSize = struct { u32, u32 };
 
-pub const MemReqs = struct {
+pub const MemoryRequirements = struct {
     size: u64,
     alignment: u64,
+    prefers_dedicated: bool,
+    requires_dedicated: bool,
 };
 
 pub const DebugName = struct {
@@ -917,17 +919,11 @@ pub fn Image(kind: ImageKind) type {
             .depth_stencil => InitDepthStencilOptions,
         } else @compileError("missing format");
 
-        pub inline fn init(gx: *Ctx, options: @This().InitOptions) @This() {
-            comptime assert(kind.nonNull());
-
-            const zone = tracy.Zone.begin(.{ .src = @src() });
-            defer zone.end();
-
+        fn imageOptions(options: @This().InitOptions) ImageOptions {
             assert(options.extent.width * options.extent.height * options.extent.depth > 0);
             assert(options.mip_levels > 0);
             assert(options.array_layers > 0);
-
-            const handle = Backend.imageCreate(gx, .{
+            return .{
                 .name = options.name,
                 .flags = options.flags,
                 .tiling = kind.tiling.?,
@@ -965,16 +961,23 @@ pub fn Image(kind: ImageKind) type {
                     },
                 },
                 .location = options.location.as(.{}),
-            });
+            };
+        }
+
+        pub fn memoryRequirements(gx: *Ctx, options: @This().InitOptions) MemoryRequirements {
+            return Backend.imageMemoryRequirements(gx, imageOptions(options));
+        }
+
+        pub fn init(gx: *Ctx, options: @This().InitOptions) @This() {
+            comptime assert(kind.nonNull());
+            const zone = tracy.Zone.begin(.{ .src = @src() });
+            defer zone.end();
+            const handle = Backend.imageCreate(gx, imageOptions(options));
             return @enumFromInt(@intFromEnum(handle));
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
             Backend.imageDestroy(gx, self.as(.{}));
-        }
-
-        pub fn memReqs(self: @This(), gx: *Ctx) MemReqs {
-            return Backend.imageMemReqs(gx, self.as(.{}));
         }
 
         pub inline fn as(self: @This(), comptime result_kind: ImageKind) Image(result_kind) {

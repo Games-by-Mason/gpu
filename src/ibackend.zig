@@ -125,10 +125,10 @@ pub fn IBackend(Self: type) type {
             self: *Ctx,
             image: Ctx.Image(.{}),
         ) void,
-        imageMemReqs: fn (
+        imageMemoryRequirements: fn (
             self: *Ctx,
-            image: Ctx.Image(.{}),
-        ) Ctx.MemReqs,
+            options: Ctx.ImageOptions,
+        ) Ctx.MemoryRequirements,
         imageViewCreate: fn (
             self: *Ctx,
             options: Ctx.ImageView.InitOptions,

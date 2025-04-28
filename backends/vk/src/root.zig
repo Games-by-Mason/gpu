@@ -1511,11 +1511,8 @@ pub fn getDevice(self: *const @This()) Ctx.Device {
     };
 }
 
-pub fn imageCreate(
-    self: *Ctx,
-    options: Ctx.ImageOptions,
-) Ctx.Image(.{}) {
-    const image = self.backend.device.createImage(&.{
+fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
+    return .{
         .flags = .{
             .sparse_binding_bit = options.flags.sparse_binding,
             .sparse_residency_bit = options.flags.sparse_residency,
@@ -1569,7 +1566,14 @@ pub fn imageCreate(
         .queue_family_index_count = 0,
         .p_queue_family_indices = null,
         .initial_layout = layoutToVk(options.initial_layout),
-    }, null) catch |err| @panic(@errorName(err));
+    };
+}
+
+pub fn imageCreate(
+    self: *Ctx,
+    options: Ctx.ImageOptions,
+) Ctx.Image(.{}) {
+    const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
     setName(self.backend.device, image, options.name, self.backend.debug_messenger != .null_handle);
     self.backend.device.bindImageMemory(
         image,
@@ -1583,14 +1587,27 @@ pub fn imageDestroy(self: *Ctx, image: Ctx.Image(.{})) void {
     self.backend.device.destroyImage(image.asBackendType(), null);
 }
 
-pub fn imageMemReqs(
+pub fn imageMemoryRequirements(
     self: *Ctx,
-    image: Ctx.Image(.{}),
-) Ctx.MemReqs {
-    const requirements = self.backend.device.getImageMemoryRequirements(image.asBackendType());
+    options: Ctx.ImageOptions,
+) Ctx.MemoryRequirements {
+    var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
+        .prefers_dedicated_allocation = vk.FALSE,
+        .requires_dedicated_allocation = vk.FALSE,
+    };
+    var reqs: vk.MemoryRequirements2 = .{
+        .memory_requirements = undefined,
+        .p_next = &dedicated_reqs,
+    };
+    self.backend.device.getDeviceImageMemoryRequirements(&.{
+        .p_create_info = &imageOptionsToVk(options),
+        .plane_aspect = .{},
+    }, &reqs);
     return .{
-        .size = requirements.size,
-        .alignment = requirements.alignment,
+        .size = reqs.memory_requirements.size,
+        .alignment = reqs.memory_requirements.alignment,
+        .prefers_dedicated = dedicated_reqs.prefers_dedicated_allocation == vk.TRUE,
+        .requires_dedicated = dedicated_reqs.requires_dedicated_allocation == vk.TRUE,
     };
 }
 
