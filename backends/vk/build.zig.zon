@@ -4,10 +4,6 @@
     .minimum_zig_version = "0.15.0-dev.388+05e217607",
     .version = "0.0.0",
     .dependencies = .{
-        .pools = .{
-            .url = "git+https://github.com/Games-By-Mason/pools#bb79cadcc13462ab1e0f69d7ed81e7c3a678cc99",
-            .hash = "pools-0.0.0-2a1OXU1OAAB-wfJtD1DRhQymL9cuppV5DG0Lxs8gEmhu",
-        },
         .vulkan_zig = .{
             .url = "git+https://github.com/Snektron/vulkan-zig#42e7a8409b8150e1cbd57a8ff8cec219114bac74",
             .hash = "vulkan-0.0.0-r7Ytx2dUAwDhoUvuIqliqPUbyDZZi0bl_CQIwspUpHs_",

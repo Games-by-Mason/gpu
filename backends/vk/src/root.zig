@@ -1,5 +1,3 @@
-pub const pools = @import("pools");
-
 const std = @import("std");
 const math = std.math;
 const assert = std.debug.assert;
@@ -43,7 +41,6 @@ cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 image_index: ?u32 = null,
 
 // Tracy info
-zones: pools.ArrayBacked(u8, TracyQueue, undefined),
 tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
 
 timestamp_queries: bool,
@@ -526,10 +523,6 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         }
     }
 
-    const zones_zone = tracy.Zone.begin(.{ .name = "create zones", .src = @src() });
-    const zones = pools.ArrayBacked(u8, TracyQueue, undefined).init(gpa) catch |err| @panic(@errorName(err));
-    zones_zone.end();
-
     const queue = device.getDeviceQueue(best_physical_device.queue_family_index, 0);
     setName(device, queue, .{ .str = graphics_queue_name }, options.validation);
 
@@ -548,7 +541,6 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .timestamp_period = timestamp_period,
         .queue = queue,
         .queue_family_index = best_physical_device.queue_family_index,
-        .zones = zones,
         .tracy_query_pools = tracy_query_pools,
         .timestamp_queries = options.timestamp_queries,
     };
@@ -559,7 +551,6 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     for (self.backend.tracy_query_pools) |pool| {
         self.backend.device.destroyQueryPool(pool, null);
     }
-    self.backend.zones.deinit(gpa);
 
     // Destroy internal sync state
     for (self.backend.ready_for_present) |semaphore| {

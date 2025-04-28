@@ -18,12 +18,6 @@ pub fn build(b: *std.Build) void {
     });
     vk_backend.addImport("gpu", gpu.module("gpu"));
 
-    const pools = b.dependency("pools", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    vk_backend.addImport("pools", pools.module("pools"));
-
     const vulkan_docs = b.dependency("Vulkan-Docs", .{});
     const vulkan_zig = b.dependency("vulkan_zig", .{
         .target = native_target,
