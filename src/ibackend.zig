@@ -119,13 +119,13 @@ pub fn IBackend(Self: type) type {
 
         imageCreate: fn (
             self: *Ctx,
-            location: Ctx.MemoryViewUnsized(.{}),
+            location: Ctx.MemoryViewUnsized(null),
             options: Ctx.ImageOptions,
         ) Ctx.Image(.{}),
         dedicatedImageCreate: fn (
             self: *Ctx,
             options: Ctx.ImageOptions,
-        ) Ctx.DedicatedAllocation(Ctx.DedicatedImage(.{ .image = .{}, .access = .none })),
+        ) Ctx.DedicatedAllocation(Ctx.DedicatedImage(.{})),
         imageDestroy: fn (
             self: *Ctx,
             image: Ctx.Image(.{}),
@@ -146,10 +146,10 @@ pub fn IBackend(Self: type) type {
         memoryCreate: fn (
             self: *Ctx,
             options: Ctx.MemoryCreateUntypedOptions,
-        ) Ctx.Memory(.{}),
+        ) Ctx.Memory(null),
         deviceMemoryDestroy: fn (
             self: *Ctx,
-            memory: Ctx.Memory(.{}),
+            memory: Ctx.Memory(null),
         ) void,
 
         combinedPipelineDestroy: fn (

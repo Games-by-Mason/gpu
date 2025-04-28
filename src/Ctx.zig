@@ -180,7 +180,7 @@ pub inline fn getBackendConst(self: *const @This(), T: type) *const T {
 
 pub fn DedicatedBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .usage = .{ .buf = kind } }),
+        memory: Memory(.{ .buf = kind }),
         buf: Buf(kind),
 
         pub const InitOptions = struct {
@@ -224,7 +224,7 @@ pub fn DedicatedBuf(kind: BufKind) type {
 
 pub fn DedicatedReadbackBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .usage = .{ .buf = kind }, .access = .read }),
+        memory: Memory(.{ .buf = kind }),
         buf: Buf(kind),
         data: []const u8,
 
@@ -278,7 +278,7 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
 
 pub fn DedicatedUploadBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .usage = .{ .buf = kind }, .access = .write }),
+        memory: Memory(.{ .buf = kind }),
         buf: Buf(kind),
         data: []volatile anyopaque,
 
@@ -964,16 +964,15 @@ pub fn Image(kind: ImageKind) type {
             return Backend.imageMemoryRequirements(gx, imageOptions(options));
         }
 
-        // XXX: merge location and options into struct that contains both? (can't go ON options)
         pub fn init(
             gx: *Ctx,
-            location: MemoryViewUnsized(.{ .usage = .{ .image = kind } }),
+            location: MemoryViewUnsized(.{ .image = kind }),
             options: @This().InitOptions,
         ) @This() {
             comptime assert(kind.nonNull());
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-            const handle = Backend.imageCreate(gx, location.as(.{}), imageOptions(options));
+            const handle = Backend.imageCreate(gx, location.as(null), imageOptions(options));
             return @enumFromInt(@intFromEnum(handle));
         }
 
@@ -1001,33 +1000,16 @@ pub fn Image(kind: ImageKind) type {
     };
 }
 
-pub const DedicatedImageKind = struct {
-    image: ImageKind,
-    access: MemoryKind.Access,
-
-    fn nonNull(self: @This()) bool {
-        return self.image.nonNull();
-    }
-};
-
-// XXX: I think this actually shouldn't take access, since we have no way to map it anyway right? mapping
-// is only done for dedicated upload buffers. in fact there will be no way to externally create upload
-// buffers probably right?
-// XXX: ah see, even normal memory shouldn't take access right?? it's handled by dedicated upload bufs and
-// such.
-pub fn DedicatedImage(kind: DedicatedImageKind) type {
+pub fn DedicatedImage(kind: ImageKind) type {
     return struct {
-        image: Image(kind.image),
-        memory: Memory(.{
-            .usage = .{ .image = kind.image },
-            .access = kind.access,
-        }),
+        image: Image(kind),
+        memory: Memory(.{ .image = kind }),
 
-        pub fn init(gx: *Ctx, options: Image(kind.image).InitOptions) @This() {
+        pub fn init(gx: *Ctx, options: Image(kind).InitOptions) @This() {
             comptime assert(kind.nonNull());
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-            const result = Backend.dedicatedImageCreate(gx, Image(kind.image).imageOptions(options));
+            const result = Backend.dedicatedImageCreate(gx, Image(kind).imageOptions(options));
             tracy.alloc(.{
                 .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
                 .size = result.size,
@@ -1257,7 +1239,7 @@ pub const ImageView = enum(u64) {
     }
 };
 
-pub fn Memory(k: MemoryKind) type {
+pub fn Memory(k: ?MemoryKind) type {
     return enum(u64) {
         const Self = @This();
 
@@ -1268,36 +1250,23 @@ pub fn Memory(k: MemoryKind) type {
             size: u64,
         };
 
-        pub const InitNoFormatWriteOptions = struct {
-            name: DebugName,
-            size: u64,
-            prefer_device_local: bool,
-        };
-
         pub const InitDepthStencilFormatOptions = struct {
             name: DebugName,
             size: u64,
             format: ImageOptions.Format.DepthStencil,
         };
 
-        pub const InitDepthStencilFormatWriteOptions = struct {
-            name: DebugName,
-            size: u64,
-            format: ImageOptions.Format.DepthStencil,
-            prefer_device_local: bool,
-        };
-
-        pub const InitOptions = if (kind.usage) |usage| switch (usage) {
-            .buf => if (kind.access == .write) InitNoFormatWriteOptions else InitNoFormatOptions,
+        pub const InitOptions = if (kind) |some| switch (some) {
+            .buf => InitNoFormatOptions,
             .image => |image| if (image.format) |format| switch (format) {
-                .color => if (kind.access == .write) InitNoFormatWriteOptions else InitNoFormatOptions,
-                .depth_stencil => if (kind.access == .write) InitDepthStencilFormatWriteOptions else InitDepthStencilFormatOptions,
+                .color => InitNoFormatOptions,
+                .depth_stencil => InitDepthStencilFormatOptions,
             } else @compileError("missing image format"),
         } else @compileError("missing usage");
 
         pub inline fn init(gx: *Ctx, options: @This().InitOptions) @This() {
-            comptime assert(kind.usage != null);
-            comptime switch (kind.usage.?) {
+            comptime assert(kind != null);
+            comptime switch (kind.?) {
                 .buf => |buffer_kind| buffer_kind.assertNonZero(),
                 .image => |image| {
                     assert(image.nonNull());
@@ -1311,7 +1280,7 @@ pub fn Memory(k: MemoryKind) type {
 
             const untyped = Backend.memoryCreate(gx, .{
                 .name = options.name,
-                .usage = switch (kind.usage.?) {
+                .usage = switch (kind.?) {
                     .buf => |buf| .{ .buf = buf },
                     .image => |image| switch (image.format.?) {
                         .color => .{
@@ -1327,11 +1296,7 @@ pub fn Memory(k: MemoryKind) type {
                         } },
                     },
                 },
-                .access = switch (kind.access) {
-                    .read => .read,
-                    .write => .{ .write = .{ .prefer_device_local = options.prefer_device_local } },
-                    .none => .none,
-                },
+                .access = .none,
                 .size = options.size,
             });
             tracy.alloc(.{
@@ -1347,14 +1312,14 @@ pub fn Memory(k: MemoryKind) type {
                 .ptr = @ptrFromInt(@intFromEnum(self)),
                 .pool_name = tracy_gpu_pool,
             });
-            Backend.deviceMemoryDestroy(gx, self.as(.{}));
+            Backend.deviceMemoryDestroy(gx, self.as(null));
         }
 
         pub inline fn as(
             self: Self,
-            comptime result_kind: MemoryKind,
+            comptime result_kind: ?MemoryKind,
         ) Memory(result_kind) {
-            kind.checkCast(result_kind);
+            MemoryKind.checkCast(kind, result_kind);
             return @enumFromInt(@intFromEnum(self));
         }
 
@@ -1372,44 +1337,22 @@ pub fn Memory(k: MemoryKind) type {
     };
 }
 
-pub const MemoryKind = struct {
-    pub const Usage = union(enum) {
-        image: ImageKind,
-        buf: BufKind,
+pub const MemoryKind = union(enum) {
+    image: ImageKind,
+    buf: BufKind,
 
-        inline fn checkCast(comptime self: ?@This(), comptime rtype: ?@This()) void {
-            if (rtype == null) return;
-            comptime if (self) |ltype| {
-                if (std.meta.activeTag(ltype) == std.meta.activeTag(rtype.?)) {
-                    switch (ltype) {
-                        .image => |image| return image.checkCast(rtype.?.image),
-                        .buf => |buf| return buf.checkCast(rtype.?.buf),
-                    }
+    fn checkCast(comptime self: ?@This(), comptime rtype: ?@This()) void {
+        if (rtype == null) return;
+        comptime if (self) |ltype| {
+            if (std.meta.activeTag(ltype) == std.meta.activeTag(rtype.?)) {
+                switch (ltype) {
+                    .image => |image| return image.checkCast(rtype.?.image),
+                    .buf => |buf| return buf.checkCast(rtype.?.buf),
                 }
-            };
-            const self_name = if (self) |s| @tagName(s) else "null";
-            @compileError("cannot cast " ++ self_name ++ " to " ++ @tagName(rtype.?));
-        }
-    };
-
-    pub const Access = enum {
-        none,
-        write,
-        read,
-
-        inline fn checkCast(comptime self: @This(), comptime rtype: @This()) void {
-            if (comptime rtype != .none and self != rtype) {
-                @compileError("cannot cast " ++ @tagName(self) ++ " to " ++ @tagName(rtype));
             }
-        }
-    };
-
-    usage: ?Usage = null,
-    access: Access = .none,
-
-    inline fn checkCast(comptime self: @This(), comptime rtype: @This()) void {
-        Usage.checkCast(self.usage, rtype.usage);
-        self.access.checkCast(rtype.access);
+        };
+        const self_name = if (self) |s| @tagName(s) else "null";
+        @compileError("cannot cast " ++ self_name ++ " to " ++ @tagName(rtype.?));
     }
 };
 
@@ -1433,16 +1376,16 @@ pub fn MemoryView(kind: MemoryKind) type {
     };
 }
 
-pub fn MemoryViewUnsized(kind: MemoryKind) type {
+pub fn MemoryViewUnsized(kind: ?MemoryKind) type {
     return struct {
         memory: Memory(kind),
         offset: u64,
 
         pub inline fn as(
             self: @This(),
-            comptime result_kind: MemoryKind,
+            comptime result_kind: ?MemoryKind,
         ) MemoryViewUnsized(result_kind) {
-            kind.checkCast(result_kind);
+            MemoryKind.checkCast(kind, result_kind);
             return .{
                 .memory = self.memory.as(result_kind),
                 .offset = self.offset,

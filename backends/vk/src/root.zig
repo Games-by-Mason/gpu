@@ -1583,7 +1583,7 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
 
 pub fn imageCreate(
     self: *Ctx,
-    location: Ctx.MemoryViewUnsized(.{}),
+    location: Ctx.MemoryViewUnsized(null),
     options: Ctx.ImageOptions,
 ) Ctx.Image(.{}) {
     const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
@@ -1599,7 +1599,7 @@ pub fn imageCreate(
 pub fn dedicatedImageCreate(
     self: *Ctx,
     options: Ctx.ImageOptions,
-) Ctx.DedicatedAllocation(Ctx.DedicatedImage(.{ .image = .{}, .access = .none })) {
+) Ctx.DedicatedAllocation(Ctx.DedicatedImage(.{})) {
     // Create the image
     const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
     setName(self.backend.device, image, options.name, self.backend.debug_messenger != .null_handle);
@@ -1716,7 +1716,7 @@ pub fn imageViewDestroy(self: *Ctx, image_view: Ctx.ImageView) void {
 pub fn memoryCreate(
     self: *Ctx,
     options: Ctx.MemoryCreateUntypedOptions,
-) Ctx.Memory(.{}) {
+) Ctx.Memory(null) {
     // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
     // able to do this, but we don't need to actually bind it to any memory it's just a handle.
     const memory_type_bits = switch (options.usage) {
@@ -1837,7 +1837,7 @@ pub fn memoryCreate(
     return .fromBackendType(memory);
 }
 
-pub fn deviceMemoryDestroy(self: *Ctx, memory: Ctx.Memory(.{})) void {
+pub fn deviceMemoryDestroy(self: *Ctx, memory: Ctx.Memory(null)) void {
     self.backend.device.freeMemory(memory.asBackendType(), null);
 }
 
