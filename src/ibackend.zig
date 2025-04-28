@@ -37,20 +37,20 @@ pub fn IBackend(Self: type) type {
             name: Ctx.DebugName,
             kind: Ctx.BufKind,
             size: u64,
-        ) Ctx.DedicatedBuf(.{}),
+        ) Ctx.DedicatedBufResult(Ctx.DedicatedBuf(.{})),
         dedicatedUploadBufCreate: fn (
             self: *Ctx,
             name: Ctx.DebugName,
             kind: Ctx.BufKind,
             size: u64,
             prefer_device_local: bool,
-        ) Ctx.DedicatedUploadBuf(.{}),
+        ) Ctx.DedicatedBufResult(Ctx.DedicatedUploadBuf(.{})),
         dedicatedReadbackBufCreate: fn (
             self: *Ctx,
             name: Ctx.DebugName,
             kind: Ctx.BufKind,
             size: u64,
-        ) Ctx.DedicatedReadbackBuf(.{}),
+        ) Ctx.DedicatedBufResult(Ctx.DedicatedReadbackBuf(.{})),
 
         bufDestroy: fn (
             self: *Ctx,
