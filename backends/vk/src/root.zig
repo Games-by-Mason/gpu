@@ -620,9 +620,13 @@ pub fn dedicatedBufCreate(
         memory_type_bits,
         .none,
     ) orelse @panic("unsupported memory type");
+    const dedicated_alloc_info: vk.MemoryDedicatedAllocateInfo = .{
+        .buffer = buffer,
+    };
     const memory = self.backend.device.allocateMemory(&.{
         .allocation_size = reqs.size,
         .memory_type_index = memory_type_index,
+        .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
 
@@ -673,9 +677,13 @@ pub fn dedicatedUploadBufCreate(
         memory_type_bits,
         .{ .write = .{ .prefer_device_local = prefer_device_local } },
     ) orelse @panic("unsupported memory type");
+    const dedicated_alloc_info: vk.MemoryDedicatedAllocateInfo = .{
+        .buffer = buffer,
+    };
     const memory = self.backend.device.allocateMemory(&.{
         .allocation_size = reqs.size,
         .memory_type_index = memory_type_index,
+        .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
 
@@ -736,9 +744,13 @@ pub fn dedicatedReadbackBufCreate(
         memory_type_bits,
         .read,
     ) orelse @panic("unsupported memory type");
+    const dedicated_alloc_info: vk.MemoryDedicatedAllocateInfo = .{
+        .buffer = buffer,
+    };
     const memory = self.backend.device.allocateMemory(&.{
         .allocation_size = reqs.size,
         .memory_type_index = memory_type_index,
+        .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
 
