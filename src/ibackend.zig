@@ -37,20 +37,20 @@ pub fn IBackend(Self: type) type {
             name: Ctx.DebugName,
             kind: Ctx.BufKind,
             size: u64,
-        ) Ctx.DedicatedBufResult(Ctx.DedicatedBuf(.{})),
+        ) Ctx.DedicatedAllocation(Ctx.DedicatedBuf(.{})),
         dedicatedUploadBufCreate: fn (
             self: *Ctx,
             name: Ctx.DebugName,
             kind: Ctx.BufKind,
             size: u64,
             prefer_device_local: bool,
-        ) Ctx.DedicatedBufResult(Ctx.DedicatedUploadBuf(.{})),
+        ) Ctx.DedicatedAllocation(Ctx.DedicatedUploadBuf(.{})),
         dedicatedReadbackBufCreate: fn (
             self: *Ctx,
             name: Ctx.DebugName,
             kind: Ctx.BufKind,
             size: u64,
-        ) Ctx.DedicatedBufResult(Ctx.DedicatedReadbackBuf(.{})),
+        ) Ctx.DedicatedAllocation(Ctx.DedicatedReadbackBuf(.{})),
 
         bufDestroy: fn (
             self: *Ctx,
@@ -119,8 +119,13 @@ pub fn IBackend(Self: type) type {
 
         imageCreate: fn (
             self: *Ctx,
+            location: Ctx.MemoryViewUnsized(.{}),
             options: Ctx.ImageOptions,
         ) Ctx.Image(.{}),
+        dedicatedImageCreate: fn (
+            self: *Ctx,
+            options: Ctx.ImageOptions,
+        ) Ctx.DedicatedAllocation(Ctx.DedicatedImage(.{ .image = .{}, .access = .none })),
         imageDestroy: fn (
             self: *Ctx,
             image: Ctx.Image(.{}),

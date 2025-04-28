@@ -596,7 +596,7 @@ pub fn dedicatedBufCreate(
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
     size: u64,
-) Ctx.DedicatedBufResult(Ctx.DedicatedBuf(.{})) {
+) Ctx.DedicatedAllocation(Ctx.DedicatedBuf(.{})) {
     // Create the buffer
     const usage_flags = bufUsageFlagsFromKind(kind);
     const buffer = self.backend.device.createBuffer(&.{
@@ -653,7 +653,7 @@ pub fn dedicatedUploadBufCreate(
     kind: Ctx.BufKind,
     size: u64,
     prefer_device_local: bool,
-) Ctx.DedicatedBufResult(Ctx.DedicatedUploadBuf(.{})) {
+) Ctx.DedicatedAllocation(Ctx.DedicatedUploadBuf(.{})) {
     // Create the buffer
     const usage = bufUsageFlagsFromKind(kind);
     const buffer = self.backend.device.createBuffer(&.{
@@ -721,7 +721,7 @@ pub fn dedicatedReadbackBufCreate(
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
     size: u64,
-) Ctx.DedicatedBufResult(Ctx.DedicatedReadbackBuf(.{})) {
+) Ctx.DedicatedAllocation(Ctx.DedicatedReadbackBuf(.{})) {
     // Create the buffer
     const buffer = self.backend.device.createBuffer(&.{
         .size = size,
@@ -1583,16 +1583,64 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
 
 pub fn imageCreate(
     self: *Ctx,
+    location: Ctx.MemoryViewUnsized(.{}),
     options: Ctx.ImageOptions,
 ) Ctx.Image(.{}) {
     const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
     setName(self.backend.device, image, options.name, self.backend.debug_messenger != .null_handle);
     self.backend.device.bindImageMemory(
         image,
-        options.location.memory.asBackendType(),
-        options.location.offset,
+        location.memory.asBackendType(),
+        location.offset,
     ) catch |err| @panic(@errorName(err));
     return .fromBackendType(image);
+}
+
+pub fn dedicatedImageCreate(
+    self: *Ctx,
+    options: Ctx.ImageOptions,
+) Ctx.DedicatedAllocation(Ctx.DedicatedImage(.{ .image = .{}, .access = .none })) {
+    // Create the image
+    const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
+    setName(self.backend.device, image, options.name, self.backend.debug_messenger != .null_handle);
+
+    // Allocate memory for the image
+    const reqs = self.backend.device.getImageMemoryRequirements(image);
+    const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
+        .mask = reqs.memory_type_bits,
+    };
+    const device_memory_properties = self.backend.instance.getPhysicalDeviceMemoryProperties(
+        self.backend.physical_device.device,
+    );
+    const memory_type_index = findMemoryType(
+        device_memory_properties,
+        memory_type_bits,
+        .none,
+    ) orelse @panic("unsupported memory type");
+    const dedicated_alloc_info: vk.MemoryDedicatedAllocateInfo = .{
+        .image = image,
+    };
+    const memory = self.backend.device.allocateMemory(&.{
+        .allocation_size = reqs.size,
+        .memory_type_index = memory_type_index,
+        .p_next = &dedicated_alloc_info,
+    }, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.device, memory, options.name, self.backend.debug_messenger != .null_handle);
+
+    // Bind the image to the memory
+    self.backend.device.bindImageMemory(
+        image,
+        memory,
+        0,
+    ) catch |err| @panic(@errorName(err));
+
+    return .{
+        .size = reqs.size,
+        .dedicated = .{
+            .image = .fromBackendType(image),
+            .memory = .fromBackendType(memory),
+        },
+    };
 }
 
 pub fn imageDestroy(self: *Ctx, image: Ctx.Image(.{})) void {
@@ -1618,8 +1666,12 @@ pub fn imageMemoryRequirements(
     return .{
         .size = reqs.memory_requirements.size,
         .alignment = reqs.memory_requirements.alignment,
-        .prefers_dedicated = dedicated_reqs.prefers_dedicated_allocation == vk.TRUE,
-        .requires_dedicated = dedicated_reqs.requires_dedicated_allocation == vk.TRUE,
+        .dedicated_allocation = if (dedicated_reqs.requires_dedicated_allocation == vk.TRUE)
+            .required
+        else if (dedicated_reqs.prefers_dedicated_allocation == vk.TRUE)
+            .preferred
+        else
+            .discouraged,
     };
 }
 

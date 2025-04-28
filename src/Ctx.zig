@@ -16,15 +16,14 @@ const IBackend = @import("ibackend.zig").IBackend;
 pub const Backend = IBackend(global_options.Backend).create();
 const Ctx = @This();
 
-pub const tracy_gpu_pool = "gpu";
+const tracy_gpu_pool = "gpu";
 
 pub const FramebufSize = struct { u32, u32 };
 
 pub const MemoryRequirements = struct {
     size: u64,
     alignment: u64,
-    prefers_dedicated: bool,
-    requires_dedicated: bool,
+    dedicated_allocation: enum { discouraged, preferred, required },
 };
 
 pub const DebugName = struct {
@@ -201,7 +200,7 @@ pub fn DedicatedBuf(kind: BufKind) type {
             tracy.alloc(.{
                 .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
                 .size = result.size,
-                .pool_name = Ctx.tracy_gpu_pool,
+                .pool_name = tracy_gpu_pool,
             });
             return .{
                 .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
@@ -245,7 +244,7 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
             tracy.alloc(.{
                 .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
                 .size = result.size,
-                .pool_name = Ctx.tracy_gpu_pool,
+                .pool_name = tracy_gpu_pool,
             });
             return .{
                 .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
@@ -306,7 +305,7 @@ pub fn DedicatedUploadBuf(kind: BufKind) type {
             tracy.alloc(.{
                 .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
                 .size = result.size,
-                .pool_name = Ctx.tracy_gpu_pool,
+                .pool_name = tracy_gpu_pool,
             });
             return .{
                 .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
@@ -350,7 +349,7 @@ pub fn DedicatedUploadBuf(kind: BufKind) type {
     };
 }
 
-pub fn DedicatedBufResult(Dedicated: type) type {
+pub fn DedicatedAllocation(Dedicated: type) type {
     return struct {
         dedicated: Dedicated,
         size: u64,
@@ -874,7 +873,6 @@ pub fn Image(kind: ImageKind) type {
             exclusive: bool,
             initial_layout: ImageOptions.Layout,
             usage: Usage,
-            location: DeviceMemViewUnsized(.{ .usage = .{ .image = kind } }),
         };
 
         pub const InitDepthStencilOptions = struct {
@@ -911,7 +909,6 @@ pub fn Image(kind: ImageKind) type {
             exclusive: bool,
             initial_layout: ImageOptions.Layout,
             usage: Usage = .{},
-            location: DeviceMemViewUnsized(.{ .usage = .{ .image = kind } }),
         };
 
         pub const InitOptions = if (kind.format) |format| switch (format) {
@@ -960,7 +957,6 @@ pub fn Image(kind: ImageKind) type {
                         .transient_attachment = kind.transient_attachment.?,
                     },
                 },
-                .location = options.location.as(.{}),
             };
         }
 
@@ -968,11 +964,16 @@ pub fn Image(kind: ImageKind) type {
             return Backend.imageMemoryRequirements(gx, imageOptions(options));
         }
 
-        pub fn init(gx: *Ctx, options: @This().InitOptions) @This() {
+        // XXX: merge location and options into struct that contains both? (can't go ON options)
+        pub fn init(
+            gx: *Ctx,
+            location: MemoryViewUnsized(.{ .usage = .{ .image = kind } }),
+            options: @This().InitOptions,
+        ) @This() {
             comptime assert(kind.nonNull());
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-            const handle = Backend.imageCreate(gx, imageOptions(options));
+            const handle = Backend.imageCreate(gx, location.as(.{}), imageOptions(options));
             return @enumFromInt(@intFromEnum(handle));
         }
 
@@ -996,6 +997,51 @@ pub fn Image(kind: ImageKind) type {
         pub inline fn asBackendType(self: @This()) Backend.Image {
             comptime assert(@sizeOf(Backend.Image) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(self));
+        }
+    };
+}
+
+pub const DedicatedImageKind = struct {
+    image: ImageKind,
+    access: MemoryKind.Access,
+
+    fn nonNull(self: @This()) bool {
+        return self.image.nonNull();
+    }
+};
+
+// XXX: I think this actually shouldn't take access, since we have no way to map it anyway right? mapping
+// is only done for dedicated upload buffers. in fact there will be no way to externally create upload
+// buffers probably right?
+// XXX: ah see, even normal memory shouldn't take access right?? it's handled by dedicated upload bufs and
+// such.
+pub fn DedicatedImage(kind: DedicatedImageKind) type {
+    return struct {
+        image: Image(kind.image),
+        memory: Memory(.{
+            .usage = .{ .image = kind.image },
+            .access = kind.access,
+        }),
+
+        pub fn init(gx: *Ctx, options: Image(kind.image).InitOptions) @This() {
+            comptime assert(kind.nonNull());
+            const zone = tracy.Zone.begin(.{ .src = @src() });
+            defer zone.end();
+            const result = Backend.dedicatedImageCreate(gx, Image(kind.image).imageOptions(options));
+            tracy.alloc(.{
+                .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
+                .size = result.size,
+                .pool_name = tracy_gpu_pool,
+            });
+            return .{
+                .image = @enumFromInt(@intFromEnum(result.dedicated.image)),
+                .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
+            };
+        }
+
+        pub fn deinit(self: @This(), gx: *Ctx) void {
+            self.image.deinit(gx);
+            self.memory.deinit(gx);
         }
     };
 }
@@ -1135,7 +1181,6 @@ pub const ImageOptions = struct {
     exclusive: bool,
     initial_layout: Layout,
     usage: Usage,
-    location: DeviceMemViewUnsized(.{}),
 };
 
 pub const ImageView = enum(u64) {
@@ -1212,7 +1257,7 @@ pub const ImageView = enum(u64) {
     }
 };
 
-pub fn Memory(k: DeviceMemKind) type {
+pub fn Memory(k: MemoryKind) type {
     return enum(u64) {
         const Self = @This();
 
@@ -1307,7 +1352,7 @@ pub fn Memory(k: DeviceMemKind) type {
 
         pub inline fn as(
             self: Self,
-            comptime result_kind: DeviceMemKind,
+            comptime result_kind: MemoryKind,
         ) Memory(result_kind) {
             kind.checkCast(result_kind);
             return @enumFromInt(@intFromEnum(self));
@@ -1327,7 +1372,7 @@ pub fn Memory(k: DeviceMemKind) type {
     };
 }
 
-pub const DeviceMemKind = struct {
+pub const MemoryKind = struct {
     pub const Usage = union(enum) {
         image: ImageKind,
         buf: BufKind,
@@ -1368,7 +1413,7 @@ pub const DeviceMemKind = struct {
     }
 };
 
-pub fn DeviceMemView(kind: DeviceMemKind) type {
+pub fn MemoryView(kind: MemoryKind) type {
     return struct {
         memory: Memory(kind),
         offset: u64,
@@ -1376,8 +1421,8 @@ pub fn DeviceMemView(kind: DeviceMemKind) type {
 
         pub inline fn as(
             self: @This(),
-            comptime result_kind: DeviceMemKind,
-        ) DeviceMemView(result_kind) {
+            comptime result_kind: MemoryKind,
+        ) MemoryView(result_kind) {
             kind.checkCast(result_kind);
             return .{
                 .memory = @enumFromInt(@intFromEnum(self.memory)),
@@ -1388,15 +1433,15 @@ pub fn DeviceMemView(kind: DeviceMemKind) type {
     };
 }
 
-pub fn DeviceMemViewUnsized(kind: DeviceMemKind) type {
+pub fn MemoryViewUnsized(kind: MemoryKind) type {
     return struct {
         memory: Memory(kind),
         offset: u64,
 
         pub inline fn as(
             self: @This(),
-            comptime result_kind: DeviceMemKind,
-        ) DeviceMemViewUnsized(result_kind) {
+            comptime result_kind: MemoryKind,
+        ) MemoryViewUnsized(result_kind) {
             kind.checkCast(result_kind);
             return .{
                 .memory = self.memory.as(result_kind),
@@ -1412,7 +1457,7 @@ pub const MemoryCreateUntypedOptions = struct {
         write: struct { prefer_device_local: bool },
         read: void,
 
-        fn asAccess(self: @This()) DeviceMemKind.Access {
+        fn asAccess(self: @This()) MemoryKind.Access {
             return switch (self) {
                 .none => .none,
                 .write => .write,
@@ -1425,7 +1470,7 @@ pub const MemoryCreateUntypedOptions = struct {
         color_image: Image(.{}).InitColorOptions.Kind,
         depth_stencil_image: Image(.{}).InitDepthStencilOptions.Kind,
 
-        fn asUsage(self: @This()) DeviceMemKind.Usage {
+        fn asUsage(self: @This()) MemoryKind.Usage {
             return switch (self) {
                 .color_image => |image| .{ .image = .{
                     .format = .color,
