@@ -48,15 +48,17 @@ pub const Device = struct {
     uniform_buf_offset_alignment: u16,
     storage_buf_offset_alignment: u16,
     timestamp_period: f32,
+    tracy_queue: TracyQueue,
 };
 
 backend: global_options.Backend,
 
 device: Device,
 
-/// May not be changed after initialization.
+/// The number of frames that can be in flight at once.
 frames_in_flight: u8,
-frame: u16 = 0,
+/// The current frame in flight.
+frame: u8 = 0,
 framebuf_size: FramebufSize = .{ 0.0, 0.0 },
 
 combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
@@ -66,6 +68,7 @@ cb_bindings: [global_options.max_frames_in_flight]std.BoundedArray(CmdBufBinding
 max_alignment: bool,
 
 timestamp_queries: bool,
+tracy_queries: [global_options.max_frames_in_flight]u16 = @splat(0),
 
 pub fn InitOptionsImpl(BackendInitOptions: type) type {
     return struct {
@@ -122,15 +125,10 @@ pub fn init(options: InitOptions) @This() {
 
     var gx: @This() = .{
         .backend = backend,
-
         .device = backend.getDevice(),
-
         .frames_in_flight = options.frames_in_flight,
-
         .combined_pipeline_layout_typed = undefined,
-
         .max_alignment = options.max_alignment,
-
         .timestamp_queries = options.timestamp_queries,
     };
 
@@ -497,19 +495,26 @@ pub const CmdBufKind = enum {
 /// Profiling zones are created automatically when creating or appending to a command buffer. It may
 /// be desirable to create them manually when modifying a command buffer from outside the library.
 pub const Zone = struct {
-    index: u15,
+    /// A unique ID used for Tracy queries.
+    pub const TracyQueryId = packed struct(u16) {
+        pub const cap = std.math.maxInt(@FieldType(@This(), "index"));
+        frame: u8,
+        index: u8,
 
-    pub fn beginId(self: @This()) u16 {
-        return @as(u16, self.index) * 2;
-    }
-
-    pub fn endId(self: @This()) u16 {
-        return @as(u16, self.index) * 2 + 1;
-    }
+        /// Returns the next available query ID for this frame, or panics if there are none left.
+        pub fn next(gx: *Ctx) @This() {
+            if (gx.tracy_queries[gx.frame] > TracyQueryId.cap) @panic("out of Tracy queries");
+            const result: @This() = .{
+                .index = @intCast(gx.tracy_queries[gx.frame]),
+                .frame = gx.frame,
+            };
+            gx.tracy_queries[gx.frame] += 1;
+            return result;
+        }
+    };
 
     pub const BeginOptions = struct {
-        command_buffer: CmdBuf,
-        tracy_queue: TracyQueue,
+        cb: CmdBuf,
         loc: *const tracy.SourceLocation,
     };
 
@@ -517,13 +522,8 @@ pub const Zone = struct {
         return Backend.zoneBegin(gx, options);
     }
 
-    pub const EndOptions = struct {
-        command_buffer: CmdBuf,
-        tracy_queue: TracyQueue,
-    };
-
-    pub fn end(self: @This(), gx: *Ctx, options: EndOptions) void {
-        Backend.zoneEnd(gx, self, options);
+    pub fn end(_: @This(), gx: *Ctx, cb: CmdBuf) void {
+        Backend.zoneEnd(gx, cb);
     }
 };
 
@@ -808,7 +808,8 @@ pub fn startFrame(self: *@This()) void {
     defer zone.end();
     self.frame = (self.frame + 1) % self.frames_in_flight;
     self.cb_bindings[self.frameInFlight()].clear();
-    Backend.startFrame(self);
+    Backend.frameStart(self);
+    self.tracy_queries[self.frame] = 0;
 }
 
 pub fn Image(kind: ImageKind) type {

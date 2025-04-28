@@ -15,8 +15,7 @@ pub const Options = struct {
     /// Pipeline layouts can be created at runtime, but specifying them at compile time offers
     /// additional type safety.
     combined_pipeline_layouts: []const *const Ctx.CombinedPipelineLayout.InitOptions = &.{},
-    max_frames_in_flight: u8 = 2,
-    tracy_query_pool_capacity: u16 = 256,
+    max_frames_in_flight: u4 = 2,
     max_cbs_per_frame: u8 = 64,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
 };

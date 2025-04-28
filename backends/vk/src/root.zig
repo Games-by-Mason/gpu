@@ -29,7 +29,6 @@ debug_messenger: vk.DebugUtilsMessengerEXT,
 // Queues & commands
 timestamp_period: f32,
 queue: vk.Queue,
-tracy_queue: TracyQueue,
 queue_family_index: u32,
 cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
@@ -45,7 +44,7 @@ image_index: ?u32 = null,
 
 // Tracy info
 zones: pools.ArrayBacked(u8, TracyQueue, undefined),
-tracy_query_pool: vk.QueryPool,
+tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
 
 timestamp_queries: bool,
 
@@ -83,6 +82,8 @@ pub const Queue = vk.Queue;
 pub const Pipeline = vk.Pipeline;
 pub const PipelineLayout = vk.PipelineLayout;
 pub const Sampler = vk.Sampler;
+
+const graphics_queue_name = "Graphics Queue";
 
 pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     const zone = tracy.Zone.begin(.{ .src = @src() });
@@ -458,21 +459,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         break :b properties.limits.timestamp_period;
     } else 0.0;
 
-    const calibration = timestampCalibrationImpl(device, options.timestamp_queries);
     timestamp_zone.end();
-
-    const get_queue_zone = tracy.Zone.begin(.{ .name = "get queues", .src = @src() });
-    const queue = device.getDeviceQueue(best_physical_device.queue_family_index, 0);
-    setName(device, queue, .{ .str = "Graphics Queue", .index = 0 }, options.validation);
-    const tracy_queue = TracyQueue.init(.{
-        .gpu_time = calibration.gpu,
-        .period = timestamp_period,
-        .context = 0,
-        .flags = .{},
-        .type = .vulkan,
-        .name = std.fmt.comptimePrint("Graphics Queue {}", .{0}),
-    });
-    get_queue_zone.end();
 
     const swapchain = Swapchain.init(
         instance_proxy,
@@ -524,28 +511,27 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     }
     sync_primitives_zone.end();
 
-    const tracy_query_pool = if (tracy.enabled and
-        global_options.tracy_query_pool_capacity > 0)
-    b: {
-        const query_pool_zone = tracy.Zone.begin(.{ .name = "create tracy query pool", .src = @src() });
+    var tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool = @splat(.null_handle);
+    if (tracy.enabled and options.timestamp_queries) {
+        const query_pool_zone = tracy.Zone.begin(.{ .name = "create tracy query pools", .src = @src() });
         defer query_pool_zone.end();
 
-        const tracy_query_pool = device.createQueryPool(&.{
-            .query_type = .timestamp,
-            .query_count = global_options.tracy_query_pool_capacity,
-        }, null) catch |err| @panic(@errorName(err));
-        setName(device, tracy_query_pool, .{ .str = "Tracy" }, options.validation);
-        device.resetQueryPool(
-            tracy_query_pool,
-            0,
-            global_options.tracy_query_pool_capacity,
-        );
-        break :b tracy_query_pool;
-    } else .null_handle;
+        for (&tracy_query_pools, 0..) |*pool, i| {
+            pool.* = device.createQueryPool(&.{
+                .query_type = .timestamp,
+                .query_count = Ctx.Zone.TracyQueryId.cap,
+            }, null) catch |err| @panic(@errorName(err));
+            setName(device, pool.*, .{ .str = "Tracy", .index = i }, options.validation);
+            device.resetQueryPool(pool.*, 0, Ctx.Zone.TracyQueryId.cap);
+        }
+    }
 
     const zones_zone = tracy.Zone.begin(.{ .name = "create zones", .src = @src() });
     const zones = pools.ArrayBacked(u8, TracyQueue, undefined).init(gpa) catch |err| @panic(@errorName(err));
     zones_zone.end();
+
+    const queue = device.getDeviceQueue(best_physical_device.queue_family_index, 0);
+    setName(device, queue, .{ .str = graphics_queue_name }, options.validation);
 
     return .{
         .surface = surface,
@@ -561,17 +547,18 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .physical_device = best_physical_device,
         .timestamp_period = timestamp_period,
         .queue = queue,
-        .tracy_queue = tracy_queue,
         .queue_family_index = best_physical_device.queue_family_index,
         .zones = zones,
-        .tracy_query_pool = tracy_query_pool,
+        .tracy_query_pools = tracy_query_pools,
         .timestamp_queries = options.timestamp_queries,
     };
 }
 
 pub fn deinit(self: *Ctx, gpa: Allocator) void {
-    // Destroy the tracy query pool
-    self.backend.device.destroyQueryPool(self.backend.tracy_query_pool, null);
+    // Destroy the Tracy data
+    for (self.backend.tracy_query_pools) |pool| {
+        self.backend.device.destroyQueryPool(pool, null);
+    }
     self.backend.zones.deinit(gpa);
 
     // Destroy internal sync state
@@ -852,12 +839,9 @@ pub fn combinedPipelineLayoutDestroy(
     self.backend.device.destroyDescriptorSetLayout(layout.descriptor_set.asBackendType(), null);
 }
 
-pub fn zoneBegin(
-    self: *Ctx,
-    options: Ctx.Zone.BeginOptions,
-) Ctx.Zone {
+pub fn zoneBegin(self: *Ctx, options: Ctx.Zone.BeginOptions) Ctx.Zone {
     if (self.backend.debug_messenger != .null_handle) {
-        self.backend.device.cmdBeginDebugUtilsLabelEXT(options.command_buffer.asBackendType(), &.{
+        self.backend.device.cmdBeginDebugUtilsLabelEXT(options.cb.asBackendType(), &.{
             .p_label_name = options.loc.name orelse options.loc.function,
             .color = .{
                 @as(f32, @floatFromInt(options.loc.color.r)) / 255.0,
@@ -867,24 +851,37 @@ pub fn zoneBegin(
             },
         });
     }
-    if (tracy.enabled and self.backend.tracy_query_pool != .null_handle) {
-        const zone: Ctx.Zone = .{
-            .index = self.backend.zones.put(options.tracy_queue) catch @panic("tracy query pool full"),
-        };
-        const begin_query = zone.beginId();
-        options.tracy_queue.beginZone(.{
-            .query_id = begin_query,
+    if (tracy.enabled and self.timestamp_queries) {
+        const query_id: Ctx.Zone.TracyQueryId = .next(self);
+        self.device.tracy_queue.beginZone(.{
+            .query_id = @bitCast(query_id),
             .loc = options.loc,
         });
         self.backend.device.cmdWriteTimestamp(
-            options.command_buffer.asBackendType(),
+            options.cb.asBackendType(),
             .{ .top_of_pipe_bit = true },
-            self.backend.tracy_query_pool,
-            begin_query,
+            self.backend.tracy_query_pools[self.frame],
+            query_id.index,
         );
-        return zone;
     }
-    return .{ .index = 0 };
+    return .{};
+}
+
+pub fn zoneEnd(self: *Ctx, cb: Ctx.CmdBuf) void {
+    if (self.backend.debug_messenger != .null_handle) {
+        self.backend.device.cmdEndDebugUtilsLabelEXT(cb.asBackendType());
+    }
+
+    if (tracy.enabled and self.timestamp_queries) {
+        const query_id: Ctx.Zone.TracyQueryId = .next(self);
+        self.backend.device.cmdWriteTimestamp(
+            cb.asBackendType(),
+            .{ .bottom_of_pipe_bit = true },
+            self.backend.tracy_query_pools[self.frame],
+            query_id.index,
+        );
+        self.device.tracy_queue.endZone(@bitCast(query_id));
+    }
 }
 
 pub fn combinedCmdBufCreate(
@@ -908,8 +905,7 @@ pub fn combinedCmdBufCreate(
     }) catch |err| @panic(@errorName(err));
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = .fromBackendType(cb),
-        .tracy_queue = self.backend.tracy_queue,
+        .cb = .fromBackendType(cb),
         .loc = options.loc,
     });
 
@@ -952,43 +948,18 @@ pub fn combinedCmdBufCreate(
     };
 }
 
-pub fn zoneEnd(
-    self: *Ctx,
-    zone: Ctx.Zone,
-    options: Ctx.Zone.EndOptions,
-) void {
-    if (self.backend.debug_messenger != .null_handle) {
-        self.backend.device.cmdEndDebugUtilsLabelEXT(options.command_buffer.asBackendType());
-    }
-
-    if (tracy.enabled and self.backend.tracy_query_pool != .null_handle) {
-        const end_query = zone.endId();
-        self.backend.device.cmdWriteTimestamp(
-            options.command_buffer.asBackendType(),
-            .{ .bottom_of_pipe_bit = true },
-            self.backend.tracy_query_pool,
-            end_query,
-        );
-        options.tracy_queue.endZone(end_query);
-    }
-}
-
 pub fn cmdBufGraphicsAppend(
     self: *Ctx,
     combined: Ctx.CombinedCmdBuf(null),
     options: Ctx.CombinedCmdBuf(null).AppendGraphicsCmdsOptions,
 ) void {
-    const command_buffer = combined.cb.asBackendType();
+    const cb = combined.cb.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = combined.cb,
-        .tracy_queue = self.backend.tracy_queue,
+        .cb = combined.cb,
         .loc = options.loc,
     });
-    defer zone.end(self, .{
-        .command_buffer = combined.cb,
-        .tracy_queue = self.backend.tracy_queue,
-    });
+    defer zone.end(self, combined.cb);
 
     const bindings = combined.bindings;
 
@@ -998,7 +969,7 @@ pub fn cmdBufGraphicsAppend(
 
             // Bind the pipeline
             self.backend.device.cmdBindPipeline(
-                command_buffer,
+                cb,
                 .graphics,
                 draw.combined_pipeline.pipeline.asBackendType(),
             );
@@ -1006,7 +977,7 @@ pub fn cmdBufGraphicsAppend(
             if (!bindings.dynamic_state) {
                 bindings.dynamic_state = true;
 
-                self.backend.device.cmdSetViewport(command_buffer, 0, 1, &.{.{
+                self.backend.device.cmdSetViewport(cb, 0, 1, &.{.{
                     .x = 0.0,
                     .y = 0.0,
                     .width = @floatFromInt(self.backend.swapchain.swap_extent.width),
@@ -1015,7 +986,7 @@ pub fn cmdBufGraphicsAppend(
                     .max_depth = 1.0,
                 }});
 
-                self.backend.device.cmdSetScissor(command_buffer, 0, 1, &.{.{
+                self.backend.device.cmdSetScissor(cb, 0, 1, &.{.{
                     .offset = .{ .x = 0, .y = 0 },
                     .extent = self.backend.swapchain.swap_extent,
                 }});
@@ -1029,7 +1000,7 @@ pub fn cmdBufGraphicsAppend(
         if (draw.descriptor_set != bindings.descriptor_set) {
             bindings.descriptor_set = draw.descriptor_set;
             self.backend.device.cmdBindDescriptorSets(
-                command_buffer,
+                cb,
                 .graphics,
                 draw.combined_pipeline.layout.asBackendType(),
                 0,
@@ -1047,7 +1018,7 @@ pub fn cmdBufGraphicsAppend(
                 bindings.indices = indices;
                 comptime assert(Ctx.DrawCmd.IndexedIndirect.Index == u16); // Make sure we're binding it as the right type
                 self.backend.device.cmdBindIndexBuffer(
-                    command_buffer,
+                    cb,
                     indices.asBackendType(),
                     0,
                     .uint16,
@@ -1055,7 +1026,7 @@ pub fn cmdBufGraphicsAppend(
             }
 
             self.backend.device.cmdDrawIndexedIndirect(
-                command_buffer,
+                cb,
                 draw.args.buf.asBackendType(),
                 draw.args.offset,
                 draw.args_count,
@@ -1063,7 +1034,7 @@ pub fn cmdBufGraphicsAppend(
             );
         } else {
             self.backend.device.cmdDrawIndirect(
-                command_buffer,
+                cb,
                 draw.args.buf.asBackendType(),
                 draw.args.offset,
                 draw.args_count,
@@ -1084,10 +1055,7 @@ pub fn combinedCmdBufSubmit(
         self.backend.device.cmdEndRendering(cb);
     }
 
-    combined.zone.end(self, .{
-        .command_buffer = combined.cb,
-        .tracy_queue = self.backend.tracy_queue,
-    });
+    combined.zone.end(self, combined.cb);
     self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
 
     {
@@ -1352,14 +1320,10 @@ pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
             defer self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
 
             const zone = Ctx.Zone.begin(self, .{
-                .command_buffer = .fromBackendType(cb),
-                .tracy_queue = self.backend.tracy_queue,
+                .cb = .fromBackendType(cb),
                 .loc = .init(.{ .name = "prepare swapchain image", .src = @src() }),
             });
-            defer zone.end(self, .{
-                .command_buffer = .fromBackendType(cb),
-                .tracy_queue = self.backend.tracy_queue,
-            });
+            defer zone.end(self, .fromBackendType(cb));
 
             self.backend.device.cmdPipelineBarrier(
                 cb,
@@ -1410,7 +1374,7 @@ pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
     return .fromBackendType(self.backend.swapchain.views.get(acquire_result.image_index));
 }
 
-pub fn startFrame(self: *Ctx) void {
+pub fn frameStart(self: *Ctx) void {
     self.backend.image_index = null;
 
     {
@@ -1437,47 +1401,21 @@ pub fn startFrame(self: *Ctx) void {
     self.backend.device.resetCommandPool(cmd_pool, .{}) catch |err| @panic(@errorName(err));
     reset_cmd_pool_zone.end();
 
-    if (self.backend.tracy_query_pool != .null_handle and self.backend.zones.handles.allocated > 0) {
+    if (tracy.enabled and self.timestamp_queries) {
         const tracy_query_pool_zone = Zone.begin(.{
             .src = @src(),
             .name = "tracy query pool",
         });
         defer tracy_query_pool_zone.end();
 
-        var cbs = [_]vk.CommandBuffer{.null_handle};
-        self.backend.device.allocateCommandBuffers(&.{
-            .command_pool = self.backend.cmd_pools[self.frameInFlight()],
-            .level = .primary,
-            .command_buffer_count = cbs.len,
-        }, &cbs) catch |err| @panic(@errorName(err));
-        const cb = cbs[0];
-        setName(self.backend.device, cb, .{
-            .str = "Prepare Swapchain Image",
-        }, self.backend.debug_messenger != .null_handle);
-
-        {
-            self.backend.device.beginCommandBuffer(cb, &.{
-                .flags = .{ .one_time_submit_bit = true },
-                .p_inheritance_info = null,
-            }) catch |err| @panic(@errorName(err));
-            defer self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
-
-            const zone = Ctx.Zone.begin(self, .{
-                .command_buffer = .fromBackendType(cb),
-                .tracy_queue = self.backend.tracy_queue,
-                .loc = .init(.{ .name = "tracy query pool", .src = @src() }),
-            });
-            defer zone.end(self, .{
-                .command_buffer = .fromBackendType(cb),
-                .tracy_queue = self.backend.tracy_queue,
-            });
-
-            var results: [@as(usize, global_options.tracy_query_pool_capacity) * 2]u64 = undefined;
+        const queries = self.tracy_queries[self.frame];
+        if (queries > 0) {
+            var results: [Ctx.Zone.TracyQueryId.cap * 2]u64 = undefined;
             const result = self.backend.device.getQueryPoolResults(
-                self.backend.tracy_query_pool,
+                self.backend.tracy_query_pools[self.frame],
                 0,
-                global_options.tracy_query_pool_capacity,
-                @as(usize, global_options.tracy_query_pool_capacity) * @sizeOf(u64) * 2,
+                queries,
+                @sizeOf(u64) * @as(u32, queries) * 2,
                 &results,
                 @sizeOf(u64) * 2,
                 .{
@@ -1486,67 +1424,90 @@ pub fn startFrame(self: *Ctx) void {
                 },
             ) catch |err| @panic(@errorName(err));
             switch (result) {
+                // It's possible that the caller generated some command buffers that they decided
+                // not to submit, so we might sometimes get not ready here. That's fine--we'll skip
+                // those timestamps using the availability bit.
                 .success, .not_ready => {},
                 else => @panic(@tagName(result)),
             }
 
-            var i: u16 = 0;
-            while (i < self.backend.zones.handles.allocated) : (i += 2) {
-                const begin_index = i * 2;
-                const end_index = i * 2 + 1;
-
-                const begin_available = results[begin_index * 2 + 1] != 0;
-                const end_available = results[end_index * 2 + 1] != 0;
-
-                if (begin_available and end_available) {
-                    const begin_gpu_time = results[begin_index * 2];
-                    const end_gpu_time = results[end_index * 2];
-
-                    const tracy_queue = self.backend.zones.items[i];
-                    tracy_queue.emitTime(.{
-                        .query_id = begin_index,
-                        .gpu_time = begin_gpu_time,
+            for (0..queries) |i| {
+                const available = results[i * 2 + 1] != 0;
+                if (available) {
+                    const time = results[i * 2];
+                    self.device.tracy_queue.emitTime(.{
+                        .query_id = @bitCast(Ctx.Zone.TracyQueryId{
+                            .index = @intCast(i),
+                            .frame = self.frame,
+                        }),
+                        .gpu_time = time,
                     });
-                    tracy_queue.emitTime(.{
-                        .query_id = end_index,
-                        .gpu_time = end_gpu_time,
-                    });
-
-                    self.backend.device.cmdResetQueryPool(
-                        cb,
-                        self.backend.tracy_query_pool,
-                        @intCast(begin_index),
-                        2,
-                    );
-                    self.backend.zones.remove(@intCast(i));
                 }
             }
-        }
 
-        self.backend.device.queueSubmit(
-            self.backend.queue,
-            1,
-            &.{.{
-                .wait_semaphore_count = 0,
-                .p_wait_semaphores = &.{},
-                .p_wait_dst_stage_mask = &.{},
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{cb},
-                .signal_semaphore_count = 0,
-                .p_signal_semaphores = &.{},
-                .p_next = null,
-            }},
-            .null_handle,
-        ) catch |err| @panic(@errorName(err));
+            var cbs = [_]vk.CommandBuffer{.null_handle};
+            self.backend.device.allocateCommandBuffers(&.{
+                .command_pool = self.backend.cmd_pools[self.frameInFlight()],
+                .level = .primary,
+                .command_buffer_count = cbs.len,
+            }, &cbs) catch |err| @panic(@errorName(err));
+            const cb = cbs[0];
+            setName(self.backend.device, cb, .{
+                .str = "Clear Tracy Query Pool",
+            }, self.backend.debug_messenger != .null_handle);
+
+            {
+                self.backend.device.beginCommandBuffer(cb, &.{
+                    .flags = .{ .one_time_submit_bit = true },
+                    .p_inheritance_info = null,
+                }) catch |err| @panic(@errorName(err));
+                defer self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
+                self.backend.device.cmdResetQueryPool(
+                    cb,
+                    self.backend.tracy_query_pools[self.frame],
+                    0,
+                    Ctx.Zone.TracyQueryId.cap,
+                );
+            }
+
+            self.backend.device.queueSubmit(
+                self.backend.queue,
+                1,
+                &.{.{
+                    .wait_semaphore_count = 0,
+                    .p_wait_semaphores = &.{},
+                    .p_wait_dst_stage_mask = &.{},
+                    .command_buffer_count = 1,
+                    .p_command_buffers = &.{cb},
+                    .signal_semaphore_count = 0,
+                    .p_signal_semaphores = &.{},
+                    .p_next = null,
+                }},
+                .null_handle,
+            ) catch |err| @panic(@errorName(err));
+        }
     }
 }
 
 pub fn getDevice(self: *const @This()) Ctx.Device {
+    const get_queue_zone = tracy.Zone.begin(.{ .name = "get queues", .src = @src() });
+    const calibration = timestampCalibrationImpl(self.device, self.timestamp_queries);
+    const tracy_queue = TracyQueue.init(.{
+        .gpu_time = calibration.gpu,
+        .period = self.timestamp_period,
+        .context = 0,
+        .flags = .{},
+        .type = .vulkan,
+        .name = graphics_queue_name,
+    });
+    get_queue_zone.end();
+
     return .{
         .kind = self.physical_device.ty,
         .uniform_buf_offset_alignment = self.physical_device.min_uniform_buffer_offset_alignment,
         .storage_buf_offset_alignment = self.physical_device.min_storage_buffer_offset_alignment,
         .timestamp_period = self.timestamp_period,
+        .tracy_queue = tracy_queue,
     };
 }
 
@@ -2032,14 +1993,10 @@ pub fn present(self: *Ctx) u64 {
             defer self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
 
             const zone = Ctx.Zone.begin(self, .{
-                .command_buffer = .fromBackendType(cb),
-                .tracy_queue = self.backend.tracy_queue,
+                .cb = .fromBackendType(cb),
                 .loc = .init(.{ .name = "finalize swapchain image", .src = @src() }),
             });
-            defer zone.end(self, .{
-                .command_buffer = .fromBackendType(cb),
-                .tracy_queue = self.backend.tracy_queue,
-            });
+            defer zone.end(self, .fromBackendType(cb));
 
             self.backend.device.cmdPipelineBarrier(
                 cb,
@@ -2226,8 +2183,7 @@ pub fn cmdBufTransferAppend(
     const cb = combined.cb.asBackendType();
 
     const zone = Ctx.Zone.begin(self, .{
-        .command_buffer = .fromBackendType(cb),
-        .tracy_queue = self.backend.tracy_queue,
+        .cb = .fromBackendType(cb),
         .loc = options.loc,
     });
 
@@ -2349,10 +2305,7 @@ pub fn cmdBufTransferAppend(
         }
     }
 
-    zone.end(self, .{
-        .command_buffer = .fromBackendType(cb),
-        .tracy_queue = self.backend.tracy_queue,
-    });
+    zone.end(self, .fromBackendType(cb));
 }
 
 pub fn waitIdle(self: *const Ctx) void {

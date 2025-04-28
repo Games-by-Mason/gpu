@@ -73,8 +73,7 @@ pub fn IBackend(Self: type) type {
         ) Ctx.Zone,
         zoneEnd: fn (
             self: *Ctx,
-            zone: Ctx.Zone,
-            options: Ctx.Zone.EndOptions,
+            cb: Ctx.CmdBuf,
         ) void,
 
         cmdBufGraphicsAppend: fn (
@@ -114,7 +113,7 @@ pub fn IBackend(Self: type) type {
             updates: []const Ctx.DescUpdateCmd,
         ) void,
 
-        startFrame: fn (self: *Ctx) void,
+        frameStart: fn (self: *Ctx) void,
 
         getDevice: fn (self: *const Self) Ctx.Device,
 
