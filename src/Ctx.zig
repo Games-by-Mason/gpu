@@ -417,7 +417,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
 
-            const bindings = gx.cb_bindings[gx.frameInFlight()].addOne() catch @panic("OOB");
+            const bindings = gx.cb_bindings[gx.frame].addOne() catch @panic("OOB");
             bindings.* = .{};
 
             const untyped = Backend.combinedCmdBufCreate(gx, .{
@@ -829,11 +829,6 @@ pub fn updateDescSets(
     Backend.descriptorSetsUpdate(self, max_updates, cmds);
 }
 
-/// Returns the current frame in flight. May be used to index resources that are buffered per frame.
-pub fn frameInFlight(self: *const @This()) u8 {
-    return @intCast(self.frame);
-}
-
 /// Starts a new frame. If this frame in flight's command pool is still in use, blocks until it is
 /// available. Returns the time spent blocking in nanoseconds.
 pub fn startFrame(self: *@This()) void {
@@ -843,7 +838,7 @@ pub fn startFrame(self: *@This()) void {
     });
     defer zone.end();
     self.frame = (self.frame + 1) % self.frames_in_flight;
-    self.cb_bindings[self.frameInFlight()].clear();
+    self.cb_bindings[self.frame].clear();
     Backend.frameStart(self);
     self.tracy_queries[self.frame] = 0;
 }

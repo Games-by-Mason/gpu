@@ -902,7 +902,7 @@ pub fn combinedCmdBufCreate(
 ) Ctx.CombinedCmdBuf(null) {
     var cbs = [_]vk.CommandBuffer{.null_handle};
     self.backend.device.allocateCommandBuffers(&.{
-        .command_pool = self.backend.cmd_pools[self.frameInFlight()],
+        .command_pool = self.backend.cmd_pools[self.frame],
         .level = .primary,
         .command_buffer_count = cbs.len,
     }, &cbs) catch |err| @panic(@errorName(err));
@@ -1290,7 +1290,7 @@ pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
         break :b self.backend.device.acquireNextImageKHR(
             self.backend.swapchain.swapchain,
             std.math.maxInt(u64),
-            self.backend.image_availables[self.frameInFlight()],
+            self.backend.image_availables[self.frame],
             .null_handle,
         ) catch |err| switch (err) {
             error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
@@ -1315,7 +1315,7 @@ pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
 
         var cbs = [_]vk.CommandBuffer{.null_handle};
         self.backend.device.allocateCommandBuffers(&.{
-            .command_pool = self.backend.cmd_pools[self.frameInFlight()],
+            .command_pool = self.backend.cmd_pools[self.frame],
             .level = .primary,
             .command_buffer_count = cbs.len,
         }, &cbs) catch |err| @panic(@errorName(err));
@@ -1371,7 +1371,7 @@ pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
             1,
             &.{.{
                 .wait_semaphore_count = 1,
-                .p_wait_semaphores = &.{self.backend.image_availables[self.frameInFlight()]},
+                .p_wait_semaphores = &.{self.backend.image_availables[self.frame]},
                 .p_wait_dst_stage_mask = &.{.{ .top_of_pipe_bit = true }},
                 .command_buffer_count = 1,
                 .p_command_buffers = &.{cb},
@@ -1395,7 +1395,7 @@ pub fn frameStart(self: *Ctx) void {
             .name = "wait for cmd pool",
         });
         defer wait_zone.end();
-        const cmd_pool_fence = self.backend.cmd_pool_ready[self.frameInFlight()];
+        const cmd_pool_fence = self.backend.cmd_pool_ready[self.frame];
         assert(self.backend.device.waitForFences(
             1,
             &.{cmd_pool_fence},
@@ -1409,8 +1409,10 @@ pub fn frameStart(self: *Ctx) void {
         .src = @src(),
         .name = "reset cmd pool",
     });
-    const cmd_pool = self.backend.cmd_pools[self.frameInFlight()];
+    const cmd_pool = self.backend.cmd_pools[self.frame];
+    log.err("try to reset {}", .{self.frame});
     self.backend.device.resetCommandPool(cmd_pool, .{}) catch |err| @panic(@errorName(err));
+    log.err("done", .{});
     reset_cmd_pool_zone.end();
 
     if (tracy.enabled and self.timestamp_queries) {
@@ -1459,7 +1461,7 @@ pub fn frameStart(self: *Ctx) void {
 
             var cbs = [_]vk.CommandBuffer{.null_handle};
             self.backend.device.allocateCommandBuffers(&.{
-                .command_pool = self.backend.cmd_pools[self.frameInFlight()],
+                .command_pool = self.backend.cmd_pools[self.frame],
                 .level = .primary,
                 .command_buffer_count = cbs.len,
             }, &cbs) catch |err| @panic(@errorName(err));
@@ -2114,7 +2116,7 @@ pub fn present(self: *Ctx) u64 {
 
         var cbs = [_]vk.CommandBuffer{.null_handle};
         self.backend.device.allocateCommandBuffers(&.{
-            .command_pool = self.backend.cmd_pools[self.frameInFlight()],
+            .command_pool = self.backend.cmd_pools[self.frame],
             .level = .primary,
             .command_buffer_count = cbs.len,
         }, &cbs) catch |err| @panic(@errorName(err));
@@ -2180,11 +2182,11 @@ pub fn present(self: *Ctx) u64 {
                     .p_command_buffers = &.{cb},
                     .signal_semaphore_count = 1,
                     .p_signal_semaphores = &.{
-                        self.backend.ready_for_present[self.frameInFlight()],
+                        self.backend.ready_for_present[self.frame],
                     },
                     .p_next = null,
                 }},
-                self.backend.cmd_pool_ready[self.frameInFlight()],
+                self.backend.cmd_pool_ready[self.frame],
             ) catch |err| @panic(@errorName(err));
         }
     }
@@ -2208,7 +2210,7 @@ pub fn present(self: *Ctx) u64 {
                 self.backend.queue,
                 &.{
                     .wait_semaphore_count = 1,
-                    .p_wait_semaphores = &.{self.backend.ready_for_present[self.frameInFlight()]},
+                    .p_wait_semaphores = &.{self.backend.ready_for_present[self.frame]},
                     .swapchain_count = swapchain.len,
                     .p_swapchains = &swapchain,
                     .p_image_indices = &image_index,
