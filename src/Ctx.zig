@@ -21,9 +21,14 @@ const tracy_gpu_pool = "gpu";
 pub const FramebufSize = struct { u32, u32 };
 
 pub const MemoryRequirements = struct {
+    const DedicatedAllocationAffinity = enum {
+        discouraged,
+        preferred,
+        required,
+    };
     size: u64,
     alignment: u64,
-    dedicated_allocation: enum { discouraged, preferred, required },
+    dedicated_allocation: DedicatedAllocationAffinity,
 };
 
 pub const DebugName = struct {
@@ -835,11 +840,19 @@ pub fn startFrame(self: *@This()) void {
     self.tracy_queries[self.frame] = 0;
 }
 
+pub const ImageResultUntyped = struct {
+    image: Image(.{}),
+    dedicated: ?struct {
+        memory: Memory(.{ .image = .{} }),
+        size: u64,
+    },
+};
+
 pub fn Image(kind: ImageKind) type {
     return enum(u64) {
         _,
 
-        pub const InitColorOptions = struct {
+        pub const ColorOptions = struct {
             pub const Kind = struct {
                 tiling: ImageOptions.Tiling,
                 transient_attachment: bool,
@@ -862,6 +875,10 @@ pub fn Image(kind: ImageKind) type {
                 input_attachment: bool = false,
             };
 
+            pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
+                return Backend.imageMemoryRequirements(gx, imageOptions(self));
+            }
+
             name: DebugName,
             flags: ImageOptions.Flags,
             dimensions: ImageOptions.Dimensions,
@@ -875,7 +892,7 @@ pub fn Image(kind: ImageKind) type {
             usage: Usage,
         };
 
-        pub const InitDepthStencilOptions = struct {
+        pub const DepthStencilOptions = struct {
             pub const Kind = struct {
                 format: ImageOptions.Format.DepthStencil,
                 tiling: ImageOptions.Tiling,
@@ -899,6 +916,10 @@ pub fn Image(kind: ImageKind) type {
                 input_attachment: bool = false,
             };
 
+            pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
+                return Backend.imageMemoryRequirements(gx, imageOptions(self));
+            }
+
             name: DebugName,
             flags: ImageOptions.Flags,
             dimensions: ImageOptions.Dimensions,
@@ -911,12 +932,12 @@ pub fn Image(kind: ImageKind) type {
             usage: Usage = .{},
         };
 
-        pub const InitOptions = if (kind.format) |format| switch (format) {
-            .color => InitColorOptions,
-            .depth_stencil => InitDepthStencilOptions,
+        pub const Options = if (kind.format) |format| switch (format) {
+            .color => ColorOptions,
+            .depth_stencil => DepthStencilOptions,
         } else @compileError("missing format");
 
-        fn imageOptions(options: @This().InitOptions) ImageOptions {
+        fn imageOptions(options: @This().Options) ImageOptions {
             assert(options.extent.width * options.extent.height * options.extent.depth > 0);
             assert(options.mip_levels > 0);
             assert(options.array_layers > 0);
@@ -960,20 +981,63 @@ pub fn Image(kind: ImageKind) type {
             };
         }
 
-        pub fn memoryRequirements(gx: *Ctx, options: @This().InitOptions) MemoryRequirements {
-            return Backend.imageMemoryRequirements(gx, imageOptions(options));
-        }
+        pub const InitResult = struct {
+            image: Image(kind),
+            dedicated_memory: ?Memory(.{ .image = kind }),
+        };
 
-        pub fn init(
-            gx: *Ctx,
-            location: MemoryViewUnsized(.{ .image = kind }),
-            options: @This().InitOptions,
-        ) @This() {
+        pub const AllocOptions = union(enum) {
+            auto: struct {
+                offset: *u64,
+                memory: Memory(.{ .image = kind }),
+            },
+            dedicated: void,
+            place: MemoryViewUnsized(.{ .image = kind }),
+
+            fn asUntyped(self: @This()) Image(.{}).AllocOptions {
+                return switch (self) {
+                    .auto => |auto| .{ .auto = .{
+                        .offset = auto.offset,
+                        .memory = auto.memory.as(.{ .image = .{} }),
+                    } },
+                    .dedicated => .dedicated,
+                    .place => |place| .{
+                        .place = place.as(.{ .image = .{} }),
+                    },
+                };
+            }
+        };
+
+        pub const InitOptions = struct {
+            alloc: AllocOptions,
+            image: Options,
+        };
+
+        pub fn init(gx: *Ctx, options: @This().InitOptions) InitResult {
             comptime assert(kind.nonNull());
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-            const handle = Backend.imageCreate(gx, location.as(null), imageOptions(options));
-            return @enumFromInt(@intFromEnum(handle));
+            const result = Backend.imageCreate(
+                gx,
+                options.alloc.asUntyped(),
+                imageOptions(options.image),
+            );
+            if (result.dedicated) |dedicated| {
+                tracy.alloc(.{
+                    .ptr = @ptrFromInt(@intFromEnum(dedicated.memory)),
+                    .size = dedicated.size,
+                    .pool_name = tracy_gpu_pool,
+                });
+                return .{
+                    .image = @enumFromInt(@intFromEnum(result.image)),
+                    .dedicated_memory = @enumFromInt(@intFromEnum(dedicated.memory)),
+                };
+            } else {
+                return .{
+                    .image = @enumFromInt(@intFromEnum(result.image)),
+                    .dedicated_memory = null,
+                };
+            }
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
@@ -996,34 +1060,6 @@ pub fn Image(kind: ImageKind) type {
         pub inline fn asBackendType(self: @This()) Backend.Image {
             comptime assert(@sizeOf(Backend.Image) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(self));
-        }
-    };
-}
-
-pub fn DedicatedImage(kind: ImageKind) type {
-    return struct {
-        image: Image(kind),
-        memory: Memory(.{ .image = kind }),
-
-        pub fn init(gx: *Ctx, options: Image(kind).InitOptions) @This() {
-            comptime assert(kind.nonNull());
-            const zone = tracy.Zone.begin(.{ .src = @src() });
-            defer zone.end();
-            const result = Backend.dedicatedImageCreate(gx, Image(kind).imageOptions(options));
-            tracy.alloc(.{
-                .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
-                .size = result.size,
-                .pool_name = tracy_gpu_pool,
-            });
-            return .{
-                .image = @enumFromInt(@intFromEnum(result.dedicated.image)),
-                .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
-            };
-        }
-
-        pub fn deinit(self: @This(), gx: *Ctx) void {
-            self.image.deinit(gx);
-            self.memory.deinit(gx);
         }
     };
 }
@@ -1342,17 +1378,19 @@ pub const MemoryKind = union(enum) {
     buf: BufKind,
 
     fn checkCast(comptime self: ?@This(), comptime rtype: ?@This()) void {
-        if (rtype == null) return;
-        comptime if (self) |ltype| {
-            if (std.meta.activeTag(ltype) == std.meta.activeTag(rtype.?)) {
-                switch (ltype) {
-                    .image => |image| return image.checkCast(rtype.?.image),
-                    .buf => |buf| return buf.checkCast(rtype.?.buf),
+        comptime b: {
+            if (rtype == null) break :b;
+            if (self) |ltype| {
+                if (std.meta.activeTag(ltype) == std.meta.activeTag(rtype.?)) {
+                    switch (ltype) {
+                        .image => |image| break :b assert(image.castAllowed(rtype.?.image)),
+                        .buf => |buf| break :b buf.checkCast(rtype.?.buf),
+                    }
                 }
             }
-        };
-        const self_name = if (self) |s| @tagName(s) else "null";
-        @compileError("cannot cast " ++ self_name ++ " to " ++ @tagName(rtype.?));
+            const self_name = if (self) |s| @tagName(s) else "null";
+            @compileError("cannot cast " ++ self_name ++ " to " ++ @tagName(rtype.?));
+        }
     }
 };
 
@@ -1410,8 +1448,8 @@ pub const MemoryCreateUntypedOptions = struct {
     };
 
     pub const Usage = union(enum) {
-        color_image: Image(.{}).InitColorOptions.Kind,
-        depth_stencil_image: Image(.{}).InitDepthStencilOptions.Kind,
+        color_image: Image(.{}).ColorOptions.Kind,
+        depth_stencil_image: Image(.{}).DepthStencilOptions.Kind,
 
         fn asUsage(self: @This()) MemoryKind.Usage {
             return switch (self) {

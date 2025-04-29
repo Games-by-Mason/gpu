@@ -1581,33 +1581,14 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
     };
 }
 
-pub fn imageCreate(
-    self: *Ctx,
-    location: Ctx.MemoryViewUnsized(null),
-    options: Ctx.ImageOptions,
-) Ctx.Image(.{}) {
-    const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, image, options.name, self.backend.debug_messenger != .null_handle);
-    self.backend.device.bindImageMemory(
-        image,
-        location.memory.asBackendType(),
-        location.offset,
-    ) catch |err| @panic(@errorName(err));
-    return .fromBackendType(image);
-}
-
-pub fn dedicatedImageCreate(
+fn allocImage(
     self: *Ctx,
     options: Ctx.ImageOptions,
-) Ctx.DedicatedAllocation(Ctx.DedicatedImage(.{})) {
-    // Create the image
-    const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, image, options.name, self.backend.debug_messenger != .null_handle);
-
-    // Allocate memory for the image
-    const reqs = self.backend.device.getImageMemoryRequirements(image);
+    image: vk.Image,
+    reqs: vk.MemoryRequirements2,
+) Ctx.ImageResultUntyped {
     const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
-        .mask = reqs.memory_type_bits,
+        .mask = reqs.memory_requirements.memory_type_bits,
     };
     const device_memory_properties = self.backend.instance.getPhysicalDeviceMemoryProperties(
         self.backend.physical_device.device,
@@ -1617,11 +1598,13 @@ pub fn dedicatedImageCreate(
         memory_type_bits,
         .none,
     ) orelse @panic("unsupported memory type");
+
+    // Allocate memory for the image
     const dedicated_alloc_info: vk.MemoryDedicatedAllocateInfo = .{
         .image = image,
     };
     const memory = self.backend.device.allocateMemory(&.{
-        .allocation_size = reqs.size,
+        .allocation_size = reqs.memory_requirements.size,
         .memory_type_index = memory_type_index,
         .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
@@ -1634,13 +1617,107 @@ pub fn dedicatedImageCreate(
         0,
     ) catch |err| @panic(@errorName(err));
 
+    // Return the image and dedicated memory
     return .{
-        .size = reqs.size,
+        .image = .fromBackendType(image),
         .dedicated = .{
-            .image = .fromBackendType(image),
             .memory = .fromBackendType(memory),
+            .size = reqs.memory_requirements.size,
         },
     };
+}
+
+fn placeImage(
+    self: *Ctx,
+    image: vk.Image,
+    offset: *u64,
+    memory: vk.DeviceMemory,
+    reqs: vk.MemoryRequirements2,
+) Ctx.ImageResultUntyped {
+    offset.* = std.mem.alignForward(
+        u64,
+        offset.*,
+        reqs.memory_requirements.alignment,
+    );
+    self.backend.device.bindImageMemory(
+        image,
+        memory,
+        offset.*,
+    ) catch |err| @panic(@errorName(err));
+    return .{
+        .image = .fromBackendType(image),
+        .dedicated = null,
+    };
+}
+
+pub fn imageCreate(
+    self: *Ctx,
+    alloc_options: Ctx.Image(.{}).AllocOptions,
+    image_options: Ctx.ImageOptions,
+) Ctx.ImageResultUntyped {
+    // Create the image
+    const image = self.backend.device.createImage(&imageOptionsToVk(image_options), null) catch |err| @panic(@errorName(err));
+    setName(self.backend.device, image, image_options.name, self.backend.debug_messenger != .null_handle);
+
+    switch (alloc_options) {
+        .auto => |auto| {
+            // Get the memory requirements
+            var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
+                .prefers_dedicated_allocation = vk.FALSE,
+                .requires_dedicated_allocation = vk.FALSE,
+            };
+            var reqs: vk.MemoryRequirements2 = .{
+                .memory_requirements = undefined,
+                .p_next = &dedicated_reqs,
+            };
+            self.backend.device.getImageMemoryRequirements2(&.{
+                .image = image,
+            }, &reqs);
+
+            // Check whether this should be a dedicated allocation
+            const dedicated = dedicated_reqs.prefers_dedicated_allocation == vk.TRUE or
+                dedicated_reqs.requires_dedicated_allocation == vk.TRUE;
+            if (dedicated) {
+                return allocImage(self, image_options, image, reqs);
+            } else {
+                const result = placeImage(
+                    self,
+                    image,
+                    auto.offset,
+                    auto.memory.asBackendType(),
+                    reqs,
+                );
+                auto.offset.* += reqs.memory_requirements.size;
+                return result;
+            }
+        },
+        .dedicated => {
+            var reqs: vk.MemoryRequirements2 = .{
+                .memory_requirements = undefined,
+            };
+            self.backend.device.getImageMemoryRequirements2(&.{
+                .image = image,
+            }, &reqs);
+            return allocImage(self, image_options, image, reqs);
+        },
+        .place => |place| {
+            var reqs: vk.MemoryRequirements2 = .{
+                .memory_requirements = undefined,
+            };
+            self.backend.device.getImageMemoryRequirements2(&.{
+                .image = image,
+            }, &reqs);
+
+            var offset = place.offset;
+            return placeImage(
+                self,
+                image,
+                &offset,
+                place.memory.asBackendType(),
+                reqs,
+            );
+        },
+    }
 }
 
 pub fn imageDestroy(self: *Ctx, image: Ctx.Image(.{})) void {

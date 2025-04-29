@@ -119,13 +119,9 @@ pub fn IBackend(Self: type) type {
 
         imageCreate: fn (
             self: *Ctx,
-            location: Ctx.MemoryViewUnsized(null),
-            options: Ctx.ImageOptions,
-        ) Ctx.Image(.{}),
-        dedicatedImageCreate: fn (
-            self: *Ctx,
-            options: Ctx.ImageOptions,
-        ) Ctx.DedicatedAllocation(Ctx.DedicatedImage(.{})),
+            alloc_options: Ctx.Image(.{}).AllocOptions,
+            image_options: Ctx.ImageOptions,
+        ) Ctx.ImageResultUntyped,
         imageDestroy: fn (
             self: *Ctx,
             image: Ctx.Image(.{}),
