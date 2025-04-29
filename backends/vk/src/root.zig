@@ -1585,10 +1585,10 @@ fn allocImage(
     self: *Ctx,
     options: Ctx.ImageOptions,
     image: vk.Image,
-    reqs: vk.MemoryRequirements2,
+    reqs: vk.MemoryRequirements,
 ) Ctx.ImageResultUntyped {
     const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
-        .mask = reqs.memory_requirements.memory_type_bits,
+        .mask = reqs.memory_type_bits,
     };
     const device_memory_properties = self.backend.instance.getPhysicalDeviceMemoryProperties(
         self.backend.physical_device.device,
@@ -1604,7 +1604,7 @@ fn allocImage(
         .image = image,
     };
     const memory = self.backend.device.allocateMemory(&.{
-        .allocation_size = reqs.memory_requirements.size,
+        .allocation_size = reqs.size,
         .memory_type_index = memory_type_index,
         .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
@@ -1621,8 +1621,8 @@ fn allocImage(
     return .{
         .image = .fromBackendType(image),
         .dedicated = .{
-            .memory = .fromBackendType(memory),
-            .size = reqs.memory_requirements.size,
+            .unsized = .fromBackendType(memory),
+            .size = reqs.size,
         },
     };
 }
@@ -1630,20 +1630,10 @@ fn allocImage(
 fn placeImage(
     self: *Ctx,
     image: vk.Image,
-    offset: *u64,
+    offset: u64,
     memory: vk.DeviceMemory,
-    reqs: vk.MemoryRequirements2,
 ) Ctx.ImageResultUntyped {
-    offset.* = std.mem.alignForward(
-        u64,
-        offset.*,
-        reqs.memory_requirements.alignment,
-    );
-    self.backend.device.bindImageMemory(
-        image,
-        memory,
-        offset.*,
-    ) catch |err| @panic(@errorName(err));
+    self.backend.device.bindImageMemory(image, memory, offset) catch |err| @panic(@errorName(err));
     return .{
         .image = .fromBackendType(image),
         .dedicated = null,
@@ -1666,13 +1656,12 @@ pub fn imageCreate(
                 .prefers_dedicated_allocation = vk.FALSE,
                 .requires_dedicated_allocation = vk.FALSE,
             };
-            var reqs: vk.MemoryRequirements2 = .{
+            var reqs2: vk.MemoryRequirements2 = .{
                 .memory_requirements = undefined,
                 .p_next = &dedicated_reqs,
             };
-            self.backend.device.getImageMemoryRequirements2(&.{
-                .image = image,
-            }, &reqs);
+            self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
+            const reqs = reqs2.memory_requirements;
 
             // Check whether this should be a dedicated allocation
             const dedicated = dedicated_reqs.prefers_dedicated_allocation == vk.TRUE or
@@ -1680,42 +1669,33 @@ pub fn imageCreate(
             if (dedicated) {
                 return allocImage(self, image_options, image, reqs);
             } else {
+                auto.offset.* = std.mem.alignForward(u64, auto.offset.*, reqs.alignment);
+                const new_offset = auto.offset.* + reqs.size;
+                if (new_offset > auto.memory.size) @panic("OOB");
                 const result = placeImage(
                     self,
                     image,
-                    auto.offset,
-                    auto.memory.asBackendType(),
-                    reqs,
+                    auto.offset.*,
+                    auto.memory.unsized.asBackendType(),
                 );
-                auto.offset.* += reqs.memory_requirements.size;
+                auto.offset.* = new_offset;
                 return result;
             }
         },
         .dedicated => {
-            var reqs: vk.MemoryRequirements2 = .{
-                .memory_requirements = undefined,
-            };
-            self.backend.device.getImageMemoryRequirements2(&.{
-                .image = image,
-            }, &reqs);
+            var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
+            self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
+            const reqs = reqs2.memory_requirements;
             return allocImage(self, image_options, image, reqs);
         },
         .place => |place| {
-            var reqs: vk.MemoryRequirements2 = .{
-                .memory_requirements = undefined,
-            };
-            self.backend.device.getImageMemoryRequirements2(&.{
-                .image = image,
-            }, &reqs);
-
-            var offset = place.offset;
-            return placeImage(
-                self,
-                image,
-                &offset,
-                place.memory.asBackendType(),
-                reqs,
-            );
+            var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
+            self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
+            const reqs = reqs2.memory_requirements;
+            const offset = std.mem.alignForward(u64, place.offset, reqs.alignment);
+            const new_offset = offset + reqs.size;
+            if (new_offset > place.memory.size) @panic("OOB");
+            return placeImage(self, image, offset, place.memory.unsized.asBackendType());
         },
     }
 }
@@ -1732,17 +1712,18 @@ pub fn imageMemoryRequirements(
         .prefers_dedicated_allocation = vk.FALSE,
         .requires_dedicated_allocation = vk.FALSE,
     };
-    var reqs: vk.MemoryRequirements2 = .{
+    var reqs2: vk.MemoryRequirements2 = .{
         .memory_requirements = undefined,
         .p_next = &dedicated_reqs,
     };
     self.backend.device.getDeviceImageMemoryRequirements(&.{
         .p_create_info = &imageOptionsToVk(options),
         .plane_aspect = .{},
-    }, &reqs);
+    }, &reqs2);
+    const reqs = reqs2.reqs;
     return .{
-        .size = reqs.memory_requirements.size,
-        .alignment = reqs.memory_requirements.alignment,
+        .size = reqs.size,
+        .alignment = reqs.alignment,
         .dedicated_allocation = if (dedicated_reqs.requires_dedicated_allocation == vk.TRUE)
             .required
         else if (dedicated_reqs.prefers_dedicated_allocation == vk.TRUE)
@@ -1793,7 +1774,7 @@ pub fn imageViewDestroy(self: *Ctx, image_view: Ctx.ImageView) void {
 pub fn memoryCreate(
     self: *Ctx,
     options: Ctx.MemoryCreateUntypedOptions,
-) Ctx.Memory(null) {
+) Ctx.MemoryUnsized {
     // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
     // able to do this, but we don't need to actually bind it to any memory it's just a handle.
     const memory_type_bits = switch (options.usage) {
@@ -1807,7 +1788,7 @@ pub fn memoryCreate(
             // property is VK_FALSE, handleTypes member of VkExternalMemoryImageCreateInfo, and the
             // VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT of the usage member in the VkImageCreateInfo
             // structure passed to vkCreateImage."
-            var reqs: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
+            var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
             self.backend.device.getDeviceImageMemoryRequirements(
                 &.{
                     .p_create_info = &.{
@@ -1837,10 +1818,11 @@ pub fn memoryCreate(
                     },
                     .plane_aspect = .{},
                 },
-                &reqs,
+                &reqs2,
             );
+            const reqs = reqs2.memory_requirements;
             const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
-                .mask = reqs.memory_requirements.memory_type_bits,
+                .mask = reqs.memory_type_bits,
             };
             break :b memory_type_bits;
         },
@@ -1855,7 +1837,7 @@ pub fn memoryCreate(
             // is VK_FALSE, handleTypes member of VkExternalMemoryImageCreateInfo, and the
             // VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT of the usage member in the VkImageCreateInfo
             // structure passed to vkCreateImage."
-            var reqs: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
+            var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
             self.backend.device.getDeviceImageMemoryRequirements(
                 &.{
                     .p_create_info = &.{
@@ -1887,10 +1869,11 @@ pub fn memoryCreate(
                     },
                     .plane_aspect = .{},
                 },
-                &reqs,
+                &reqs2,
             );
+            const reqs = reqs2.memory_requirements;
             const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
-                .mask = reqs.memory_requirements.memory_type_bits,
+                .mask = reqs.memory_type_bits,
             };
             break :b memory_type_bits;
         },
@@ -1914,7 +1897,7 @@ pub fn memoryCreate(
     return .fromBackendType(memory);
 }
 
-pub fn deviceMemoryDestroy(self: *Ctx, memory: Ctx.Memory(null)) void {
+pub fn memoryDestroy(self: *Ctx, memory: Ctx.MemoryUnsized) void {
     self.backend.device.freeMemory(memory.asBackendType(), null);
 }
 

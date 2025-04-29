@@ -142,10 +142,10 @@ pub fn IBackend(Self: type) type {
         memoryCreate: fn (
             self: *Ctx,
             options: Ctx.MemoryCreateUntypedOptions,
-        ) Ctx.Memory(null),
-        deviceMemoryDestroy: fn (
+        ) Ctx.MemoryUnsized,
+        memoryDestroy: fn (
             self: *Ctx,
-            memory: Ctx.Memory(null),
+            memory: Ctx.MemoryUnsized,
         ) void,
 
         combinedPipelineDestroy: fn (

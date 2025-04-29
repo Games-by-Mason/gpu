@@ -185,7 +185,7 @@ pub inline fn getBackendConst(self: *const @This(), T: type) *const T {
 
 pub fn DedicatedBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .buf = kind }),
+        memory: MemoryUnsized,
         buf: Buf(kind),
 
         pub const InitOptions = struct {
@@ -229,7 +229,7 @@ pub fn DedicatedBuf(kind: BufKind) type {
 
 pub fn DedicatedReadbackBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .buf = kind }),
+        memory: MemoryUnsized,
         buf: Buf(kind),
         data: []const u8,
 
@@ -283,7 +283,7 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
 
 pub fn DedicatedUploadBuf(kind: BufKind) type {
     return struct {
-        memory: Memory(.{ .buf = kind }),
+        memory: MemoryUnsized,
         buf: Buf(kind),
         data: []volatile anyopaque,
 
@@ -842,10 +842,7 @@ pub fn startFrame(self: *@This()) void {
 
 pub const ImageResultUntyped = struct {
     image: Image(.{}),
-    dedicated: ?struct {
-        memory: Memory(.{ .image = .{} }),
-        size: u64,
-    },
+    dedicated: ?Memory(null),
 };
 
 pub fn Image(kind: ImageKind) type {
@@ -983,27 +980,38 @@ pub fn Image(kind: ImageKind) type {
 
         pub const InitResult = struct {
             image: Image(kind),
-            dedicated_memory: ?Memory(.{ .image = kind }),
+            dedicated_memory: ?MemoryUnsized,
         };
 
         pub const AllocOptions = union(enum) {
+            /// Let the driver decide whether to bump allocate the image into the given buffer,
+            /// updating offset to reflect the allocation, or to create a dedicated allocation. Use
+            /// this approach unless you have a really good reason not to.
             auto: struct {
-                offset: *u64,
                 memory: Memory(.{ .image = kind }),
+                offset: *u64,
             },
+            /// Creates a dedicated allocation for this image.
             dedicated: void,
-            place: MemoryViewUnsized(.{ .image = kind }),
+            /// Place the image beginning at the start of the given memory view. The caller is
+            /// responsible for ensuring proper alignment, not overrunning the buffer, and checking
+            /// that this image does not require a dedicated allocation on the current hardware.
+            place: struct {
+                memory: Memory(.{ .image = kind }),
+                offset: u64,
+            },
 
             fn asUntyped(self: @This()) Image(.{}).AllocOptions {
                 return switch (self) {
                     .auto => |auto| .{ .auto = .{
-                        .offset = auto.offset,
                         .memory = auto.memory.as(.{ .image = .{} }),
+                        .offset = auto.offset,
                     } },
                     .dedicated => .dedicated,
-                    .place => |place| .{
-                        .place = place.as(.{ .image = .{} }),
-                    },
+                    .place => |place| .{ .place = .{
+                        .memory = place.memory.as(.{ .image = .{} }),
+                        .offset = place.offset,
+                    } },
                 };
             }
         };
@@ -1024,13 +1032,13 @@ pub fn Image(kind: ImageKind) type {
             );
             if (result.dedicated) |dedicated| {
                 tracy.alloc(.{
-                    .ptr = @ptrFromInt(@intFromEnum(dedicated.memory)),
+                    .ptr = @ptrFromInt(@intFromEnum(dedicated.unsized)),
                     .size = dedicated.size,
                     .pool_name = tracy_gpu_pool,
                 });
                 return .{
                     .image = @enumFromInt(@intFromEnum(result.image)),
-                    .dedicated_memory = @enumFromInt(@intFromEnum(dedicated.memory)),
+                    .dedicated_memory = @enumFromInt(@intFromEnum(dedicated.unsized)),
                 };
             } else {
                 return .{
@@ -1275,10 +1283,30 @@ pub const ImageView = enum(u64) {
     }
 };
 
-pub fn Memory(k: ?MemoryKind) type {
-    return enum(u64) {
-        const Self = @This();
+pub const MemoryUnsized = enum(u64) {
+    _,
 
+    pub fn deinit(self: @This(), gx: *Ctx) void {
+        tracy.free(.{
+            .ptr = @ptrFromInt(@intFromEnum(self)),
+            .pool_name = tracy_gpu_pool,
+        });
+        Backend.memoryDestroy(gx, self);
+    }
+
+    pub inline fn fromBackendType(value: Backend.Memory) @This() {
+        comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(value));
+    }
+
+    pub inline fn asBackendType(self: @This()) Backend.Memory {
+        comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(self));
+    }
+};
+
+pub fn Memory(k: ?MemoryKind) type {
+    return struct {
         pub const kind = k;
 
         pub const InitNoFormatOptions = struct {
@@ -1299,6 +1327,9 @@ pub fn Memory(k: ?MemoryKind) type {
                 .depth_stencil => InitDepthStencilFormatOptions,
             } else @compileError("missing image format"),
         } else @compileError("missing usage");
+
+        unsized: MemoryUnsized,
+        size: u64,
 
         pub inline fn init(gx: *Ctx, options: @This().InitOptions) @This() {
             comptime assert(kind != null);
@@ -1340,36 +1371,26 @@ pub fn Memory(k: ?MemoryKind) type {
                 .size = options.size,
                 .pool_name = tracy_gpu_pool,
             });
-            return @enumFromInt(@intFromEnum(untyped));
+            return .{
+                .unsized = @enumFromInt(@intFromEnum(untyped)),
+                .size = options.size,
+            };
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            tracy.free(.{
-                .ptr = @ptrFromInt(@intFromEnum(self)),
-                .pool_name = tracy_gpu_pool,
-            });
-            Backend.deviceMemoryDestroy(gx, self.as(null));
+            self.unsized.deinit(gx);
         }
 
         pub inline fn as(
-            self: Self,
+            self: @This(),
             comptime result_kind: ?MemoryKind,
         ) Memory(result_kind) {
             MemoryKind.checkCast(kind, result_kind);
-            return @enumFromInt(@intFromEnum(self));
+            return .{
+                .unsized = self.unsized,
+                .size = self.size,
+            };
         }
-
-        pub inline fn fromBackendType(value: Backend.Memory) @This() {
-            comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(value));
-        }
-
-        pub inline fn asBackendType(self: @This()) Backend.Memory {
-            comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(self));
-        }
-
-        _,
     };
 }
 
@@ -1396,7 +1417,7 @@ pub const MemoryKind = union(enum) {
 
 pub fn MemoryView(kind: MemoryKind) type {
     return struct {
-        memory: Memory(kind),
+        memory: MemoryUnsized(kind),
         offset: u64,
         size: u64,
 
@@ -1416,7 +1437,7 @@ pub fn MemoryView(kind: MemoryKind) type {
 
 pub fn MemoryViewUnsized(kind: ?MemoryKind) type {
     return struct {
-        memory: Memory(kind),
+        memory: MemoryUnsized(kind),
         offset: u64,
 
         pub inline fn as(
