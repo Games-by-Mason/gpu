@@ -29,6 +29,14 @@ pub const MemoryRequirements = struct {
     size: u64,
     alignment: u64,
     dedicated_allocation: DedicatedAllocationAffinity,
+
+    /// Bumps the given offset by these memory requirements. If a dedicated allocation is preferred
+    /// or required, the offset is left unchanged.
+    pub fn bump(self: @This(), offset: *u64) void {
+        if (self.dedicated_allocation != .discouraged) return;
+        offset.* = std.mem.alignForward(u64, offset.*, self.alignment);
+        offset.* += self.size;
+    }
 };
 
 pub const DebugName = struct {

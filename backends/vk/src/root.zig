@@ -1720,7 +1720,7 @@ pub fn imageMemoryRequirements(
         .p_create_info = &imageOptionsToVk(options),
         .plane_aspect = .{},
     }, &reqs2);
-    const reqs = reqs2.reqs;
+    const reqs = reqs2.memory_requirements;
     return .{
         .size = reqs.size,
         .alignment = reqs.alignment,
