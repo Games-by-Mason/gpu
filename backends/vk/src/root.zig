@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const math = std.math;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -106,17 +107,78 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     var layers: std.ArrayListUnmanaged([*:0]const u8) = .{};
     defer layers.deinit(gpa);
 
-    var instance_extensions: std.ArrayListUnmanaged([*:0]const u8) = .{};
-    defer instance_extensions.deinit(gpa);
-    instance_extensions.appendSlice(gpa, options.backend.instance_extensions) catch @panic("OOM");
+    var instance_exts: std.ArrayListUnmanaged([*:0]const u8) = .{};
+    defer instance_exts.deinit(gpa);
+    instance_exts.appendSlice(gpa, options.backend.instance_extensions) catch @panic("OOM");
 
-    if (options.validation) {
+    const dbg_messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
+        .message_severity = .{
+            .verbose_bit_ext = true,
+            .warning_bit_ext = true,
+            .error_bit_ext = true,
+        },
+        .message_type = .{
+            .general_bit_ext = true,
+            .validation_bit_ext = true,
+            .performance_bit_ext = true,
+        },
+        .pfn_user_callback = &vkDebugCallback,
+    };
+
+    const validation_features: vk.ValidationFeaturesEXT = .{
+        .enabled_validation_feature_count = enabled_validation_features.len,
+        .p_enabled_validation_features = &enabled_validation_features,
+        .p_next = &dbg_messenger_info,
+    };
+
+    const val_chain = if (options.validation) b: {
+        // Check the the validation layers
+        const val_layer_name = "VK_LAYER_KHRONOS_validation";
+        const supported_layers = base_wrapper.enumerateInstanceLayerPropertiesAlloc(gpa)
+            catch |err| @panic(@errorName(err));
+        defer gpa.free(supported_layers);
+        const layer_props = for (supported_layers) |props| {
+            const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.layer_name)));
+            if (std.mem.eql(u8, val_layer_name, curr_name)) break props;
+        } else {
+            log.warn("{s}: requested but not found, validaton disabled", .{val_layer_name});
+            break :b null;
+        };
+
+        // Check for the debug extension
+        const dbg_ext_name = vk.extensions.ext_debug_utils.name;
+        const supported_instance_exts = base_wrapper.enumerateInstanceExtensionPropertiesAlloc(
+            null,
+            gpa,
+        ) catch |err| @panic(@errorName(err));
+        defer gpa.free(supported_instance_exts);
+        const dbg_ext_props = for (supported_instance_exts) |props| {
+            const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.extension_name)));
+            if (std.mem.eql(u8, dbg_ext_name, curr_name)) break props;
+        } else {
+            log.warn("{s}: requested but not found, validation disabled", .{dbg_ext_name});
+            break :b null;
+        };
+
+        // Set up the layer and debug extension
+        const dbg_layer_version: vk.Version = @bitCast(layer_props.spec_version);
+        log.info("{s}: v{}.{}.{} (variant {}, impl {})", .{
+            val_layer_name,
+            dbg_layer_version.major,
+            dbg_layer_version.minor,
+            dbg_layer_version.patch,
+            dbg_layer_version.variant,
+            layer_props.implementation_version,
+        });
+        log.info("{s}: v{}", .{dbg_ext_name, dbg_ext_props.spec_version});
         layers.append(gpa, "VK_LAYER_KHRONOS_validation") catch @panic("OOM");
-        instance_extensions.append(gpa, vk.extensions.ext_debug_utils.name) catch @panic("OOM");
-    }
+        instance_exts.append(gpa, vk.extensions.ext_debug_utils.name) catch @panic("OOM");
 
-    log.info("Instance Extensions: {s}", .{instance_extensions.items});
-    log.info("Layers: {s}", .{layers.items});
+        break :b &validation_features;
+    } else null;
+
+    log.debug("Required Instance Extensions: {s}", .{instance_exts.items});
+    log.debug("Required Layers: {s}", .{layers.items});
     ext_zone.end();
 
     const inst_handle_zone = tracy.Zone.begin(.{ .name = "create instance handle", .src = @src() });
@@ -140,9 +202,9 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         },
         .enabled_layer_count = math.cast(u32, layers.items.len) orelse @panic("overflow"),
         .pp_enabled_layer_names = layers.items.ptr,
-        .enabled_extension_count = math.cast(u32, instance_extensions.items.len) orelse @panic("overflow"),
-        .pp_enabled_extension_names = instance_extensions.items.ptr,
-        .p_next = if (options.validation) &validation_features else null,
+        .enabled_extension_count = math.cast(u32, instance_exts.items.len) orelse @panic("overflow"),
+        .pp_enabled_extension_names = instance_exts.items.ptr,
+        .p_next = val_chain,
     }, null) catch |err| @panic(@errorName(err));
     inst_handle_zone.end();
 
@@ -156,8 +218,8 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     instance_wrapper_zone.end();
 
     const debug_messenger_zone = tracy.Zone.begin(.{ .name = "create debug messenger", .src = @src() });
-    const debug_messenger = if (options.validation) instance_proxy.createDebugUtilsMessengerEXT(
-        &create_debug_messenger_info,
+    const debug_messenger = if (val_chain != null) instance_proxy.createDebugUtilsMessengerEXT(
+        &dbg_messenger_info,
         null,
     ) catch |err| @panic(@errorName(err)) else .null_handle;
     debug_messenger_zone.end();
@@ -183,7 +245,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     if (options.timestamp_queries) {
         required_device_extensions.append(gpa, vk.extensions.khr_calibrated_timestamps.name) catch @panic("OOM");
     }
-    log.info("Device Extensions: {s}", .{required_device_extensions.items});
+    log.debug("Required Device Extensions: {s}", .{required_device_extensions.items});
 
     log.info("All Devices:", .{});
     for (physical_devices, 0..) |device, i| {
@@ -465,7 +527,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         best_physical_device,
         surface,
         .null_handle,
-        options.validation,
+        debug_messenger,
     );
 
     const command_pools_zone = tracy.Zone.begin(.{ .name = "create command pools", .src = @src() });
@@ -475,7 +537,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             .flags = .{ .transient_bit = true },
             .queue_family_index = best_physical_device.queue_family_index,
         }, null) catch |err| @panic(@errorName(err));
-        setName(device, pool.*, .{ .str = "Graphics", .index = i }, options.validation);
+        setName(debug_messenger, device, pool.*, .{ .str = "Graphics", .index = i });
     }
     command_pools_zone.end();
 
@@ -483,16 +545,16 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     var image_availables: [global_options.max_frames_in_flight]vk.Semaphore = undefined;
     for (0..global_options.max_frames_in_flight) |i| {
         image_availables[i] = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
-        setName(device, image_availables[i], .{ .str = "Image Available", .index = i }, options.validation);
+        setName(debug_messenger, device, image_availables[i], .{ .str = "Image Available", .index = i });
     }
 
     var ready_for_present: [global_options.max_frames_in_flight]vk.Semaphore = undefined;
     for (&ready_for_present, 0..) |*semaphore, frame| {
         semaphore.* = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
-        setName(device, semaphore.*, .{
+        setName(debug_messenger, device, semaphore.*, .{
             .str = "Ready For Present",
             .index = frame,
-        }, options.validation);
+        });
     }
 
     var cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence = undefined;
@@ -501,10 +563,10 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             .p_next = null,
             .flags = .{ .signaled_bit = true },
         }, null) catch |err| @panic(@errorName((err)));
-        setName(device, fence.*, .{
+        setName(debug_messenger, device, fence.*, .{
             .str = "Command Pool Fence",
             .index = frame,
-        }, options.validation);
+        });
     }
     sync_primitives_zone.end();
 
@@ -518,13 +580,13 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
                 .query_type = .timestamp,
                 .query_count = Ctx.Zone.TracyQueryId.cap,
             }, null) catch |err| @panic(@errorName(err));
-            setName(device, pool.*, .{ .str = "Tracy", .index = i }, options.validation);
+            setName(debug_messenger, device, pool.*, .{ .str = "Tracy", .index = i });
             device.resetQueryPool(pool.*, 0, Ctx.Zone.TracyQueryId.cap);
         }
     }
 
     const queue = device.getDeviceQueue(best_physical_device.queue_family_index, 0);
-    setName(device, queue, .{ .str = graphics_queue_name }, options.validation);
+    setName(debug_messenger, device, queue, .{ .str = graphics_queue_name });
 
     return .{
         .surface = surface,
@@ -605,7 +667,7 @@ pub fn dedicatedBufCreate(
         .sharing_mode = .exclusive,
         .flags = .{},
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, buffer, name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, buffer, name);
 
     // Allocate memory for the buffer
     const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
@@ -628,7 +690,7 @@ pub fn dedicatedBufCreate(
         .memory_type_index = memory_type_index,
         .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, memory, name);
 
     // Bind the buffer to the memory
     self.backend.device.bindBufferMemory(
@@ -662,7 +724,7 @@ pub fn dedicatedUploadBufCreate(
         .sharing_mode = .exclusive,
         .flags = .{},
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, buffer, name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, buffer, name);
 
     // Create the memory
     const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
@@ -685,7 +747,7 @@ pub fn dedicatedUploadBufCreate(
         .memory_type_index = memory_type_index,
         .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, memory, name);
 
     // Bind the buffer to the memory
     self.backend.device.bindBufferMemory(
@@ -729,7 +791,7 @@ pub fn dedicatedReadbackBufCreate(
         .sharing_mode = .exclusive,
         .flags = .{},
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, buffer, name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, buffer, name);
 
     // Create the memory
     const reqs = self.backend.device.getBufferMemoryRequirements(buffer);
@@ -752,7 +814,7 @@ pub fn dedicatedReadbackBufCreate(
         .memory_type_index = memory_type_index,
         .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, memory, name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, memory, name);
 
     // Bind the buffer to the memory
     self.backend.device.bindBufferMemory(
@@ -828,14 +890,14 @@ pub fn combinedPipelineLayoutCreate(
         .binding_count = @intCast(descriptors.len),
         .p_bindings = &descriptors.buffer,
     }, null) catch @panic("OOM");
-    setName(self.backend.device, descriptor_set_layout, options.name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, descriptor_set_layout, options.name);
 
     // Create the pipeline layout
     const pipeline_layout = self.backend.device.createPipelineLayout(&.{
         .set_layout_count = 1,
         .p_set_layouts = &.{descriptor_set_layout},
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, pipeline_layout, options.name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, pipeline_layout, options.name);
 
     return .{
         .descriptor_set = .fromBackendType(descriptor_set_layout),
@@ -907,9 +969,9 @@ pub fn combinedCmdBufCreate(
         .command_buffer_count = cbs.len,
     }, &cbs) catch |err| @panic(@errorName(err));
     const cb = cbs[0];
-    setName(self.backend.device, cb, .{
+    setName(self.backend.debug_messenger, self.backend.device, cb, .{
         .str = options.loc.name orelse options.loc.function,
-    }, self.backend.debug_messenger != .null_handle);
+    });
 
     self.backend.device.beginCommandBuffer(cb, &.{
         .flags = .{ .one_time_submit_bit = true },
@@ -1146,7 +1208,7 @@ pub fn descriptorPoolCreate(
             .flags = .{},
             .max_sets = @intCast(options.cmds.len),
         }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.device, descriptor_pool, options.name, self.backend.debug_messenger != .null_handle);
+        setName(self.backend.debug_messenger, self.backend.device, descriptor_pool, options.name);
 
         break :b descriptor_pool;
     };
@@ -1170,7 +1232,7 @@ pub fn descriptorPoolCreate(
         // Write the results
         for (options.cmds, results[0..options.cmds.len]) |cmd, result| {
             cmd.result.* = .fromBackendType(result);
-            setName(self.backend.device, result, cmd.name, self.backend.debug_messenger != .null_handle);
+            setName(self.backend.debug_messenger, self.backend.device, result, cmd.name);
         }
     }
 
@@ -1320,9 +1382,9 @@ pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
             .command_buffer_count = cbs.len,
         }, &cbs) catch |err| @panic(@errorName(err));
         const cb = cbs[0];
-        setName(self.backend.device, cb, .{
+        setName(self.backend.debug_messenger, self.backend.device, cb, .{
             .str = "Prepare Swapchain Image",
-        }, self.backend.debug_messenger != .null_handle);
+        });
 
         {
             self.backend.device.beginCommandBuffer(cb, &.{
@@ -1464,9 +1526,9 @@ pub fn frameStart(self: *Ctx) void {
                 .command_buffer_count = cbs.len,
             }, &cbs) catch |err| @panic(@errorName(err));
             const cb = cbs[0];
-            setName(self.backend.device, cb, .{
+            setName(self.backend.debug_messenger, self.backend.device, cb, .{
                 .str = "Clear Tracy Query Pool",
-            }, self.backend.debug_messenger != .null_handle);
+            });
 
             {
                 self.backend.device.beginCommandBuffer(cb, &.{
@@ -1608,7 +1670,7 @@ fn allocImage(
         .memory_type_index = memory_type_index,
         .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, memory, options.name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, memory, options.name);
 
     // Bind the image to the memory
     self.backend.device.bindImageMemory(
@@ -1647,7 +1709,7 @@ pub fn imageCreate(
 ) Ctx.ImageResultUntyped {
     // Create the image
     const image = self.backend.device.createImage(&imageOptionsToVk(image_options), null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, image, image_options.name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, image, image_options.name);
 
     switch (alloc_options) {
         .auto => |auto| {
@@ -1763,7 +1825,7 @@ pub fn imageViewCreate(
             .layer_count = options.layer_count,
         },
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, image_view, options.name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, image_view, options.name);
     return .fromBackendType(image_view);
 }
 
@@ -1893,7 +1955,7 @@ pub fn memoryCreate(
         .allocation_size = options.size,
         .memory_type_index = memory_type_index,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, memory, options.name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, memory, options.name);
     return .fromBackendType(memory);
 }
 
@@ -2044,7 +2106,7 @@ pub fn combinedPipelinesCreate(
             .code_size = cmd.stages.vertex.spv.len * @sizeOf(u32),
             .p_code = cmd.stages.vertex.spv.ptr,
         }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.device, vertex_module, cmd.stages.vertex.name, self.backend.debug_messenger != .null_handle);
+        setName(self.backend.debug_messenger, self.backend.device, vertex_module, cmd.stages.vertex.name);
 
         shader_stages_buf.appendAssumeCapacity(.{
             .stage = .{ .vertex_bit = true },
@@ -2056,7 +2118,7 @@ pub fn combinedPipelinesCreate(
             .code_size = cmd.stages.fragment.spv.len * @sizeOf(u32),
             .p_code = cmd.stages.fragment.spv.ptr,
         }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.device, fragment_module, cmd.stages.fragment.name, self.backend.debug_messenger != .null_handle);
+        setName(self.backend.debug_messenger, self.backend.device, fragment_module, cmd.stages.fragment.name);
 
         shader_stages_buf.appendAssumeCapacity(.{
             .stage = .{ .fragment_bit = true },
@@ -2099,7 +2161,7 @@ pub fn combinedPipelinesCreate(
         else => |err| @panic(@tagName(err)),
     }
     for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
-        setName(self.backend.device, pipeline, cmd.pipeline_name, self.backend.debug_messenger != .null_handle);
+        setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.pipeline_name);
         cmd.result.* = .{
             .layout = cmd.layout.pipeline,
             .pipeline = .fromBackendType(pipeline),
@@ -2119,9 +2181,9 @@ pub fn present(self: *Ctx) u64 {
             .command_buffer_count = cbs.len,
         }, &cbs) catch |err| @panic(@errorName(err));
         const cb = cbs[0];
-        setName(self.backend.device, cb, .{
+        setName(self.backend.debug_messenger, self.backend.device, cb, .{
             .str = "Finalize Swapchain Image",
-        }, self.backend.debug_messenger != .null_handle);
+        });
 
         {
             const submit_zone = Zone.begin(.{ .name = "prepare", .src = @src() });
@@ -2278,7 +2340,7 @@ pub fn samplerCreate(
         },
         .unnormalized_coordinates = @intFromBool(options.unnormalized_coordinates),
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.device, sampler, options.name, self.backend.debug_messenger != .null_handle);
+    setName(self.backend.debug_messenger, self.backend.device, sampler, options.name);
     return .fromBackendType(sampler);
 }
 
@@ -2303,7 +2365,10 @@ pub fn timestampCalibrationImpl(
     const max_deviation = device.getCalibratedTimestampsKHR(
         2,
         &.{
-            .{ .time_domain = .clock_monotonic_raw_khr },
+            .{ .time_domain = switch (builtin.os.tag) {
+                .windows => .query_performance_counter_ext,
+                else => .clock_monotonic_raw_khr,
+            } },
             .{ .time_domain = .device_khr },
         },
         &calibration_results,
@@ -2594,7 +2659,7 @@ const Swapchain = struct {
         physical_device: PhysicalDevice,
         surface: vk.SurfaceKHR,
         old_swapchain: vk.SwapchainKHR,
-        validation: bool,
+        debug_messenger: vk.DebugUtilsMessengerEXT,
     ) @This() {
         const zone = tracy.Zone.begin(.{ .name = "swapchain init", .src = @src() });
         defer zone.end();
@@ -2644,7 +2709,7 @@ const Swapchain = struct {
         };
 
         const swapchain = device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
-        setName(device, swapchain, .{ .str = "Main" }, validation);
+        setName(debug_messenger, device, swapchain, .{ .str = "Main" });
         var images: std.BoundedArray(vk.Image, max_swapchain_depth) = .{};
         var image_count: u32 = max_swapchain_depth;
         const get_images_result = device.getSwapchainImagesKHR(
@@ -2656,7 +2721,7 @@ const Swapchain = struct {
         images.len = image_count;
         var views: std.BoundedArray(vk.ImageView, max_swapchain_depth) = .{};
         for (images.constSlice(), 0..) |image, i| {
-            setName(device, image, .{ .str = "Swapchain", .index = i }, validation);
+            setName(debug_messenger, device, image, .{ .str = "Swapchain", .index = i });
             const create_info: vk.ImageViewCreateInfo = .{
                 .image = image,
                 .view_type = .@"2d",
@@ -2676,7 +2741,7 @@ const Swapchain = struct {
                 },
             };
             const view = device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
-            setName(device, view, .{ .str = "Swapchain", .index = i }, validation);
+            setName(debug_messenger,device, view, .{ .str = "Swapchain", .index = i });
             views.appendAssumeCapacity(view);
         }
 
@@ -2721,7 +2786,7 @@ const Swapchain = struct {
             gx.backend.physical_device,
             gx.backend.surface,
             retired,
-            gx.backend.debug_messenger != .null_handle,
+            gx.backend.debug_messenger,
         );
         gx.backend.device.destroySwapchainKHR(retired, null);
     }
@@ -2759,26 +2824,6 @@ const enabled_validation_features = [_]vk.ValidationFeatureEnableEXT{
     // .gpu_assisted_reserve_binding_slot_ext,
     .best_practices_ext,
     .synchronization_validation_ext,
-};
-
-const validation_features: vk.ValidationFeaturesEXT = .{
-    .enabled_validation_feature_count = enabled_validation_features.len,
-    .p_enabled_validation_features = &enabled_validation_features,
-    .p_next = &create_debug_messenger_info,
-};
-
-const create_debug_messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
-    .message_severity = .{
-        .verbose_bit_ext = true,
-        .warning_bit_ext = true,
-        .error_bit_ext = true,
-    },
-    .message_type = .{
-        .general_bit_ext = true,
-        .validation_bit_ext = true,
-        .performance_bit_ext = true,
-    },
-    .pfn_user_callback = &vkDebugCallback,
 };
 
 const FormatDebugMessageData = struct {
@@ -2873,9 +2918,12 @@ fn vkDebugCallback(
         break :b .err;
     };
 
-    // Ignore or reduce the severity of some AMD warnings
+    // Ignore or reduce the severity of some warnings
     if (level == .warn) {
         if (data) |d| switch (d.*.message_id_number) {
+            // Ignore `BestPractices-vkCreateDevice-physical-device-features-not-retrieved`, this is
+            // a false positive--we're using `vkGetPhysicalDeviceFeatures2`.
+            584333584 => return vk.FALSE,
             // Ignore `BestPractices-vkBindBufferMemory-small-dedicated-allocation` and
             // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering strategy is
             // designed around this but we often have so little total memory that we trip it anyway!
@@ -2922,12 +2970,12 @@ fn vkDebugCallback(
 }
 
 inline fn setName(
+    debug_messenger: vk.DebugUtilsMessengerEXT,
     device: vk.DeviceProxy,
     object: anytype,
     debug_name: Ctx.DebugName,
-    validation: bool,
 ) void {
-    if (!validation) return;
+    if (debug_messenger == .null_handle) return;
 
     const type_name, const object_type = switch (@TypeOf(object)) {
         vk.Buffer => .{ "Buffer", .buffer },
