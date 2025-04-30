@@ -1410,9 +1410,7 @@ pub fn frameStart(self: *Ctx) void {
         .name = "reset cmd pool",
     });
     const cmd_pool = self.backend.cmd_pools[self.frame];
-    log.err("try to reset {}", .{self.frame});
     self.backend.device.resetCommandPool(cmd_pool, .{}) catch |err| @panic(@errorName(err));
-    log.err("done", .{});
     reset_cmd_pool_zone.end();
 
     if (tracy.enabled and self.timestamp_queries) {
@@ -2756,8 +2754,9 @@ const TimestampQueries = struct {
 };
 
 const enabled_validation_features = [_]vk.ValidationFeatureEnableEXT{
-    .gpu_assisted_ext,
-    .gpu_assisted_reserve_binding_slot_ext,
+    // See https://github.com/Games-by-Mason/gpu/issues/3
+    // .gpu_assisted_ext,
+    // .gpu_assisted_reserve_binding_slot_ext,
     .best_practices_ext,
     .synchronization_validation_ext,
 };
