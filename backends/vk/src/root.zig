@@ -111,7 +111,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     defer instance_exts.deinit(gpa);
     instance_exts.appendSlice(gpa, options.backend.instance_extensions) catch @panic("OOM");
 
-    const dbg_messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
+    var dbg_messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
         .message_severity = .{
             .verbose_bit_ext = true,
             .warning_bit_ext = true,
@@ -125,57 +125,57 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .pfn_user_callback = &vkDebugCallback,
     };
 
-    const validation_features: vk.ValidationFeaturesEXT = .{
+    var validation_features: vk.ValidationFeaturesEXT = .{
         .enabled_validation_feature_count = enabled_validation_features.len,
         .p_enabled_validation_features = &enabled_validation_features,
-        .p_next = &dbg_messenger_info,
     };
 
-    const val_chain = if (options.validation) b: {
-        // Check the the validation layers
-        const val_layer_name = "VK_LAYER_KHRONOS_validation";
-        const supported_layers = base_wrapper.enumerateInstanceLayerPropertiesAlloc(gpa)
-            catch |err| @panic(@errorName(err));
-        defer gpa.free(supported_layers);
-        const layer_props = for (supported_layers) |props| {
-            const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.layer_name)));
-            if (std.mem.eql(u8, val_layer_name, curr_name)) break props;
-        } else {
-            log.warn("{s}: requested but not found, validaton disabled", .{val_layer_name});
-            break :b null;
-        };
+    var create_instance_chain: ?*vk.BaseInStructure = null;
 
-        // Check for the debug extension
+    if (options.validation) {
+        // Try to enable the validation layers
+        const val_layer_name = "VK_LAYER_KHRONOS_validation";
+        const supported_layers = base_wrapper.enumerateInstanceLayerPropertiesAlloc(gpa) catch |err| @panic(@errorName(err));
+        defer gpa.free(supported_layers);
+        for (supported_layers) |props| {
+            const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.layer_name)));
+            if (std.mem.eql(u8, val_layer_name, curr_name)) {
+                appendNext(&create_instance_chain, @ptrCast(&validation_features));
+                const dbg_layer_version: vk.Version = @bitCast(props.spec_version);
+                log.info("{s}: v{}.{}.{} (variant {}, impl {})", .{
+                    val_layer_name,
+                    dbg_layer_version.major,
+                    dbg_layer_version.minor,
+                    dbg_layer_version.patch,
+                    dbg_layer_version.variant,
+                    props.implementation_version,
+                });
+                layers.append(gpa, "VK_LAYER_KHRONOS_validation") catch @panic("OOM");
+                break;
+            }
+        } else log.warn("{s}: requested but not found, validation disabled", .{val_layer_name});
+    }
+    // Try to enable the debug extension
+    const debug = if (options.validation) b: {
         const dbg_ext_name = vk.extensions.ext_debug_utils.name;
         const supported_instance_exts = base_wrapper.enumerateInstanceExtensionPropertiesAlloc(
             null,
             gpa,
         ) catch |err| @panic(@errorName(err));
         defer gpa.free(supported_instance_exts);
-        const dbg_ext_props = for (supported_instance_exts) |props| {
+        for (supported_instance_exts) |props| {
             const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.extension_name)));
-            if (std.mem.eql(u8, dbg_ext_name, curr_name)) break props;
+            if (std.mem.eql(u8, dbg_ext_name, curr_name)) {
+                log.info("{s}: v{}", .{ dbg_ext_name, props.spec_version });
+                instance_exts.append(gpa, vk.extensions.ext_debug_utils.name) catch @panic("OOM");
+                appendNext(&create_instance_chain, @ptrCast(&dbg_messenger_info));
+                break :b true;
+            }
         } else {
-            log.warn("{s}: requested but not found, validation disabled", .{dbg_ext_name});
-            break :b null;
-        };
-
-        // Set up the layer and debug extension
-        const dbg_layer_version: vk.Version = @bitCast(layer_props.spec_version);
-        log.info("{s}: v{}.{}.{} (variant {}, impl {})", .{
-            val_layer_name,
-            dbg_layer_version.major,
-            dbg_layer_version.minor,
-            dbg_layer_version.patch,
-            dbg_layer_version.variant,
-            layer_props.implementation_version,
-        });
-        log.info("{s}: v{}", .{dbg_ext_name, dbg_ext_props.spec_version});
-        layers.append(gpa, "VK_LAYER_KHRONOS_validation") catch @panic("OOM");
-        instance_exts.append(gpa, vk.extensions.ext_debug_utils.name) catch @panic("OOM");
-
-        break :b &validation_features;
-    } else null;
+            log.warn("{s}: requested but not found, debug disabled", .{dbg_ext_name});
+            break :b false;
+        }
+    } else false;
 
     log.debug("Required Instance Extensions: {s}", .{instance_exts.items});
     log.debug("Required Layers: {s}", .{layers.items});
@@ -204,7 +204,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .pp_enabled_layer_names = layers.items.ptr,
         .enabled_extension_count = math.cast(u32, instance_exts.items.len) orelse @panic("overflow"),
         .pp_enabled_extension_names = instance_exts.items.ptr,
-        .p_next = val_chain,
+        .p_next = create_instance_chain,
     }, null) catch |err| @panic(@errorName(err));
     inst_handle_zone.end();
 
@@ -218,7 +218,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     instance_wrapper_zone.end();
 
     const debug_messenger_zone = tracy.Zone.begin(.{ .name = "create debug messenger", .src = @src() });
-    const debug_messenger = if (val_chain != null) instance_proxy.createDebugUtilsMessengerEXT(
+    const debug_messenger = if (debug) instance_proxy.createDebugUtilsMessengerEXT(
         &dbg_messenger_info,
         null,
     ) catch |err| @panic(@errorName(err)) else .null_handle;
@@ -2741,7 +2741,7 @@ const Swapchain = struct {
                 },
             };
             const view = device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
-            setName(debug_messenger,device, view, .{ .str = "Swapchain", .index = i });
+            setName(debug_messenger, device, view, .{ .str = "Swapchain", .index = i });
             views.appendAssumeCapacity(view);
         }
 
@@ -3026,4 +3026,10 @@ fn bufToStr(buf: anytype) []const u8 {
         if (c == 0) return buf[0..i];
     }
     return buf;
+}
+
+fn appendNext(head: *?*vk.BaseInStructure, new: *vk.BaseInStructure) void {
+    assert(new.p_next == null);
+    new.p_next = head.*;
+    head.* = new;
 }
