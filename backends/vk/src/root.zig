@@ -135,29 +135,37 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
 
     var create_instance_chain: ?*vk.BaseInStructure = null;
 
-    if (options.debug.gte(.validate)) {
-        // Try to enable the validation layers
+    // Set requested layers, and log all in case any are implicit and end up causing problems
+    {
         const val_layer_name = "VK_LAYER_KHRONOS_validation";
         const supported_layers = base_wrapper.enumerateInstanceLayerPropertiesAlloc(gpa) catch |err| @panic(@errorName(err));
+        var validation_layer_missing = options.debug.gte(.validate);
         defer gpa.free(supported_layers);
+
+        log.debug("Supported Layers:", .{});
         for (supported_layers) |props| {
             const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.layer_name)));
-            if (std.mem.eql(u8, val_layer_name, curr_name)) {
+            const version: vk.Version = @bitCast(props.spec_version);
+            log.debug("  {s} v{}.{}.{} (variant {}, impl {})", .{
+                curr_name,
+                version.major,
+                version.minor,
+                version.patch,
+                version.variant,
+                props.implementation_version,
+            });
+
+            if (options.debug.gte(.validate) and std.mem.eql(u8, curr_name, val_layer_name)) {
                 appendNext(&create_instance_chain, @ptrCast(&instance_validation_features));
-                const dbg_layer_version: vk.Version = @bitCast(props.spec_version);
-                log.info("{s}: v{}.{}.{} (variant {}, impl {})", .{
-                    val_layer_name,
-                    dbg_layer_version.major,
-                    dbg_layer_version.minor,
-                    dbg_layer_version.patch,
-                    dbg_layer_version.variant,
-                    props.implementation_version,
-                });
-                layers.append(gpa, "VK_LAYER_KHRONOS_validation") catch @panic("OOM");
-                break;
+                layers.append(gpa, val_layer_name) catch @panic("OOM");
+                validation_layer_missing = false;
             }
-        } else log.warn("{s}: requested but not found, validation disabled", .{val_layer_name});
+        }
+        if (validation_layer_missing) {
+            log.warn("{s}: requested but not found, validation disabled", .{val_layer_name});
+        }
     }
+
     // Try to enable the debug extension
     const debug = if (options.debug.gte(.output)) b: {
         const dbg_ext_name = vk.extensions.ext_debug_utils.name;
