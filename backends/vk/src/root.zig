@@ -111,7 +111,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     defer instance_exts.deinit(gpa);
     instance_exts.appendSlice(gpa, options.backend.instance_extensions) catch @panic("OOM");
 
-    var dbg_messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
+    const dbg_messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
         .message_severity = .{
             .verbose_bit_ext = true,
             .warning_bit_ext = true,
@@ -125,7 +125,10 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .pfn_user_callback = &vkDebugCallback,
     };
 
-    var validation_features: vk.ValidationFeaturesEXT = .{
+    // Mutable because this copy may be part of a p_next chain
+    var instance_dbg_messenger_info = dbg_messenger_info;
+
+    var instance_validation_features: vk.ValidationFeaturesEXT = .{
         .enabled_validation_feature_count = enabled_validation_features.len,
         .p_enabled_validation_features = &enabled_validation_features,
     };
@@ -140,7 +143,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         for (supported_layers) |props| {
             const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.layer_name)));
             if (std.mem.eql(u8, val_layer_name, curr_name)) {
-                appendNext(&create_instance_chain, @ptrCast(&validation_features));
+                appendNext(&create_instance_chain, @ptrCast(&instance_validation_features));
                 const dbg_layer_version: vk.Version = @bitCast(props.spec_version);
                 log.info("{s}: v{}.{}.{} (variant {}, impl {})", .{
                     val_layer_name,
@@ -168,7 +171,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
             if (std.mem.eql(u8, dbg_ext_name, curr_name)) {
                 log.info("{s}: v{}", .{ dbg_ext_name, props.spec_version });
                 instance_exts.append(gpa, vk.extensions.ext_debug_utils.name) catch @panic("OOM");
-                appendNext(&create_instance_chain, @ptrCast(&dbg_messenger_info));
+                appendNext(&create_instance_chain, @ptrCast(&instance_dbg_messenger_info));
                 break :b true;
             }
         } else {
