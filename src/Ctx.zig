@@ -84,6 +84,24 @@ max_alignment: bool,
 timestamp_queries: bool,
 tracy_queries: [global_options.max_frames_in_flight]u16 = @splat(0),
 
+pub const DebugMode = enum(u8) {
+    /// Enables graphics API validation and debug output. High performance cost.
+    ///
+    /// Will emit warning if not available on host.
+    validate = 2,
+    /// Enables debug output. Minimal to no performance cost, may aid profiling software in
+    /// providing readable output.
+    ///
+    /// Will emit warning if not available on host.
+    output = 1,
+    /// No debugging support.
+    none = 0,
+
+    pub fn gte(lhs: @This(), rhs: @This()) bool {
+        return @intFromEnum(lhs) >= @intFromEnum(rhs);
+    }
+};
+
 pub fn InitOptionsImpl(BackendInitOptions: type) type {
     return struct {
         pub const default_device_type_ranks = b: {
@@ -117,10 +135,7 @@ pub fn InitOptionsImpl(BackendInitOptions: type) type {
         backend: BackendInitOptions,
         device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
         timestamp_queries: bool,
-        validation: bool,
-        // When true, forces storage and uniform buffer alignment to max values. Can be used to
-        // debug alignment related errors, or to force the equivalent conservative alignment on all
-        // platforms.
+        debug: DebugMode = if (builtin.mode == .Debug) .validate else .none,
         max_alignment: bool = false,
     };
 }

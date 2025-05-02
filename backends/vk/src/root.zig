@@ -132,7 +132,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
 
     var create_instance_chain: ?*vk.BaseInStructure = null;
 
-    if (options.validation) {
+    if (options.debug.gte(.validate)) {
         // Try to enable the validation layers
         const val_layer_name = "VK_LAYER_KHRONOS_validation";
         const supported_layers = base_wrapper.enumerateInstanceLayerPropertiesAlloc(gpa) catch |err| @panic(@errorName(err));
@@ -156,7 +156,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         } else log.warn("{s}: requested but not found, validation disabled", .{val_layer_name});
     }
     // Try to enable the debug extension
-    const debug = if (options.validation) b: {
+    const debug = if (options.debug.gte(.output)) b: {
         const dbg_ext_name = vk.extensions.ext_debug_utils.name;
         const supported_instance_exts = base_wrapper.enumerateInstanceExtensionPropertiesAlloc(
             null,
