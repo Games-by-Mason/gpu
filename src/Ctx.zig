@@ -136,6 +136,7 @@ pub fn InitOptionsImpl(BackendInitOptions: type) type {
         device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
         timestamp_queries: bool,
         debug: DebugMode = if (builtin.mode == .Debug) .validate else .none,
+        safe_mode: bool = false,
         max_alignment: bool = false,
     };
 }

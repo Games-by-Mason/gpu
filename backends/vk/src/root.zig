@@ -94,6 +94,11 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         vk_version.variant,
     });
 
+    if (options.safe_mode) {
+        log.info("Safe Mode: {}", .{options.safe_mode});
+        setenv("VK_LOADER_LAYERS_DISABLE", "~implicit~");
+    }
+
     const gpa = options.gpa;
 
     // Load the base dispatch function pointers
@@ -3043,4 +3048,26 @@ fn appendNext(head: *?*vk.BaseInStructure, new: *vk.BaseInStructure) void {
     assert(new.p_next == null);
     new.p_next = head.*;
     head.* = new;
+}
+
+fn setenv(comptime name: [:0]const u8, comptime value: [:0]const u8) void {
+    if (builtin.os.tag == .windows) {
+        if (std.os.windows.kernel32.SetEnvironmentVariableW(
+            std.unicode.utf8ToUtf16LeStringLiteral(name),
+            std.unicode.utf8ToUtf16LeStringLiteral(value),
+        ) != 0) {
+            @panic("SetEnvironmentVariable failed");
+        }
+    } else {
+        const posix = struct {
+            extern "c" fn setenv(
+                name: [*:0]const u8,
+                value: [*:0]const u8,
+                overwrite: c_int,
+            ) callconv(.c) c_int;
+        };
+        if (posix.setenv(name, value, 1) != 0) {
+            @panic("setenv failed");
+        }
+    }
 }

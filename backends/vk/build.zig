@@ -12,6 +12,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Needed for `setenv`
+    if (target.result.os.tag != .windows) {
+        vk_backend.link_libc = true;
+    }
+
     const gpu = b.dependency("gpu", .{
         .target = target,
         .optimize = optimize,
