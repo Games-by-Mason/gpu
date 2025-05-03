@@ -70,10 +70,11 @@ backend: global_options.Backend,
 device: Device,
 
 /// The number of frames that can be in flight at once.
-frames_in_flight: u8,
+frames_in_flight: u4,
 /// The current frame in flight.
 frame: u8 = 0,
 framebuf_size: FramebufSize = .{ 0.0, 0.0 },
+in_frame: bool = false,
 
 combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
 
@@ -130,7 +131,7 @@ pub fn InitOptionsImpl(BackendInitOptions: type) type {
             .minor = 0,
             .patch = 0,
         },
-        frames_in_flight: u8,
+        frames_in_flight: u4,
         framebuf_size: struct { u32, u32 },
         backend: BackendInitOptions,
         device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
@@ -439,6 +440,8 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
 
+            assert(gx.in_frame);
+
             const bindings = gx.cb_bindings[gx.frame].addOne() catch @panic("OOB");
             bindings.* = .{};
 
@@ -461,6 +464,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             comptime assert(kind != null);
             const zone = CpuZone.begin(.{ .src = @src() });
             defer zone.end();
+            assert(gx.in_frame);
             Backend.combinedCmdBufSubmit(gx, self.asUntyped(), kind.?);
         }
 
@@ -610,26 +614,44 @@ pub const DrawCmd = struct {
     descriptor_set: DescSet(null),
 };
 
-/// Presents the rendered image. Some drivers under some circumstances will block here  waiting for
-/// the swapchain image instead of when acquiring it. Returns the number of nanoseconds spent
-/// blocking.
-pub fn present(self: *@This()) u64 {
+pub const EndFrameOptions = struct {
+    /// If true, presents the current image, otherwise ends the frame without presentation.
+    ///
+    /// Some drivers sometimes block here waiting for the swapchain image instead of when acquiring
+    /// it.
+    present: bool = true,
+};
+
+/// Ends the current frame.
+pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
     const zone = CpuZone.begin(.{ .src = @src() });
     defer zone.end();
-    return Backend.present(self);
+    const blocking_zone = CpuZone.begin(.{
+        .src = @src(),
+        .color = global_options.blocking_zone_color,
+    });
+    defer blocking_zone.end();
+    Backend.endFrame(self, options);
+    const Frame = @TypeOf(self.frame);
+    const FramesInFlight = @TypeOf(self.frames_in_flight);
+    comptime assert(std.math.maxInt(FramesInFlight) < std.math.maxInt(Frame));
+    self.frame = (self.frame + 1) % self.frames_in_flight;
+    assert(self.in_frame);
+    self.in_frame = false;
 }
 
 /// Acquires the next swapchain image, blocking until it's available if necessary. Returns the
 /// nanoseconds spent blocking.
 ///
 /// Returns null if the swapchain needed to be recreated, in which case you should drop this frame.
-pub fn acquireNextImage(self: *@This(), framebuf_size: Ctx.FramebufSize) ?ImageView {
+pub fn acquireNextImage(self: *@This(), framebuf_size: Ctx.FramebufSize) ImageView {
     const zone = CpuZone.begin(.{
         .src = @src(),
         .color = global_options.blocking_zone_color,
     });
     defer zone.end();
     assert(framebuf_size[0] != 0 and framebuf_size[0] != 0);
+    assert(self.in_frame);
     self.framebuf_size = framebuf_size;
     return Backend.acquireNextImage(self);
 }
@@ -851,17 +873,17 @@ pub fn updateDescSets(
     Backend.descriptorSetsUpdate(self, max_updates, cmds);
 }
 
-/// Starts a new frame. If this frame in flight's command pool is still in use, blocks until it is
-/// available. Returns the time spent blocking in nanoseconds.
-pub fn startFrame(self: *@This()) void {
+/// Will blocks until the next frame in flight's resources can be reclaimed.
+pub fn beginFrame(self: *@This()) void {
     const zone = CpuZone.begin(.{
         .src = @src(),
         .color = global_options.blocking_zone_color,
     });
     defer zone.end();
-    self.frame = (self.frame + 1) % self.frames_in_flight;
+    assert(!self.in_frame);
+    self.in_frame = true;
     self.cb_bindings[self.frame].clear();
-    Backend.frameStart(self);
+    Backend.beginFrame(self);
     self.tracy_queries[self.frame] = 0;
 }
 

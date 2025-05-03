@@ -113,7 +113,9 @@ pub fn IBackend(Self: type) type {
             updates: []const Ctx.DescUpdateCmd,
         ) void,
 
-        frameStart: fn (self: *Ctx) void,
+        beginFrame: fn (self: *Ctx) void,
+        endFrame: fn (self: *Ctx, options: Ctx.EndFrameOptions) void,
+        acquireNextImage: fn (self: *Ctx) Ctx.ImageView,
 
         getDevice: fn (self: *const Self) Ctx.Device,
 
@@ -157,10 +159,6 @@ pub fn IBackend(Self: type) type {
             comptime max_cmds: u32,
             cmds: []const Ctx.InitCombinedPipelineCmd,
         ) void,
-
-        present: fn (self: *Ctx) u64,
-
-        acquireNextImage: fn (self: *Ctx) ?Ctx.ImageView,
 
         samplerCreate: fn (
             self: *Ctx,

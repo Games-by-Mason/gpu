@@ -161,6 +161,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         defer gpa.free(supported_layers);
 
         log.debug("Supported Layers:", .{});
+        var val_props: ?vk.LayerProperties = null;
         for (supported_layers) |props| {
             const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.layer_name)));
             const version: vk.Version = @bitCast(props.spec_version);
@@ -177,7 +178,19 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
                 appendNext(&create_instance_chain, @ptrCast(&instance_validation_features));
                 layers.append(gpa, val_layer_name) catch @panic("OOM");
                 validation_layer_missing = false;
+                val_props = props;
             }
+        }
+        if (val_props) |vp| {
+            const version: vk.Version = @bitCast(vp.spec_version);
+            log.info("{s} v{}.{}.{} (variant {}, impl {})", .{
+                val_layer_name,
+                version.major,
+                version.minor,
+                version.patch,
+                version.variant,
+                vp.implementation_version,
+            });
         }
         if (validation_layer_missing) {
             log.warn("{s}: requested but not found, validation disabled", .{val_layer_name});
@@ -195,7 +208,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         for (supported_instance_exts) |props| {
             const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.extension_name)));
             if (std.mem.eql(u8, dbg_ext_name, curr_name)) {
-                log.info("{s}: v{}", .{ dbg_ext_name, props.spec_version });
+                log.info("{s} v{}", .{ dbg_ext_name, props.spec_version });
                 instance_exts.append(gpa, vk.extensions.ext_debug_utils.name) catch @panic("OOM");
                 appendNext(&create_instance_chain, @ptrCast(&instance_dbg_messenger_info));
                 break :b true;
@@ -1370,7 +1383,7 @@ pub fn descriptorSetsUpdate(
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
+pub fn acquireNextImage(self: *Ctx) Ctx.ImageView {
     // Acquire the image
     const acquire_result = b: {
         const acquire_zone = Zone.begin(.{
@@ -1378,23 +1391,25 @@ pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
             .name = "acquire next image",
         });
         defer acquire_zone.end();
-        break :b self.backend.device.acquireNextImageKHR(
-            self.backend.swapchain.swapchain,
-            std.math.maxInt(u64),
-            self.backend.image_availables[self.frame],
-            .null_handle,
-        ) catch |err| switch (err) {
-            error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                self.backend.swapchain.recreate(self);
-                return null;
-            },
-            error.OutOfHostMemory,
-            error.OutOfDeviceMemory,
-            error.Unknown,
-            error.SurfaceLostKHR,
-            error.DeviceLost,
-            => @panic(@errorName(err)),
-        };
+        while (true) {
+            break :b self.backend.device.acquireNextImageKHR(
+                self.backend.swapchain.swapchain,
+                std.math.maxInt(u64),
+                self.backend.image_availables[self.frame],
+                .null_handle,
+            ) catch |err| switch (err) {
+                error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
+                    self.backend.swapchain.recreate(self);
+                    continue;
+                },
+                error.OutOfHostMemory,
+                error.OutOfDeviceMemory,
+                error.Unknown,
+                error.SurfaceLostKHR,
+                error.DeviceLost,
+                => @panic(@errorName(err)),
+            };
+        }
     };
     assert(self.backend.image_index == null);
     self.backend.image_index = acquire_result.image_index;
@@ -1477,7 +1492,7 @@ pub fn acquireNextImage(self: *Ctx) ?Ctx.ImageView {
     return .fromBackendType(self.backend.swapchain.views.get(acquire_result.image_index));
 }
 
-pub fn frameStart(self: *Ctx) void {
+pub fn beginFrame(self: *Ctx) void {
     self.backend.image_index = null;
 
     {
@@ -2198,7 +2213,28 @@ pub fn combinedPipelinesCreate(
     }
 }
 
-pub fn present(self: *Ctx) u64 {
+pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
+    if (!options.present) {
+        // We aren't presenting, just wrap up this command pool submission by signaling the fence
+        // for this frame and then early out.
+        self.backend.device.queueSubmit(
+            self.backend.queue,
+            1,
+            &.{.{
+                .wait_semaphore_count = 0,
+                .p_wait_semaphores = &.{},
+                .p_wait_dst_stage_mask = &.{},
+                .command_buffer_count = 0,
+                .p_command_buffers = &.{},
+                .signal_semaphore_count = 0,
+                .p_signal_semaphores = &.{},
+                .p_next = null,
+            }},
+            self.backend.cmd_pool_ready[self.frame],
+        ) catch |err| @panic(@errorName(err));
+        return;
+    }
+
     {
         const transition_zone = Zone.begin(.{ .name = "finalize swapchain image", .src = @src() });
         defer transition_zone.end();
@@ -2259,65 +2295,53 @@ pub fn present(self: *Ctx) u64 {
             );
         }
 
-        {
-            self.backend.device.queueSubmit(
-                self.backend.queue,
-                1,
-                &.{.{
-                    .wait_semaphore_count = 0,
-                    .p_wait_semaphores = &.{},
-                    .p_wait_dst_stage_mask = &.{},
-                    .command_buffer_count = 1,
-                    .p_command_buffers = &.{cb},
-                    .signal_semaphore_count = 1,
-                    .p_signal_semaphores = &.{
-                        self.backend.ready_for_present[self.frame],
-                    },
-                    .p_next = null,
-                }},
-                self.backend.cmd_pool_ready[self.frame],
-            ) catch |err| @panic(@errorName(err));
-        }
+        self.backend.device.queueSubmit(
+            self.backend.queue,
+            1,
+            &.{.{
+                .wait_semaphore_count = 0,
+                .p_wait_semaphores = &.{},
+                .p_wait_dst_stage_mask = &.{},
+                .command_buffer_count = 1,
+                .p_command_buffers = &.{cb},
+                .signal_semaphore_count = 1,
+                .p_signal_semaphores = &.{
+                    self.backend.ready_for_present[self.frame],
+                },
+                .p_next = null,
+            }},
+            self.backend.cmd_pool_ready[self.frame],
+        ) catch |err| @panic(@errorName(err));
     }
 
-    const suboptimal_out_of_date, const present_ns = b: {
+    const suboptimal_out_of_date = b: {
         const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
         defer queue_present_zone.end();
         const swapchain = [_]vk.SwapchainKHR{self.backend.swapchain.swapchain};
         const image_index = [_]u32{self.backend.image_index.?};
 
-        var present_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
-        {
-            const blocking_zone = Zone.begin(.{
-                .src = @src(),
-                .name = "blocking: queue present",
-                .color = global_options.blocking_zone_color,
-            });
-            defer blocking_zone.end();
-
-            const suboptimal_out_of_date = if (self.backend.device.queuePresentKHR(
-                self.backend.queue,
-                &.{
-                    .wait_semaphore_count = 1,
-                    .p_wait_semaphores = &.{self.backend.ready_for_present[self.frame]},
-                    .swapchain_count = swapchain.len,
-                    .p_swapchains = &swapchain,
-                    .p_image_indices = &image_index,
-                    .p_results = null,
-                },
-            )) |result|
-                result == .suboptimal_khr
-            else |err| switch (err) {
-                error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => true,
-                error.OutOfHostMemory,
-                error.OutOfDeviceMemory,
-                error.Unknown,
-                error.SurfaceLostKHR,
-                error.DeviceLost,
-                => @panic(@errorName(err)),
-            };
-            break :b .{ suboptimal_out_of_date, present_timer.lap() };
-        }
+        const suboptimal_out_of_date = if (self.backend.device.queuePresentKHR(
+            self.backend.queue,
+            &.{
+                .wait_semaphore_count = 1,
+                .p_wait_semaphores = &.{self.backend.ready_for_present[self.frame]},
+                .swapchain_count = swapchain.len,
+                .p_swapchains = &swapchain,
+                .p_image_indices = &image_index,
+                .p_results = null,
+            },
+        )) |result|
+            result == .suboptimal_khr
+        else |err| switch (err) {
+            error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => true,
+            error.OutOfHostMemory,
+            error.OutOfDeviceMemory,
+            error.Unknown,
+            error.SurfaceLostKHR,
+            error.DeviceLost,
+            => @panic(@errorName(err)),
+        };
+        break :b suboptimal_out_of_date;
     };
 
     const framebuffer_size_changed = !std.meta.eql(self.backend.swapchain.external_framebuf_size, self.framebuf_size);
@@ -2325,8 +2349,6 @@ pub fn present(self: *Ctx) u64 {
     if (suboptimal_out_of_date or framebuffer_size_changed) {
         self.backend.swapchain.recreate(self);
     }
-
-    return present_ns;
 }
 
 pub fn samplerCreate(
