@@ -66,6 +66,15 @@ pub const InitOptions = struct {
         context: ?*anyopaque,
         allocation_callbacks: ?*const vk.AllocationCallbacks,
     ) CreateSurfaceError!vk.SurfaceKHR,
+    /// Allows you to blacklist problematic layers by setting the `VK_LAYERS_DISABLE` environment
+    /// variable at runtime.
+    ///
+    /// If you just want to disable all implicit layers, see also `safe_mode` in the top level
+    /// initialization options.
+    ///
+    /// Syntax matches the environment variable:
+    /// * https://vulkan.lunarg.com/doc/view/1.3.236.0/linux/LoaderDebugging.html#user-content-disable-layers
+    layers_disable: OsStr.Optional = .none,
 };
 
 pub const Buf = vk.Buffer;
@@ -96,7 +105,11 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
 
     if (options.safe_mode) {
         log.info("Safe Mode: {}", .{options.safe_mode});
-        setenv("VK_LOADER_LAYERS_DISABLE", "~implicit~");
+        setenv(.fromLit("VK_LOADER_LAYERS_DISABLE"), .fromLit("~implicit~"));
+    }
+
+    if (options.backend.layers_disable.unwrap()) |str| {
+        setenv(.fromLit("VK_LOADER_LAYERS_DISABLE"), str);
     }
 
     const gpa = options.gpa;
@@ -3050,13 +3063,46 @@ fn appendNext(head: *?*vk.BaseInStructure, new: *vk.BaseInStructure) void {
     head.* = new;
 }
 
-fn setenv(comptime name: [:0]const u8, comptime value: [:0]const u8) void {
+pub const OsStr = struct {
+    pub const Ptr = switch (builtin.os.tag) {
+        .windows => std.os.windows.LPCWSTR,
+        else => [*:0]const u8,
+    };
+
+    pub const Optional = struct {
+        ptr: ?Ptr,
+
+        pub const none: @This() = .{ .ptr = null };
+
+        pub fn fromLit(comptime opt: ?[:0]const u8) @This() {
+            const str = opt orelse return .none;
+            return OsStr.fromLit(str).optional();
+        }
+
+        pub fn unwrap(self: @This()) ?OsStr {
+            const ptr = self.ptr orelse return null;
+            return .{ .ptr = ptr };
+        }
+    };
+
+    ptr: Ptr,
+
+    pub fn fromLit(comptime str: [:0]const u8) @This() {
+        return .{ .ptr = switch (builtin.os.tag) {
+            .windows => std.unicode.utf8ToUtf16LeStringLiteral(str),
+            else => str,
+        } };
+    }
+
+    pub fn optional(self: @This()) Optional {
+        return .{ .ptr = self.ptr };
+    }
+};
+
+fn setenv(name: OsStr, value: OsStr) void {
     if (builtin.os.tag == .windows) {
-        if (std.os.windows.kernel32.SetEnvironmentVariableW(
-            std.unicode.utf8ToUtf16LeStringLiteral(name),
-            std.unicode.utf8ToUtf16LeStringLiteral(value),
-        ) == 0) {
-            @panic("SetEnvironmentVariable failed");
+        if (std.os.windows.kernel32.SetEnvironmentVariableW(name.ptr, value.ptr) == 0) {
+            @panic("SetEnvironmentVariableW failed");
         }
     } else {
         const posix = struct {
@@ -3066,7 +3112,7 @@ fn setenv(comptime name: [:0]const u8, comptime value: [:0]const u8) void {
                 overwrite: c_int,
             ) callconv(.c) c_int;
         };
-        if (posix.setenv(name, value, 1) != 0) {
+        if (posix.setenv(name.ptr, value.ptr, 1) != 0) {
             @panic("setenv failed");
         }
     }
