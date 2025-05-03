@@ -3055,7 +3055,7 @@ fn setenv(comptime name: [:0]const u8, comptime value: [:0]const u8) void {
         if (std.os.windows.kernel32.SetEnvironmentVariableW(
             std.unicode.utf8ToUtf16LeStringLiteral(name),
             std.unicode.utf8ToUtf16LeStringLiteral(value),
-        ) != 0) {
+        ) == 0) {
             @panic("SetEnvironmentVariable failed");
         }
     } else {
