@@ -135,7 +135,10 @@ pub fn InitOptionsImpl(BackendInitOptions: type) type {
         backend: BackendInitOptions,
         device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
         timestamp_queries: bool,
-        debug: DebugMode = if (builtin.mode == .Debug) .validate else .none,
+        /// Ideally we'd always enable validation in debug mode. See tracking issue, you may want to
+        /// override this decision while doing graphics work:
+        /// https://github.com/Games-by-Mason/gpu/issues/3
+        debug: DebugMode = if (builtin.mode == .Debug) .output else .none,
         /// Disables potentially problematic features. For example, disables all implicit layers in
         /// Vulkan. This may disrupt functionality expected by the user and should only be enabled
         /// when a problem occurs.
