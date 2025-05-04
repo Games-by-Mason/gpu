@@ -899,13 +899,11 @@ pub fn Image(kind: ImageKind) type {
         pub const ColorOptions = struct {
             pub const Kind = struct {
                 tiling: ImageOptions.Tiling,
-                transient_attachment: bool,
 
                 pub fn asKind(self: @This()) ImageKind {
                     return .{
                         .format = .color,
                         .tiling = self.tiling,
-                        .transient_attachment = self.transient_attachment,
                     };
                 }
             };
@@ -940,13 +938,11 @@ pub fn Image(kind: ImageKind) type {
             pub const Kind = struct {
                 format: ImageOptions.Format.DepthStencil,
                 tiling: ImageOptions.Tiling,
-                transient_attachment: bool,
 
                 pub fn asKind(self: @This()) ImageKind {
                     return .{
                         .format = .{ .depth_stencil = self.format },
                         .tiling = self.tiling,
-                        .transient_attachment = self.transient_attachment,
                     };
                 }
             };
@@ -1009,7 +1005,6 @@ pub fn Image(kind: ImageKind) type {
                         .color_attachment = false,
                         .depth_stencil_attachment = options.usage.depth_stencil_attachment,
                         .input_attachment = options.usage.input_attachment,
-                        .transient_attachment = kind.transient_attachment.?,
                     },
                     .color => .{
                         .transfer_src = options.usage.transfer_src,
@@ -1019,7 +1014,6 @@ pub fn Image(kind: ImageKind) type {
                         .color_attachment = options.usage.color_attachment,
                         .depth_stencil_attachment = false,
                         .input_attachment = options.usage.input_attachment,
-                        .transient_attachment = kind.transient_attachment.?,
                     },
                 },
             };
@@ -1136,16 +1130,14 @@ pub const ImageKind = struct {
     };
     format: ?Format = null,
     tiling: ?ImageOptions.Tiling = null,
-    transient_attachment: ?bool = null,
 
     fn nonNull(self: @This()) bool {
-        return self.format != null and self.tiling != null and self.transient_attachment != null;
+        return self.format != null and self.tiling != null;
     }
 
     fn castAllowed(self: ImageKind, as: ImageKind) bool {
         if (as.format != null and self.format == null and !self.format.?.eq(as.format.?)) return false;
         if (as.tiling != null and self.tiling != as.tiling) return false;
-        if (as.transient_attachment != null and self.transient_attachment != as.transient_attachment) return false;
         return true;
     }
 };
@@ -1204,7 +1196,6 @@ pub const ImageOptions = struct {
         storage: bool = false,
         color_attachment: bool = false,
         depth_stencil_attachment: bool = false,
-        transient_attachment: bool = false,
         input_attachment: bool = false,
     };
 
@@ -1400,12 +1391,10 @@ pub fn Memory(k: ?MemoryKind) type {
                         .color => .{
                             .color_image = .{
                                 .tiling = image.tiling.?,
-                                .transient_attachment = image.transient_attachment.?,
                             },
                         },
                         .depth_stencil => |format| .{ .depth_stencil_image = .{
                             .tiling = image.tiling.?,
-                            .transient_attachment = image.transient_attachment.?,
                             .format = format,
                         } },
                     },
@@ -1524,12 +1513,10 @@ pub const MemoryCreateUntypedOptions = struct {
                 .color_image => |image| .{ .image = .{
                     .format = .color,
                     .tiling = image.tiling,
-                    .transient_attachment = image.transient_attachment,
                 } },
                 .depth_stencil_image => |image| .{ .image = .{
                     .format = .{ .depth_stencil = image.format },
                     .tiling = image.tiling,
-                    .transient_attachment = image.transient_attachment,
                 } },
             };
         }
