@@ -511,13 +511,14 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             comptime assert(kind != null);
             if (std.debug.runtime_safety) {
                 for (options.cmds) |cmd| switch (cmd) {
-                    .copy_buffer_to_color_image => |cmd_options| {
+                    .copy_buffer_to_read_only_color_image => |cmd_options| {
+                        assert(cmd_options.mip_level_count > 0);
                         assert(cmd_options.regions.len > 0);
                         assert(cmd_options.regions.len <= max_regions);
                         for (cmd_options.regions) |region| {
                             assert(region.buffer_row_length != 0);
                             assert(region.buffer_image_height != 0);
-                            assert(region.layer_count > 0);
+                            assert(region.array_layer_count > 0);
                         }
                     },
                     .copy_buffer_to_buffer => |cmd_options| {
@@ -845,9 +846,16 @@ pub const DescUpdateCmd = struct {
     pub const Value = union(enum) {
         pub const Tag: type = @typeInfo(@This()).@"union".tag_type.?;
         pub const CombinedImageSampler = struct {
+            pub const Layout = enum {
+                read_only,
+                attachment,
+                depth_read_only_stencil_attachment,
+                depth_attachment_stencil_read_only,
+            };
+
             view: ImageView,
             sampler: Sampler,
-            layout: ImageOptions.Layout,
+            layout: Layout,
         };
 
         storage_buffer_view: Buf(.{}).View,
@@ -914,7 +922,6 @@ pub fn Image(kind: ?ImageKind) type {
             mip_levels: u16,
             array_layers: u16,
             samples: ImageOptions.Samples,
-            initial_layout: ImageOptions.Layout,
             usage: Usage,
 
             pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
@@ -943,7 +950,6 @@ pub fn Image(kind: ?ImageKind) type {
             mip_levels: u16,
             array_layers: u16,
             samples: ImageOptions.Samples,
-            initial_layout: ImageOptions.Layout,
             usage: Usage = .{},
         };
 
@@ -968,7 +974,6 @@ pub fn Image(kind: ?ImageKind) type {
                 .mip_levels = options.mip_levels,
                 .array_layers = options.array_layers,
                 .samples = options.samples,
-                .initial_layout = options.initial_layout,
                 .usage = switch (kind.?) {
                     .depth_stencil => .{
                         .transfer_src = options.usage.transfer_src,
@@ -1163,18 +1168,6 @@ pub const ImageOptions = struct {
         input_attachment: bool = false,
     };
 
-    pub const Layout = enum {
-        undefined,
-        color_attachment_optimal,
-        depth_stencil_attachment_optimal,
-        transfer_src_optimal,
-        transfer_dst_optimal,
-        depth_read_only_stencil_attachment_optimal,
-        depth_attachment_stencil_read_only_optimal,
-        read_only_optimal,
-        attachment_optimal,
-    };
-
     pub const Flags = packed struct {
         cube_compatible: bool = false,
         @"2d_array_compatible": bool = false,
@@ -1188,7 +1181,6 @@ pub const ImageOptions = struct {
     mip_levels: u16,
     array_layers: u16,
     samples: Samples,
-    initial_layout: Layout,
     usage: Usage,
 };
 
@@ -1846,17 +1838,20 @@ pub const TransferCmd = union(enum) {
 
         src: Buf(.{ .transfer_src = true }),
         dst: Buf(.{ .transfer_dst = true }),
+        // XXX: needed? i mean yeah packing stuff into one buffer right? but upper bound may be way
+        // higher..?
         regions: []const Region,
     };
 
     const CopyBufferToColorImage = struct {
         const Region = struct {
+            // XXX: clean up these args/names?
             buffer_offset: u64 = 0,
             buffer_row_length: ?u32 = null,
             buffer_image_height: ?u32 = null,
             mip_level: u32 = 0,
             base_array_layer: u32 = 0,
-            layer_count: u32 = 1,
+            array_layer_count: u32 = 1,
             image_offset: Offset = .{ .x = 0, .y = 0, .z = 0 },
             image_extent: ImageOptions.Extent,
         };
@@ -1866,15 +1861,12 @@ pub const TransferCmd = union(enum) {
         buf: Buf(.{ .transfer_src = true }),
         image: Image(.color),
         base_mip_level: u32 = 0,
-        level_count: u32 = 1,
-        base_array_layer: u32 = 0,
-        layer_count: u32 = 1,
-        new_layout: ImageOptions.Layout,
+        mip_level_count: u32 = 1,
         regions: []const Region,
     };
 
     copy_buffer_to_buffer: CopyBufferToBuffer,
-    copy_buffer_to_color_image: CopyBufferToColorImage,
+    copy_buffer_to_read_only_color_image: CopyBufferToColorImage,
 };
 
 pub fn waitIdle(self: *const @This()) void {

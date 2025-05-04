@@ -1322,7 +1322,12 @@ pub fn descriptorSetsUpdate(
                     combined_image_samplers.appendAssumeCapacity(.{
                         .sampler = combined_image_sampler.sampler.asBackendType(),
                         .image_view = combined_image_sampler.view.asBackendType(),
-                        .image_layout = layoutToVk(combined_image_sampler.layout),
+                        .image_layout = switch (combined_image_sampler.layout) {
+                            .read_only => .read_only_optimal,
+                            .attachment => .attachment_optimal,
+                            .depth_read_only_stencil_attachment => .depth_read_only_stencil_attachment_optimal,
+                            .depth_attachment_stencil_read_only => .depth_attachment_stencil_read_only_optimal,
+                        },
                     });
                 },
             }
@@ -1445,12 +1450,10 @@ pub fn acquireNextImage(self: *Ctx) Ctx.ImageView {
             });
             defer zone.end(self, .fromBackendType(cb));
 
-            transitionImageLayout(
+            transitionImageToAttachmentOptimal(
                 self,
                 cb,
                 self.backend.swapchain.images.get(acquire_result.image_index),
-                .undefined,
-                .color_attachment_optimal,
             );
         }
 
@@ -1652,7 +1655,7 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
         .sharing_mode = .exclusive,
         .queue_family_index_count = 0,
         .p_queue_family_indices = null,
-        .initial_layout = layoutToVk(options.initial_layout),
+        .initial_layout = .undefined,
     };
 }
 
@@ -2170,65 +2173,138 @@ pub fn combinedPipelinesCreate(
     }
 }
 
-fn transitionImageLayout(
+fn transitionImageAttachmentToPresent(
     self: *Ctx,
     cb: vk.CommandBuffer,
     image: vk.Image,
-    from: vk.ImageLayout,
-    to: vk.ImageLayout,
 ) void {
-    var barrier: vk.ImageMemoryBarrier = .{
-        .src_access_mask = .{},
-        .dst_access_mask = .{},
-        .old_layout = from,
-        .new_layout = to,
-        .src_queue_family_index = 0, // Ignored
-        .dst_queue_family_index = 0, // Ignored
-        .image = image,
-        .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-    };
-    var source_stage: vk.PipelineStageFlags = .{};
-    var dest_stage: vk.PipelineStageFlags = .{};
+    self.backend.device.cmdPipelineBarrier2(cb, &.{
+        .dependency_flags = .{},
+        .memory_barrier_count = 0,
+        .p_memory_barriers = &.{},
+        .buffer_memory_barrier_count = 0,
+        .p_buffer_memory_barriers = &.{},
+        .image_memory_barrier_count = 1,
+        .p_image_memory_barriers = &.{.{
+            .src_stage_mask = .{ .color_attachment_output_bit = true },
+            .src_access_mask = .{ .color_attachment_write_bit = true },
+            .dst_stage_mask = .{ .bottom_of_pipe_bit = true },
+            .dst_access_mask = .{},
+            .old_layout = .attachment_optimal,
+            .new_layout = .present_src_khr,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        }},
+    });
+}
 
-    if (from == .color_attachment_optimal and to == .present_src_khr) {
-        barrier.src_access_mask.color_attachment_write_bit = true;
-        source_stage.color_attachment_output_bit = true;
-        dest_stage.bottom_of_pipe_bit = true;
-    } else if (from == .undefined and to == .color_attachment_optimal) {
-        barrier.dst_access_mask.color_attachment_write_bit = true;
-        source_stage.top_of_pipe_bit = true;
-        dest_stage.color_attachment_output_bit = true;
-    } else if (from == .undefined and to == .transfer_dst_optimal) {
-        barrier.dst_access_mask.transfer_write_bit = true;
-        source_stage.top_of_pipe_bit = true;
-        dest_stage.transfer_bit = true;
-    } else if (from == .transfer_dst_optimal and to == .read_only_optimal) {
-        barrier.src_access_mask.transfer_write_bit = true;
-        barrier.dst_access_mask.shader_read_bit = true;
-        source_stage.transfer_bit = true;
-        dest_stage.fragment_shader_bit = true;
-    } else {
-        std.debug.panic("unsupported layout transition: {} -> {}", .{ from, to });
-    }
+fn transitionImageToTransferDest(
+    self: *Ctx,
+    cb: vk.CommandBuffer,
+    image: vk.Image,
+) void {
+    self.backend.device.cmdPipelineBarrier2(cb, &.{
+        .dependency_flags = .{},
+        .memory_barrier_count = 0,
+        .p_memory_barriers = &.{},
+        .buffer_memory_barrier_count = 0,
+        .p_buffer_memory_barriers = &.{},
+        .image_memory_barrier_count = 1,
+        .p_image_memory_barriers = &.{.{
+            .src_stage_mask = .{ .top_of_pipe_bit = true },
+            .src_access_mask = .{},
+            .dst_stage_mask = .{ .all_transfer_bit = true },
+            .dst_access_mask = .{ .transfer_write_bit = true },
+            .old_layout = .undefined,
+            .new_layout = .transfer_dst_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        }},
+    });
+}
 
-    self.backend.device.cmdPipelineBarrier(
-        cb,
-        source_stage,
-        dest_stage,
-        .{},
-        0,
-        null,
-        0,
-        null,
-        1,
-        &.{barrier},
-    );
+// XXX: this one might be meaningfully batched?
+// XXX: to avoid needing to convert arrays...we could just wrap the underlying bitfields in a constructor. that may
+// help elsewhere too idk. not as flexible in a way though and it will be low volume...could just set global maxes
+// for these things too.
+// XXX: assumes we're reading in the fragment shader, could make configurable in case we're reading earlier? or, if
+// we're just using this to *load* images, we could make it less optimal and just allow a single pipeline stall after
+// all images loaded or such.
+fn transitionImageCopiedToReadOnly(
+    self: *Ctx,
+    cb: vk.CommandBuffer,
+    image: vk.Image,
+    subresource_range: vk.ImageSubresourceRange,
+) void {
+    self.backend.device.cmdPipelineBarrier2(cb, &.{
+        .dependency_flags = .{},
+        .memory_barrier_count = 0,
+        .p_memory_barriers = &.{},
+        .buffer_memory_barrier_count = 0,
+        .p_buffer_memory_barriers = &.{},
+        .image_memory_barrier_count = 1,
+        .p_image_memory_barriers = &.{.{
+            .src_stage_mask = .{ .copy_bit = true },
+            .src_access_mask = .{ .transfer_write_bit = true },
+            .dst_stage_mask = .{ .fragment_shader_bit = true },
+            .dst_access_mask = .{ .shader_read_bit = true },
+            .old_layout = .transfer_dst_optimal,
+            .new_layout = .read_only_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresource_range = subresource_range,
+        }},
+    });
+}
+
+fn transitionImageToAttachmentOptimal(
+    self: *Ctx,
+    cb: vk.CommandBuffer,
+    image: vk.Image,
+) void {
+    self.backend.device.cmdPipelineBarrier2(cb, &.{
+        .dependency_flags = .{},
+        .memory_barrier_count = 0,
+        .p_memory_barriers = &.{},
+        .buffer_memory_barrier_count = 0,
+        .p_buffer_memory_barriers = &.{},
+        .image_memory_barrier_count = 1,
+        .p_image_memory_barriers = &.{.{
+            .src_stage_mask = .{ .top_of_pipe_bit = true },
+            .src_access_mask = .{},
+            .dst_stage_mask = .{ .color_attachment_output_bit = true },
+            .dst_access_mask = .{ .color_attachment_write_bit = true },
+            .old_layout = .undefined,
+            .new_layout = .attachment_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        }},
+    });
 }
 
 pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
@@ -2284,12 +2360,10 @@ pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
             });
             defer zone.end(self, .fromBackendType(cb));
 
-            transitionImageLayout(
+            transitionImageAttachmentToPresent(
                 self,
                 cb,
                 self.backend.swapchain.images.get(self.backend.image_index.?),
-                .color_attachment_optimal,
-                .present_src_khr,
             );
         }
 
@@ -2432,6 +2506,15 @@ pub fn timestampCalibrationImpl(
 pub fn cmdBufTransferAppend(
     self: *Ctx,
     combined: Ctx.CombinedCmdBuf(null),
+    // XXX: max mipmaps is like 15, but we also use this for packing models into buffers so idk? we
+    // could make an opaque builder type that wraps the platform specific data to avoid needing to
+    // change the data if that helps. if that maps well to dx12. except there are actually two differnt
+    // arrays for vulkan right, the regions array for the transitions and the copies array? is it like
+    // that in dx12 too, should these opeations be separate? alternatively shoulnd't we be transitioning
+    // all mip levels at once if possible? i guess we could require they at least be contiguous? confusing
+    // with array layers too? fuck array of regions is also not enough would need to be array of barriers
+    // which we CAN do but yeah.
+    // XXX: okay learn what image arrays are for, and if the mips are per element or what.
     comptime max_regions: u32,
     options: Ctx.CombinedCmdBuf(null).AppendTransferCmdsOptions,
 ) void {
@@ -2444,17 +2527,19 @@ pub fn cmdBufTransferAppend(
 
     for (options.cmds) |cmd| {
         switch (cmd) {
-            .copy_buffer_to_color_image => |cmd_options| {
-                transitionImageLayout(
-                    self,
-                    cb,
-                    cmd_options.image.asBackendType(),
-                    .undefined,
-                    .transfer_dst_optimal,
-                );
-                var regions: std.BoundedArray(vk.BufferImageCopy, max_regions) = .{};
+            .copy_buffer_to_read_only_color_image => |cmd_options| {
+                if (cmd_options.regions.len > max_regions) @panic("OOB");
+                transitionImageToTransferDest(self, cb, cmd_options.image.asBackendType());
+                var copies: std.BoundedArray(vk.BufferImageCopy, max_regions) = .{};
+                var mip_levels: u32 = 0;
+                var array_layers: u32 = 0;
                 for (cmd_options.regions) |region| {
-                    regions.append(.{
+                    mip_levels = @max(mip_levels, region.mip_level + 1);
+                    array_layers = @max(
+                        array_layers,
+                        region.base_array_layer + region.array_layer_count,
+                    );
+                    copies.appendAssumeCapacity(.{
                         .buffer_offset = region.buffer_offset,
                         .buffer_row_length = region.buffer_row_length orelse 0,
                         .buffer_image_height = region.buffer_image_height orelse 0,
@@ -2462,7 +2547,7 @@ pub fn cmdBufTransferAppend(
                             .aspect_mask = .{ .color_bit = true },
                             .mip_level = region.mip_level,
                             .base_array_layer = region.base_array_layer,
-                            .layer_count = region.layer_count,
+                            .layer_count = region.array_layer_count,
                         },
                         .image_offset = .{
                             .x = region.image_offset.x,
@@ -2474,22 +2559,30 @@ pub fn cmdBufTransferAppend(
                             .height = region.image_extent.height,
                             .depth = region.image_extent.depth,
                         },
-                    }) catch @panic("OOB");
+                    });
                 }
                 self.backend.device.cmdCopyBufferToImage(
                     cb,
                     cmd_options.buf.asBackendType(),
                     cmd_options.image.asBackendType(),
                     .transfer_dst_optimal,
-                    @intCast(regions.len),
-                    &regions.buffer,
+                    @intCast(copies.len),
+                    &copies.buffer,
                 );
-                transitionImageLayout(
+                // XXX: we should be accumulating a list of transitions, and then submitting them all
+                // at once
+                // XXX: document that perf-wise, we assume you're filling all layers and mips
+                transitionImageCopiedToReadOnly(
                     self,
                     cb,
                     cmd_options.image.asBackendType(),
-                    .transfer_dst_optimal,
-                    layoutToVk(cmd_options.new_layout),
+                    .{
+                        .aspect_mask = .{ .color_bit = true },
+                        .base_mip_level = 0,
+                        .level_count = mip_levels,
+                        .base_array_layer = 0,
+                        .layer_count = array_layers,
+                    },
                 );
             },
             .copy_buffer_to_buffer => |cmd_options| {
@@ -2517,20 +2610,6 @@ pub fn cmdBufTransferAppend(
 
 pub fn waitIdle(self: *const Ctx) void {
     self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
-}
-
-fn layoutToVk(layout: Ctx.ImageOptions.Layout) vk.ImageLayout {
-    return switch (layout) {
-        .undefined => .undefined,
-        .color_attachment_optimal => .color_attachment_optimal,
-        .depth_stencil_attachment_optimal => .depth_stencil_attachment_optimal,
-        .transfer_src_optimal => .transfer_src_optimal,
-        .transfer_dst_optimal => .transfer_dst_optimal,
-        .depth_read_only_stencil_attachment_optimal => .depth_read_only_stencil_attachment_optimal,
-        .depth_attachment_stencil_read_only_optimal => .depth_attachment_stencil_read_only_optimal,
-        .read_only_optimal => .read_only_optimal,
-        .attachment_optimal => .attachment_optimal,
-    };
 }
 
 fn createImageOptionsFormatToVk(format: Ctx.ImageOptions.Format) vk.Format {
