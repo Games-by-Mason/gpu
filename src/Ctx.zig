@@ -9,12 +9,14 @@ const OwnedWriterVolatile = writers.OwnedWriterVolatile;
 const tracy = @import("tracy");
 const CpuZone = tracy.Zone;
 const TracyQueue = tracy.GpuQueue;
+const gpu = @import("root.zig");
 const global_options = @import("root.zig").options;
 const builtin = @import("builtin");
-const IBackend = @import("ibackend.zig").IBackend;
 
-pub const Backend = IBackend(global_options.Backend).create();
 const Ctx = @This();
+
+const Backend = global_options.Backend;
+const ibackend: gpu.IBackend = Backend.ibackend;
 
 const tracy_gpu_pool = "gpu";
 
@@ -65,7 +67,7 @@ pub const Device = struct {
     tracy_queue: TracyQueue,
 };
 
-backend: global_options.Backend,
+backend: Backend,
 
 device: Device,
 
@@ -103,52 +105,48 @@ pub const DebugMode = enum(u8) {
     }
 };
 
-pub fn InitOptionsImpl(BackendInitOptions: type) type {
-    return struct {
-        pub const default_device_type_ranks = b: {
-            var ranks = std.EnumArray(Device.Kind, u8).initFill(0);
-            ranks.set(.discrete, 2);
-            ranks.set(.integrated, 1);
-            break :b ranks;
-        };
-
-        pub const Version = struct {
-            major: u7,
-            minor: u10,
-            patch: u12,
-        };
-
-        gpa: Allocator,
-        application_name: ?[:0]const u8 = null,
-        application_version: Version = .{
-            .major = 0,
-            .minor = 0,
-            .patch = 0,
-        },
-        engine_name: ?[:0]const u8,
-        engine_version: Version = .{
-            .major = 0,
-            .minor = 0,
-            .patch = 0,
-        },
-        frames_in_flight: u4,
-        framebuf_size: struct { u32, u32 },
-        backend: BackendInitOptions,
-        device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
-        timestamp_queries: bool,
-        /// Ideally we'd always enable validation in debug mode. See tracking issue, you may want to
-        /// override this decision while doing graphics work:
-        /// https://github.com/Games-by-Mason/gpu/issues/3
-        debug: DebugMode = if (builtin.mode == .Debug) .output else .none,
-        /// Disables potentially problematic features. For example, disables all implicit layers in
-        /// Vulkan. This may disrupt functionality expected by the user and should only be enabled
-        /// when a problem occurs.
-        safe_mode: bool = false,
-        max_alignment: bool = false,
+pub const InitOptions = struct {
+    pub const default_device_type_ranks = b: {
+        var ranks = std.EnumArray(Device.Kind, u8).initFill(0);
+        ranks.set(.discrete, 2);
+        ranks.set(.integrated, 1);
+        break :b ranks;
     };
-}
 
-pub const InitOptions = InitOptionsImpl(Backend.InitOptions);
+    pub const Version = struct {
+        major: u7,
+        minor: u10,
+        patch: u12,
+    };
+
+    gpa: Allocator,
+    application_name: ?[:0]const u8 = null,
+    application_version: Version = .{
+        .major = 0,
+        .minor = 0,
+        .patch = 0,
+    },
+    engine_name: ?[:0]const u8,
+    engine_version: Version = .{
+        .major = 0,
+        .minor = 0,
+        .patch = 0,
+    },
+    frames_in_flight: u4,
+    framebuf_size: struct { u32, u32 },
+    backend: ibackend.InitOptions,
+    device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
+    timestamp_queries: bool,
+    /// Ideally we'd always enable validation in debug mode. See tracking issue, you may want to
+    /// override this decision while doing graphics work:
+    /// https://github.com/Games-by-Mason/gpu/issues/3
+    debug: DebugMode = if (builtin.mode == .Debug) .output else .none,
+    /// Disables potentially problematic features. For example, disables all implicit layers in
+    /// Vulkan. This may disrupt functionality expected by the user and should only be enabled
+    /// when a problem occurs.
+    safe_mode: bool = false,
+    max_alignment: bool = false,
+};
 
 pub fn init(options: InitOptions) @This() {
     const zone = tracy.Zone.begin(.{ .name = "gpu init", .src = @src() });
@@ -158,16 +156,18 @@ pub fn init(options: InitOptions) @This() {
     assert(options.frames_in_flight > 0);
     assert(options.frames_in_flight <= global_options.max_frames_in_flight);
 
-    const backend = Backend.init(options);
-
     var gx: @This() = .{
-        .backend = backend,
-        .device = backend.getDevice(),
+        .backend = undefined,
+        .device = undefined,
         .frames_in_flight = options.frames_in_flight,
         .combined_pipeline_layout_typed = undefined,
         .max_alignment = options.max_alignment,
         .timestamp_queries = options.timestamp_queries,
     };
+
+    ibackend.init(&gx, options);
+
+    gx.device = ibackend.getDevice(&gx);
 
     if (gx.max_alignment) {
         gx.device.uniform_buf_offset_alignment = Device.max_uniform_buf_offset_alignment;
@@ -196,7 +196,7 @@ pub fn deinit(self: *@This(), gpa: Allocator) void {
         layout.deinit(self);
     }
 
-    Backend.deinit(self, gpa);
+    ibackend.deinit(self, gpa);
 
     self.* = undefined;
 }
@@ -232,7 +232,7 @@ pub fn DedicatedBuf(kind: BufKind) type {
             defer zone.end();
             comptime kind.assertNonZero();
             assert(options.size > 0); // Vulkan doesn't support zero sized buffers
-            const result = Backend.dedicatedBufCreate(gx, options.name, kind, options.size);
+            const result = ibackend.dedicatedBufCreate(gx, options.name, kind, options.size);
             tracy.alloc(.{
                 .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
                 .size = result.size,
@@ -245,7 +245,7 @@ pub fn DedicatedBuf(kind: BufKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            Backend.bufDestroy(gx, self.buf.as(.{}));
+            ibackend.bufDestroy(gx, self.buf.as(.{}));
             self.memory.deinit(gx);
         }
 
@@ -276,7 +276,7 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
             comptime kind.assertNonZero();
-            const result = Backend.dedicatedReadbackBufCreate(gx, options.name, kind, options.size);
+            const result = ibackend.dedicatedReadbackBufCreate(gx, options.name, kind, options.size);
             tracy.alloc(.{
                 .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
                 .size = result.size,
@@ -290,7 +290,7 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            Backend.bufDestroy(gx, self.buf.as(.{}));
+            ibackend.bufDestroy(gx, self.buf.as(.{}));
             self.memory.deinit(gx);
         }
 
@@ -331,7 +331,7 @@ pub fn DedicatedUploadBuf(kind: BufKind) type {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
             comptime kind.assertNonZero();
-            const result = Backend.dedicatedUploadBufCreate(
+            const result = ibackend.dedicatedUploadBufCreate(
                 gx,
                 options.name,
                 kind,
@@ -351,7 +351,7 @@ pub fn DedicatedUploadBuf(kind: BufKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            Backend.bufDestroy(gx, self.buf.as(.{}));
+            ibackend.bufDestroy(gx, self.buf.as(.{}));
             self.memory.deinit(gx);
         }
 
@@ -391,6 +391,107 @@ pub fn DedicatedAllocation(Dedicated: type) type {
         size: u64,
     };
 }
+
+pub const ImageTransition = extern struct {
+    backend: ibackend.ImageTransition,
+
+    pub const Range = struct {
+        aspect: ImageAspect,
+        base_mip_level: u32 = 0,
+        mip_level_count: u32 = 1,
+        base_array_layer: u32 = 0,
+        array_layer_count: u32 = 1,
+    };
+
+    pub const UndefinedToTransferDstOptions = struct {
+        image: Image(null),
+        range: Range,
+    };
+
+    pub fn undefinedToTransferDst(options: UndefinedToTransferDstOptions) @This() {
+        var result: @This() = undefined;
+        ibackend.imageTransitionUndefinedToTransferDst(options, &result.backend);
+        return result;
+    }
+
+    pub const TransferDstToReadOnlyOptions = struct {
+        pub const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+            compute_shader: bool = false,
+        };
+
+        image: Image(null),
+        range: Range,
+        stage: Stage,
+    };
+
+    pub fn transferDstToReadOnly(options: TransferDstToReadOnlyOptions) @This() {
+        var result: @This() = undefined;
+        ibackend.imageTransitionTransferDstToReadOnly(options, &result.backend);
+        return result;
+    }
+
+    pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+};
+
+pub const ImageUpload = struct {
+    pub const Region = extern struct {
+        pub const InitOptions = struct {
+            aspect: ImageAspect,
+            buffer_offset: u64 = 0,
+            buffer_row_length: ?u32 = null,
+            buffer_image_height: ?u32 = null,
+            mip_level: u32 = 0,
+            base_array_layer: u32 = 0,
+            array_layer_count: u32 = 1,
+            image_offset: Offset = .{ .x = 0, .y = 0, .z = 0 },
+            image_extent: ImageExtent,
+        };
+
+        backend: ibackend.ImageUploadRegion,
+
+        pub fn init(options: @This().InitOptions) @This() {
+            var result: @This() = undefined;
+            ibackend.imageUploadRegionInit(options, &result.backend);
+            return result;
+        }
+
+        pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+    };
+
+    pub const Offset = struct { x: i32, y: i32, z: i32 };
+
+    dst: Image(null),
+    src: Buf(.{ .transfer_src = true }),
+    base_mip_level: u32 = 0,
+    mip_level_count: u32 = 1,
+    regions: []const Region,
+};
+
+pub const BufferUpload = struct {
+    pub const Region = extern struct {
+        pub const InitOptions = struct {
+            src_offset: u64 = 0,
+            dst_offset: u64 = 0,
+            size: u64,
+        };
+
+        backend: ibackend.BufferUploadRegion,
+
+        pub fn init(options: @This().InitOptions) @This() {
+            var result: @This() = undefined;
+            ibackend.bufferUploadRegionInit(options, &result.backend);
+            return result;
+        }
+
+        pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+    };
+
+    dst: Buf(.{ .transfer_dst = true }),
+    src: Buf(.{ .transfer_src = true }),
+    regions: []const Region,
+};
 
 pub const CmdBufBindings = struct {
     pipeline: ?Pipeline = null,
@@ -445,7 +546,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             const bindings = gx.cb_bindings[gx.frame].addOne() catch @panic("OOB");
             bindings.* = .{};
 
-            const untyped = Backend.combinedCmdBufCreate(gx, .{
+            const untyped = ibackend.combinedCmdBufCreate(gx, .{
                 .bindings = bindings,
                 .kind = kind.?,
                 .loc = options.loc,
@@ -465,7 +566,7 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             const zone = CpuZone.begin(.{ .src = @src() });
             defer zone.end();
             assert(gx.in_frame);
-            Backend.combinedCmdBufSubmit(gx, self.asUntyped(), kind.?);
+            ibackend.combinedCmdBufSubmit(gx, self.asUntyped(), kind.?);
         }
 
         inline fn asUntyped(self: @This()) CombinedCmdBuf(null) {
@@ -476,62 +577,43 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
             };
         }
 
-        pub const AppendGraphicsCmdsOptions = struct {
-            cmds: []const DrawCmd,
-            loc: *const tracy.SourceLocation,
-        };
-
-        pub fn appendGraphicsCmds(
-            self: @This(),
-            gx: *Ctx,
-            options: AppendGraphicsCmdsOptions,
-        ) void {
+        pub fn draw(self: @This(), gx: *Ctx, cmds: []const DrawCmd) void {
             comptime assert(kind == .graphics);
             const zone = CpuZone.begin(.{ .src = @src() });
             defer zone.end();
             if (std.debug.runtime_safety) {
-                for (options.cmds) |draw_call| {
+                for (cmds) |draw_call| {
                     assert(draw_call.args.offset % 4 == 0);
                 }
             }
-            Backend.cmdBufGraphicsAppend(gx, self.asUntyped(), options);
+            ibackend.cmdBufDraw(gx, self.asUntyped(), cmds);
         }
 
-        pub const AppendTransferCmdsOptions = struct {
-            cmds: []const TransferCmd,
-            loc: *const tracy.SourceLocation,
-        };
-
-        pub fn appendTransferCmds(
-            self: @This(),
-            gx: *Ctx,
-            comptime max_regions: u32,
-            options: AppendTransferCmdsOptions,
-        ) void {
+        pub fn transitionImages(self: @This(), gx: *Ctx, transitions: []const ImageTransition) void {
             comptime assert(kind != null);
-            if (std.debug.runtime_safety) {
-                for (options.cmds) |cmd| switch (cmd) {
-                    .copy_buffer_to_read_only_color_image => |cmd_options| {
-                        assert(cmd_options.mip_level_count > 0);
-                        assert(cmd_options.regions.len > 0);
-                        assert(cmd_options.regions.len <= max_regions);
-                        for (cmd_options.regions) |region| {
-                            assert(region.buffer_row_length != 0);
-                            assert(region.buffer_image_height != 0);
-                            assert(region.array_layer_count > 0);
-                        }
-                    },
-                    .copy_buffer_to_buffer => |cmd_options| {
-                        assert(cmd_options.regions.len > 0);
-                        assert(cmd_options.regions.len <= max_regions);
-                        for (cmd_options.regions) |region| {
-                            assert(region.size > 0);
-                        }
-                    },
-                };
-            }
+            ibackend.cmdBufTransitionImages(gx, self.asUntyped(), transitions);
+        }
 
-            Backend.cmdBufTransferAppend(gx, self.asUntyped(), max_regions, options);
+        pub fn uploadImage(self: @This(), gx: *Ctx, options: ImageUpload) void {
+            comptime assert(kind != null);
+            ibackend.cmdBufUploadImage(
+                gx,
+                self.asUntyped(),
+                options.dst,
+                options.src.as(.{}),
+                options.regions,
+            );
+        }
+
+        pub fn uploadBuffer(self: @This(), gx: *Ctx, options: BufferUpload) void {
+            comptime assert(kind != null);
+            ibackend.cmdBufUploadBuffer(
+                gx,
+                self.asUntyped(),
+                options.dst.as(.{}),
+                options.src.as(.{}),
+                options.regions,
+            );
         }
     };
 }
@@ -539,13 +621,13 @@ pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
 pub const CmdBuf = enum(u64) {
     _,
 
-    pub inline fn fromBackendType(value: Backend.CmdBuf) @This() {
-        comptime assert(@sizeOf(Backend.CmdBuf) == @sizeOf(@This()));
+    pub inline fn fromBackendType(value: ibackend.CmdBuf) @This() {
+        comptime assert(@sizeOf(ibackend.CmdBuf) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));
     }
 
-    pub inline fn asBackendType(self: @This()) Backend.CmdBuf {
-        comptime assert(@sizeOf(Backend.CmdBuf) == @sizeOf(@This()));
+    pub inline fn asBackendType(self: @This()) ibackend.CmdBuf {
+        comptime assert(@sizeOf(ibackend.CmdBuf) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
 };
@@ -582,11 +664,11 @@ pub const Zone = struct {
     };
 
     pub fn begin(gx: *Ctx, options: BeginOptions) Zone {
-        return Backend.zoneBegin(gx, options);
+        return ibackend.zoneBegin(gx, options);
     }
 
     pub fn end(_: @This(), gx: *Ctx, cb: CmdBuf) void {
-        Backend.zoneEnd(gx, cb);
+        ibackend.zoneEnd(gx, cb);
     }
 };
 
@@ -632,7 +714,7 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
         .color = global_options.blocking_zone_color,
     });
     defer blocking_zone.end();
-    Backend.endFrame(self, options);
+    ibackend.endFrame(self, options);
     const Frame = @TypeOf(self.frame);
     const FramesInFlight = @TypeOf(self.frames_in_flight);
     comptime assert(std.math.maxInt(FramesInFlight) < std.math.maxInt(Frame));
@@ -654,7 +736,7 @@ pub fn acquireNextImage(self: *@This(), framebuf_size: Ctx.FramebufSize) ImageVi
     assert(framebuf_size[0] != 0 and framebuf_size[0] != 0);
     assert(self.in_frame);
     self.framebuf_size = framebuf_size;
-    return Backend.acquireNextImage(self);
+    return ibackend.acquireNextImage(self);
 }
 
 pub const DescPool = enum(u64) {
@@ -679,20 +761,20 @@ pub const DescPool = enum(u64) {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
         assert(options.cmds.len <= max_cmds);
-        return Backend.descriptorPoolCreate(gx, max_cmds, options);
+        return ibackend.descriptorPoolCreate(gx, max_cmds, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
-        return Backend.descriptorPoolDestroy(gx, self);
+        return ibackend.descriptorPoolDestroy(gx, self);
     }
 
-    pub inline fn fromBackendType(value: Backend.DescPool) @This() {
-        comptime assert(@sizeOf(Backend.DescPool) == @sizeOf(@This()));
+    pub inline fn fromBackendType(value: ibackend.DescPool) @This() {
+        comptime assert(@sizeOf(ibackend.DescPool) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));
     }
 
-    pub inline fn asBackendType(self: @This()) Backend.DescPool {
-        comptime assert(@sizeOf(Backend.DescPool) == @sizeOf(@This()));
+    pub inline fn asBackendType(self: @This()) ibackend.DescPool {
+        comptime assert(@sizeOf(ibackend.DescPool) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
 };
@@ -700,13 +782,13 @@ pub const DescPool = enum(u64) {
 pub const DescSetLayout = enum(u64) {
     _,
 
-    pub inline fn fromBackendType(value: Backend.DescSetLayout) @This() {
-        comptime assert(@sizeOf(Backend.DescSetLayout) == @sizeOf(@This()));
+    pub inline fn fromBackendType(value: ibackend.DescSetLayout) @This() {
+        comptime assert(@sizeOf(ibackend.DescSetLayout) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));
     }
 
-    pub inline fn asBackendType(self: @This()) Backend.DescSetLayout {
-        comptime assert(@sizeOf(Backend.DescSetLayout) == @sizeOf(@This()));
+    pub inline fn asBackendType(self: @This()) ibackend.DescSetLayout {
+        comptime assert(@sizeOf(ibackend.DescSetLayout) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
 };
@@ -721,13 +803,13 @@ pub fn DescSet(layout: ?*const CombinedPipelineLayout.InitOptions) type {
             return @enumFromInt(@intFromEnum(self));
         }
 
-        pub inline fn fromBackendType(value: Backend.DescSet) @This() {
-            comptime assert(@sizeOf(Backend.DescSet) == @sizeOf(@This()));
+        pub inline fn fromBackendType(value: ibackend.DescSet) @This() {
+            comptime assert(@sizeOf(ibackend.DescSet) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(value));
         }
 
-        pub inline fn asBackendType(self: @This()) Backend.DescSet {
-            comptime assert(@sizeOf(Backend.DescSet) == @sizeOf(@This()));
+        pub inline fn asBackendType(self: @This()) ibackend.DescSet {
+            comptime assert(@sizeOf(ibackend.DescSet) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(self));
         }
     };
@@ -828,13 +910,13 @@ pub fn Buf(kind: BufKind) type {
             return @enumFromInt(@intFromEnum(self));
         }
 
-        pub inline fn fromBackendType(value: Backend.Buf) @This() {
-            comptime assert(@sizeOf(Backend.Buf) == @sizeOf(@This()));
+        pub inline fn fromBackendType(value: ibackend.Buf) @This() {
+            comptime assert(@sizeOf(ibackend.Buf) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(value));
         }
 
-        pub inline fn asBackendType(self: @This()) Backend.Buf {
-            comptime assert(@sizeOf(Backend.Buf) == @sizeOf(@This()));
+        pub inline fn asBackendType(self: @This()) ibackend.Buf {
+            comptime assert(@sizeOf(ibackend.Buf) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(self));
         }
 
@@ -878,7 +960,7 @@ pub fn updateDescSets(
 ) void {
     if (cmds.len == 0) return;
     assert(cmds.len <= max_updates);
-    Backend.descriptorSetsUpdate(self, max_updates, cmds);
+    ibackend.descriptorSetsUpdate(self, max_updates, cmds);
 }
 
 /// Will blocks until the next frame in flight's resources can be reclaimed.
@@ -891,7 +973,7 @@ pub fn beginFrame(self: *@This()) void {
     assert(!self.in_frame);
     self.in_frame = true;
     self.cb_bindings[self.frame].clear();
-    Backend.beginFrame(self);
+    ibackend.beginFrame(self);
     self.tracy_queries[self.frame] = 0;
 }
 
@@ -918,14 +1000,14 @@ pub fn Image(kind: ?ImageKind) type {
             flags: ImageOptions.Flags,
             dimensions: ImageOptions.Dimensions,
             format: ImageOptions.Format.Color,
-            extent: ImageOptions.Extent,
+            extent: ImageExtent,
             mip_levels: u16,
             array_layers: u16,
             samples: ImageOptions.Samples,
             usage: Usage,
 
             pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
-                return Backend.imageMemoryRequirements(gx, imageOptions(self));
+                return ibackend.imageMemoryRequirements(gx, imageOptions(self));
             }
         };
 
@@ -940,13 +1022,13 @@ pub fn Image(kind: ?ImageKind) type {
             };
 
             pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
-                return Backend.imageMemoryRequirements(gx, imageOptions(self));
+                return ibackend.imageMemoryRequirements(gx, imageOptions(self));
             }
 
             name: DebugName,
             flags: ImageOptions.Flags,
             dimensions: ImageOptions.Dimensions,
-            extent: ImageOptions.Extent,
+            extent: ImageExtent,
             mip_levels: u16,
             array_layers: u16,
             samples: ImageOptions.Samples,
@@ -1049,7 +1131,7 @@ pub fn Image(kind: ?ImageKind) type {
             comptime assert(kind != null);
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-            const result = Backend.imageCreate(
+            const result = ibackend.imageCreate(
                 gx,
                 options.alloc.asUntyped(),
                 imageOptions(options.image),
@@ -1073,7 +1155,7 @@ pub fn Image(kind: ?ImageKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            Backend.imageDestroy(gx, self.as(null));
+            ibackend.imageDestroy(gx, self.as(null));
         }
 
         pub inline fn as(self: @This(), comptime result_kind: ?ImageKind) Image(result_kind) {
@@ -1084,13 +1166,13 @@ pub fn Image(kind: ?ImageKind) type {
             return @enumFromInt(@intFromEnum(self));
         }
 
-        pub inline fn fromBackendType(value: Backend.Image) @This() {
-            comptime assert(@sizeOf(Backend.Image) == @sizeOf(@This()));
+        pub inline fn fromBackendType(value: ibackend.Image) @This() {
+            comptime assert(@sizeOf(ibackend.Image) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(value));
         }
 
-        pub inline fn asBackendType(self: @This()) Backend.Image {
-            comptime assert(@sizeOf(Backend.Image) == @sizeOf(@This()));
+        pub inline fn asBackendType(self: @This()) ibackend.Image {
+            comptime assert(@sizeOf(ibackend.Image) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(self));
         }
     };
@@ -1121,12 +1203,6 @@ pub const ImageOptions = struct {
         @"1d",
         @"2d",
         @"3d",
-    };
-
-    pub const Extent = struct {
-        width: u32,
-        height: u32,
-        depth: u32,
     };
 
     pub const Samples = enum {
@@ -1177,11 +1253,29 @@ pub const ImageOptions = struct {
     flags: Flags,
     dimensions: Dimensions,
     format: Format,
-    extent: Extent,
+    extent: ImageExtent,
     mip_levels: u16,
     array_layers: u16,
     samples: Samples,
     usage: Usage,
+};
+
+pub const ImageAspect = packed struct {
+    color: bool = false,
+    depth: bool = false,
+    stencil: bool = false,
+
+    fn assertNonZero(self: @This()) void {
+        const Int = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(self)));
+        const int: Int = @bitCast(self);
+        assert(int != 0);
+    }
+};
+
+pub const ImageExtent = struct {
+    width: u32,
+    height: u32,
+    depth: u32,
 };
 
 pub const ImageView = enum(u64) {
@@ -1215,45 +1309,35 @@ pub const ImageView = enum(u64) {
             a: Swizzle = .identity,
         };
 
-        pub const Aspect = packed struct {
-            color: bool = false,
-            depth: bool = false,
-            stencil: bool = false,
-            metadata: bool = false,
-            plane_0: bool = false,
-            plane_1: bool = false,
-            plane_2: bool = false,
-        };
-
         name: DebugName,
         image: Image(null),
         kind: Kind,
         format: ImageOptions.Format,
         components: ComponentMapping = .{},
         base_mip_level: u32 = 0,
-        level_count: u32 = 1,
+        mip_level_count: u32 = 1,
         base_array_layer: u32 = 0,
-        layer_count: u32 = 1,
-        aspect: Aspect,
+        array_layer_count: u32 = 1,
+        aspect: ImageAspect,
     };
 
     pub fn init(gx: *Ctx, options: @This().InitOptions) ImageView {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
-        return Backend.imageViewCreate(gx, options);
+        return ibackend.imageViewCreate(gx, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
-        Backend.imageViewDestroy(gx, self);
+        ibackend.imageViewDestroy(gx, self);
     }
 
-    pub inline fn fromBackendType(value: Backend.ImageView) @This() {
-        comptime assert(@sizeOf(Backend.ImageView) == @sizeOf(@This()));
+    pub inline fn fromBackendType(value: ibackend.ImageView) @This() {
+        comptime assert(@sizeOf(ibackend.ImageView) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));
     }
 
-    pub inline fn asBackendType(self: @This()) Backend.ImageView {
-        comptime assert(@sizeOf(Backend.ImageView) == @sizeOf(@This()));
+    pub inline fn asBackendType(self: @This()) ibackend.ImageView {
+        comptime assert(@sizeOf(ibackend.ImageView) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
 };
@@ -1266,16 +1350,16 @@ pub const MemoryUnsized = enum(u64) {
             .ptr = @ptrFromInt(@intFromEnum(self)),
             .pool_name = tracy_gpu_pool,
         });
-        Backend.memoryDestroy(gx, self);
+        ibackend.memoryDestroy(gx, self);
     }
 
-    pub inline fn fromBackendType(value: Backend.Memory) @This() {
-        comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
+    pub inline fn fromBackendType(value: ibackend.Memory) @This() {
+        comptime assert(@sizeOf(ibackend.Memory) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));
     }
 
-    pub inline fn asBackendType(self: @This()) Backend.Memory {
-        comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
+    pub inline fn asBackendType(self: @This()) ibackend.Memory {
+        comptime assert(@sizeOf(ibackend.Memory) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
 };
@@ -1316,7 +1400,7 @@ pub fn Memory(k: ?MemoryKind) type {
 
             assert(options.size > 0);
 
-            const untyped = Backend.memoryCreate(gx, .{
+            const untyped = ibackend.memoryCreate(gx, .{
                 .name = options.name,
                 .usage = switch (kind.?) {
                     .buf => |buf| .{ .buf = buf },
@@ -1623,11 +1707,11 @@ pub const CombinedPipelineLayout = struct {
         comptime max_descriptors: u32,
         options: @This().InitOptions,
     ) CombinedPipelineLayout {
-        return Backend.combinedPipelineLayoutCreate(gx, max_descriptors, options);
+        return ibackend.combinedPipelineLayoutCreate(gx, max_descriptors, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
-        Backend.combinedPipelineLayoutDestroy(gx, self);
+        ibackend.combinedPipelineLayoutDestroy(gx, self);
     }
 
     pub fn get(self: *const Ctx, comptime kind: *const @This().InitOptions) @This() {
@@ -1640,13 +1724,13 @@ pub const CombinedPipelineLayout = struct {
 pub const PipelineLayout = enum(u64) {
     _,
 
-    pub inline fn fromBackendType(value: Backend.PipelineLayout) @This() {
-        comptime assert(@sizeOf(Backend.PipelineLayout) == @sizeOf(@This()));
+    pub inline fn fromBackendType(value: ibackend.PipelineLayout) @This() {
+        comptime assert(@sizeOf(ibackend.PipelineLayout) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));
     }
 
-    pub inline fn asBackendType(self: @This()) Backend.PipelineLayout {
-        comptime assert(@sizeOf(Backend.PipelineLayout) == @sizeOf(@This()));
+    pub inline fn asBackendType(self: @This()) ibackend.PipelineLayout {
+        comptime assert(@sizeOf(ibackend.PipelineLayout) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
 };
@@ -1654,13 +1738,13 @@ pub const PipelineLayout = enum(u64) {
 pub const Pipeline = enum(u64) {
     _,
 
-    pub inline fn fromBackendType(value: Backend.Pipeline) @This() {
-        comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
+    pub inline fn fromBackendType(value: ibackend.Pipeline) @This() {
+        comptime assert(@sizeOf(ibackend.Pipeline) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));
     }
 
-    pub inline fn asBackendType(self: @This()) Backend.Pipeline {
-        comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
+    pub inline fn asBackendType(self: @This()) ibackend.Pipeline {
+        comptime assert(@sizeOf(ibackend.Pipeline) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
 };
@@ -1709,7 +1793,7 @@ pub fn CombinedPipeline(init_options: ?*const CombinedPipelineLayout.InitOptions
         layout: PipelineLayout,
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            Backend.combinedPipelineDestroy(gx, self.asUntyped());
+            ibackend.combinedPipelineDestroy(gx, self.asUntyped());
         }
 
         pub inline fn asUntyped(self: @This()) CombinedPipeline(null) {
@@ -1729,7 +1813,7 @@ pub fn initCombinedPipelines(
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
     if (cmds.len == 0) return;
-    Backend.combinedPipelinesCreate(self, max_cmds, cmds);
+    ibackend.combinedPipelinesCreate(self, max_cmds, cmds);
 }
 
 pub const Sampler = enum(u64) {
@@ -1800,20 +1884,20 @@ pub const Sampler = enum(u64) {
             const ma = options.max_anisotropy_hint;
             assert(ma == 0.0 or (!std.math.isNan(ma) and ma >= 1.0));
         }
-        return Backend.samplerCreate(gx, options);
+        return ibackend.samplerCreate(gx, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
-        Backend.samplerDestroy(gx, self);
+        ibackend.samplerDestroy(gx, self);
     }
 
-    pub inline fn fromBackendType(value: Backend.Sampler) @This() {
-        comptime assert(@sizeOf(Backend.Sampler) == @sizeOf(@This()));
+    pub inline fn fromBackendType(value: ibackend.Sampler) @This() {
+        comptime assert(@sizeOf(ibackend.Sampler) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));
     }
 
-    pub inline fn asBackendType(self: @This()) Backend.Sampler {
-        comptime assert(@sizeOf(Backend.Sampler) == @sizeOf(@This()));
+    pub inline fn asBackendType(self: @This()) ibackend.Sampler {
+        comptime assert(@sizeOf(ibackend.Sampler) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
 };
@@ -1825,52 +1909,11 @@ pub const TimestampCalibration = struct {
 };
 
 pub fn timestampCalibration(self: *Ctx) TimestampCalibration {
-    return Backend.timestampCalibration(self);
+    return ibackend.timestampCalibration(self);
 }
 
-pub const TransferCmd = union(enum) {
-    const CopyBufferToBuffer = struct {
-        const Region = struct {
-            src_offset: u64,
-            dst_offset: u64,
-            size: u64,
-        };
-
-        src: Buf(.{ .transfer_src = true }),
-        dst: Buf(.{ .transfer_dst = true }),
-        // XXX: needed? i mean yeah packing stuff into one buffer right? but upper bound may be way
-        // higher..?
-        regions: []const Region,
-    };
-
-    const CopyBufferToColorImage = struct {
-        const Region = struct {
-            // XXX: clean up these args/names?
-            buffer_offset: u64 = 0,
-            buffer_row_length: ?u32 = null,
-            buffer_image_height: ?u32 = null,
-            mip_level: u32 = 0,
-            base_array_layer: u32 = 0,
-            array_layer_count: u32 = 1,
-            image_offset: Offset = .{ .x = 0, .y = 0, .z = 0 },
-            image_extent: ImageOptions.Extent,
-        };
-
-        const Offset = struct { x: i32, y: i32, z: i32 };
-
-        buf: Buf(.{ .transfer_src = true }),
-        image: Image(.color),
-        base_mip_level: u32 = 0,
-        mip_level_count: u32 = 1,
-        regions: []const Region,
-    };
-
-    copy_buffer_to_buffer: CopyBufferToBuffer,
-    copy_buffer_to_read_only_color_image: CopyBufferToColorImage,
-};
-
 pub fn waitIdle(self: *const @This()) void {
-    Backend.waitIdle(self);
+    ibackend.waitIdle(self);
 }
 
 fn containsBits(self: anytype, other: @TypeOf(self)) bool {
@@ -1878,4 +1921,15 @@ fn containsBits(self: anytype, other: @TypeOf(self)) bool {
     const self_bits: Int = @bitCast(self);
     const other_bits: Int = @bitCast(other);
     return self_bits & other_bits == other_bits;
+}
+
+fn AsBackendSlice(Item: type) type {
+    const BackendItem = @FieldType(Item, "backend");
+    comptime assert(@sizeOf(Item) == @sizeOf(BackendItem));
+    comptime assert(@alignOf(Item) == @alignOf(BackendItem));
+    return struct {
+        pub fn mixin(slice: []const Item) []const BackendItem {
+            return @ptrCast(slice);
+        }
+    };
 }

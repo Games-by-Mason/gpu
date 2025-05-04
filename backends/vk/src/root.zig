@@ -4,6 +4,7 @@ const math = std.math;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
+const IBackend = gpu.IBackend;
 const log = std.log.scoped(.gpu);
 const gpu = @import("gpu");
 const Ctx = gpu.Ctx;
@@ -46,7 +47,7 @@ tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
 
 timestamp_queries: bool,
 
-pub const InitOptions = struct {
+const InitOptions = struct {
     pub const GetInstanceProcAddress = *const fn (
         instance: vk.Instance,
         name: [*:0]const u8,
@@ -77,24 +78,13 @@ pub const InitOptions = struct {
     layers_disable: OsStr.Optional = .none,
 };
 
-pub const Buf = vk.Buffer;
-pub const CmdBuf = vk.CommandBuffer;
-pub const DescPool = vk.DescriptorPool;
-pub const DescSet = vk.DescriptorSet;
-pub const DescSetLayout = vk.DescriptorSetLayout;
-pub const Memory = vk.DeviceMemory;
-pub const Image = vk.Image;
-pub const ImageView = vk.ImageView;
-pub const Queue = vk.Queue;
-pub const Pipeline = vk.Pipeline;
-pub const PipelineLayout = vk.PipelineLayout;
-pub const Sampler = vk.Sampler;
-
 const graphics_queue_name = "Graphics Queue";
 
-pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
+fn init(self: *Ctx, any_options: anytype) void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
+
+    const options: Ctx.InitOptions = any_options;
 
     log.info("Graphics API: Vulkan {}.{}.{} (variant {})", .{
         vk_version.major,
@@ -632,7 +622,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     const queue = device.getDeviceQueue(best_physical_device.queue_family_index, 0);
     setName(debug_messenger, device, queue, .{ .str = graphics_queue_name });
 
-    return .{
+    self.backend = .{
         .surface = surface,
         .base_wrapper = base_wrapper,
         .debug_messenger = debug_messenger,
@@ -652,7 +642,7 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
     };
 }
 
-pub fn deinit(self: *Ctx, gpa: Allocator) void {
+fn deinit(self: *Ctx, gpa: Allocator) void {
     // Destroy the Tracy data
     for (self.backend.tracy_query_pools) |pool| {
         self.backend.device.destroyQueryPool(pool, null);
@@ -697,7 +687,7 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     self.backend = undefined;
 }
 
-pub fn dedicatedBufCreate(
+fn dedicatedBufCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
@@ -753,7 +743,7 @@ pub fn dedicatedBufCreate(
     };
 }
 
-pub fn dedicatedUploadBufCreate(
+fn dedicatedUploadBufCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
@@ -822,7 +812,7 @@ pub fn dedicatedUploadBufCreate(
     };
 }
 
-pub fn dedicatedReadbackBufCreate(
+fn dedicatedReadbackBufCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
@@ -903,11 +893,11 @@ fn bufUsageFlagsFromKind(kind: Ctx.BufKind) vk.BufferUsageFlags {
     return result;
 }
 
-pub fn bufDestroy(self: *Ctx, buffer: Ctx.Buf(.{})) void {
+fn bufDestroy(self: *Ctx, buffer: Ctx.Buf(.{})) void {
     self.backend.device.destroyBuffer(buffer.asBackendType(), null);
 }
 
-pub fn combinedPipelineLayoutCreate(
+fn combinedPipelineLayoutCreate(
     self: *Ctx,
     comptime max_descriptors: u32,
     options: Ctx.CombinedPipelineLayout.InitOptions,
@@ -949,7 +939,7 @@ pub fn combinedPipelineLayoutCreate(
     };
 }
 
-pub fn combinedPipelineLayoutDestroy(
+fn combinedPipelineLayoutDestroy(
     self: *Ctx,
     layout: Ctx.CombinedPipelineLayout,
 ) void {
@@ -957,7 +947,7 @@ pub fn combinedPipelineLayoutDestroy(
     self.backend.device.destroyDescriptorSetLayout(layout.descriptor_set.asBackendType(), null);
 }
 
-pub fn zoneBegin(self: *Ctx, options: Ctx.Zone.BeginOptions) Ctx.Zone {
+fn zoneBegin(self: *Ctx, options: Ctx.Zone.BeginOptions) Ctx.Zone {
     if (self.backend.debug_messenger != .null_handle) {
         self.backend.device.cmdBeginDebugUtilsLabelEXT(options.cb.asBackendType(), &.{
             .p_label_name = options.loc.name orelse options.loc.function,
@@ -985,7 +975,7 @@ pub fn zoneBegin(self: *Ctx, options: Ctx.Zone.BeginOptions) Ctx.Zone {
     return .{};
 }
 
-pub fn zoneEnd(self: *Ctx, cb: Ctx.CmdBuf) void {
+fn zoneEnd(self: *Ctx, cb: Ctx.CmdBuf) void {
     if (self.backend.debug_messenger != .null_handle) {
         self.backend.device.cmdEndDebugUtilsLabelEXT(cb.asBackendType());
     }
@@ -1002,7 +992,7 @@ pub fn zoneEnd(self: *Ctx, cb: Ctx.CmdBuf) void {
     }
 }
 
-pub fn combinedCmdBufCreate(
+fn combinedCmdBufCreate(
     self: *Ctx,
     options: Ctx.CombinedCmdBufCreateOptions,
 ) Ctx.CombinedCmdBuf(null) {
@@ -1066,22 +1056,16 @@ pub fn combinedCmdBufCreate(
     };
 }
 
-pub fn cmdBufGraphicsAppend(
+fn cmdBufDraw(
     self: *Ctx,
     combined: Ctx.CombinedCmdBuf(null),
-    options: Ctx.CombinedCmdBuf(null).AppendGraphicsCmdsOptions,
+    cmds: []const Ctx.DrawCmd,
 ) void {
     const cb = combined.cb.asBackendType();
 
-    const zone = Ctx.Zone.begin(self, .{
-        .cb = combined.cb,
-        .loc = options.loc,
-    });
-    defer zone.end(self, combined.cb);
-
     const bindings = combined.bindings;
 
-    for (options.cmds) |draw| {
+    for (cmds) |draw| {
         if (draw.combined_pipeline.pipeline != bindings.pipeline) {
             bindings.pipeline = draw.combined_pipeline.pipeline;
 
@@ -1162,7 +1146,7 @@ pub fn cmdBufGraphicsAppend(
     }
 }
 
-pub fn combinedCmdBufSubmit(
+fn combinedCmdBufSubmit(
     self: *Ctx,
     combined: Ctx.CombinedCmdBuf(null),
     kind: Ctx.CmdBufKind,
@@ -1199,15 +1183,15 @@ pub fn combinedCmdBufSubmit(
     }
 }
 
-pub fn descriptorPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
+fn descriptorPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
     self.backend.device.destroyDescriptorPool(pool.asBackendType(), null);
 }
 
-pub fn descriptorPoolReset(self: *Ctx, pool: Ctx.DescPool) void {
+fn descriptorPoolReset(self: *Ctx, pool: Ctx.DescPool) void {
     self.backend.device.resetDescriptorPool(pool.asBackendType(), .{}) catch |err| @panic(@errorName(err));
 }
 
-pub fn descriptorPoolCreate(
+fn descriptorPoolCreate(
     self: *Ctx,
     comptime max_cmds: u32,
     options: Ctx.DescPool.InitOptions,
@@ -1284,7 +1268,7 @@ pub fn descriptorPoolCreate(
     return .fromBackendType(descriptor_pool);
 }
 
-pub fn descriptorSetsUpdate(
+fn descriptorSetsUpdate(
     self: *Ctx,
     comptime max_updates: u32,
     updates: []const Ctx.DescUpdateCmd,
@@ -1390,7 +1374,7 @@ pub fn descriptorSetsUpdate(
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Ctx) Ctx.ImageView {
+fn acquireNextImage(self: *Ctx) Ctx.ImageView {
     // Acquire the image
     const acquire_result = b: {
         const acquire_zone = Zone.begin(.{
@@ -1477,7 +1461,7 @@ pub fn acquireNextImage(self: *Ctx) Ctx.ImageView {
     return .fromBackendType(self.backend.swapchain.views.get(acquire_result.image_index));
 }
 
-pub fn beginFrame(self: *Ctx) void {
+fn beginFrame(self: *Ctx) void {
     self.backend.image_index = null;
 
     {
@@ -1592,12 +1576,12 @@ pub fn beginFrame(self: *Ctx) void {
     }
 }
 
-pub fn getDevice(self: *const @This()) Ctx.Device {
+fn getDevice(self: *const Ctx) Ctx.Device {
     const get_queue_zone = tracy.Zone.begin(.{ .name = "get queues", .src = @src() });
-    const calibration = timestampCalibrationImpl(self.device, self.timestamp_queries);
+    const calibration = timestampCalibrationImpl(self.backend.device, self.backend.timestamp_queries);
     const tracy_queue = TracyQueue.init(.{
         .gpu_time = calibration.gpu,
-        .period = self.timestamp_period,
+        .period = self.backend.timestamp_period,
         .context = 0,
         .flags = .{},
         .type = .vulkan,
@@ -1606,10 +1590,10 @@ pub fn getDevice(self: *const @This()) Ctx.Device {
     get_queue_zone.end();
 
     return .{
-        .kind = self.physical_device.ty,
-        .uniform_buf_offset_alignment = self.physical_device.min_uniform_buffer_offset_alignment,
-        .storage_buf_offset_alignment = self.physical_device.min_storage_buffer_offset_alignment,
-        .timestamp_period = self.timestamp_period,
+        .kind = self.backend.physical_device.ty,
+        .uniform_buf_offset_alignment = self.backend.physical_device.min_uniform_buffer_offset_alignment,
+        .storage_buf_offset_alignment = self.backend.physical_device.min_storage_buffer_offset_alignment,
+        .timestamp_period = self.backend.timestamp_period,
         .tracy_queue = tracy_queue,
     };
 }
@@ -1718,7 +1702,7 @@ fn placeImage(
     };
 }
 
-pub fn imageCreate(
+fn imageCreate(
     self: *Ctx,
     alloc_options: Ctx.Image(null).AllocOptions,
     image_options: Ctx.ImageOptions,
@@ -1778,11 +1762,11 @@ pub fn imageCreate(
     }
 }
 
-pub fn imageDestroy(self: *Ctx, image: Ctx.Image(null)) void {
+fn imageDestroy(self: *Ctx, image: Ctx.Image(null)) void {
     self.backend.device.destroyImage(image.asBackendType(), null);
 }
 
-pub fn imageMemoryRequirements(
+fn imageMemoryRequirements(
     self: *Ctx,
     options: Ctx.ImageOptions,
 ) Ctx.MemoryRequirements {
@@ -1811,7 +1795,7 @@ pub fn imageMemoryRequirements(
     };
 }
 
-pub fn imageViewCreate(
+fn imageViewCreate(
     self: *Ctx,
     options: Ctx.ImageView.InitOptions,
 ) Ctx.ImageView {
@@ -1836,20 +1820,20 @@ pub fn imageViewCreate(
         .subresource_range = .{
             .aspect_mask = aspectToVk(options.aspect),
             .base_mip_level = options.base_mip_level,
-            .level_count = options.level_count,
+            .level_count = options.mip_level_count,
             .base_array_layer = options.base_array_layer,
-            .layer_count = options.layer_count,
+            .layer_count = options.array_layer_count,
         },
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, image_view, options.name);
     return .fromBackendType(image_view);
 }
 
-pub fn imageViewDestroy(self: *Ctx, image_view: Ctx.ImageView) void {
+fn imageViewDestroy(self: *Ctx, image_view: Ctx.ImageView) void {
     self.backend.device.destroyImageView(image_view.asBackendType(), null);
 }
 
-pub fn memoryCreate(
+fn memoryCreate(
     self: *Ctx,
     options: Ctx.MemoryCreateUntypedOptions,
 ) Ctx.MemoryUnsized {
@@ -1963,15 +1947,15 @@ pub fn memoryCreate(
     return .fromBackendType(memory);
 }
 
-pub fn memoryDestroy(self: *Ctx, memory: Ctx.MemoryUnsized) void {
+fn memoryDestroy(self: *Ctx, memory: Ctx.MemoryUnsized) void {
     self.backend.device.freeMemory(memory.asBackendType(), null);
 }
 
-pub fn combinedPipelineDestroy(self: *Ctx, combined: Ctx.CombinedPipeline(null)) void {
+fn combinedPipelineDestroy(self: *Ctx, combined: Ctx.CombinedPipeline(null)) void {
     self.backend.device.destroyPipeline(combined.pipeline.asBackendType(), null);
 }
 
-pub fn combinedPipelinesCreate(
+fn combinedPipelinesCreate(
     self: *Ctx,
     comptime max_cmds: u32,
     cmds: []const Ctx.InitCombinedPipelineCmd,
@@ -2206,74 +2190,6 @@ fn transitionImageAttachmentToPresent(
     });
 }
 
-fn transitionImageToTransferDest(
-    self: *Ctx,
-    cb: vk.CommandBuffer,
-    image: vk.Image,
-) void {
-    self.backend.device.cmdPipelineBarrier2(cb, &.{
-        .dependency_flags = .{},
-        .memory_barrier_count = 0,
-        .p_memory_barriers = &.{},
-        .buffer_memory_barrier_count = 0,
-        .p_buffer_memory_barriers = &.{},
-        .image_memory_barrier_count = 1,
-        .p_image_memory_barriers = &.{.{
-            .src_stage_mask = .{ .top_of_pipe_bit = true },
-            .src_access_mask = .{},
-            .dst_stage_mask = .{ .all_transfer_bit = true },
-            .dst_access_mask = .{ .transfer_write_bit = true },
-            .old_layout = .undefined,
-            .new_layout = .transfer_dst_optimal,
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        }},
-    });
-}
-
-// XXX: this one might be meaningfully batched?
-// XXX: to avoid needing to convert arrays...we could just wrap the underlying bitfields in a constructor. that may
-// help elsewhere too idk. not as flexible in a way though and it will be low volume...could just set global maxes
-// for these things too.
-// XXX: assumes we're reading in the fragment shader, could make configurable in case we're reading earlier? or, if
-// we're just using this to *load* images, we could make it less optimal and just allow a single pipeline stall after
-// all images loaded or such.
-fn transitionImageCopiedToReadOnly(
-    self: *Ctx,
-    cb: vk.CommandBuffer,
-    image: vk.Image,
-    subresource_range: vk.ImageSubresourceRange,
-) void {
-    self.backend.device.cmdPipelineBarrier2(cb, &.{
-        .dependency_flags = .{},
-        .memory_barrier_count = 0,
-        .p_memory_barriers = &.{},
-        .buffer_memory_barrier_count = 0,
-        .p_buffer_memory_barriers = &.{},
-        .image_memory_barrier_count = 1,
-        .p_image_memory_barriers = &.{.{
-            .src_stage_mask = .{ .copy_bit = true },
-            .src_access_mask = .{ .transfer_write_bit = true },
-            .dst_stage_mask = .{ .fragment_shader_bit = true },
-            .dst_access_mask = .{ .shader_read_bit = true },
-            .old_layout = .transfer_dst_optimal,
-            .new_layout = .read_only_optimal,
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresource_range = subresource_range,
-        }},
-    });
-}
-
 fn transitionImageToAttachmentOptimal(
     self: *Ctx,
     cb: vk.CommandBuffer,
@@ -2307,7 +2223,7 @@ fn transitionImageToAttachmentOptimal(
     });
 }
 
-pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
+fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
     if (!options.present) {
         // We aren't presenting, just wrap up this command pool submission by signaling the fence
         // for this frame and then early out.
@@ -2423,7 +2339,7 @@ pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
     }
 }
 
-pub fn samplerCreate(
+fn samplerCreate(
     self: *Ctx,
     options: Ctx.Sampler.InitOptions,
 ) Ctx.Sampler {
@@ -2467,15 +2383,15 @@ pub fn samplerCreate(
     return .fromBackendType(sampler);
 }
 
-pub fn samplerDestroy(self: *Ctx, sampler: Ctx.Sampler) void {
+fn samplerDestroy(self: *Ctx, sampler: Ctx.Sampler) void {
     self.backend.device.destroySampler(sampler.asBackendType(), null);
 }
 
-pub fn timestampCalibration(self: *Ctx) Ctx.TimestampCalibration {
+fn timestampCalibration(self: *Ctx) Ctx.TimestampCalibration {
     return timestampCalibrationImpl(self.backend.device, self.backend.timestamp_queries);
 }
 
-pub fn timestampCalibrationImpl(
+fn timestampCalibrationImpl(
     device: vk.DeviceProxy,
     timestamp_queries: bool,
 ) Ctx.TimestampCalibration {
@@ -2503,112 +2419,149 @@ pub fn timestampCalibrationImpl(
     };
 }
 
-pub fn cmdBufTransferAppend(
-    self: *Ctx,
-    combined: Ctx.CombinedCmdBuf(null),
-    // XXX: max mipmaps is like 15, but we also use this for packing models into buffers so idk? we
-    // could make an opaque builder type that wraps the platform specific data to avoid needing to
-    // change the data if that helps. if that maps well to dx12. except there are actually two differnt
-    // arrays for vulkan right, the regions array for the transitions and the copies array? is it like
-    // that in dx12 too, should these opeations be separate? alternatively shoulnd't we be transitioning
-    // all mip levels at once if possible? i guess we could require they at least be contiguous? confusing
-    // with array layers too? fuck array of regions is also not enough would need to be array of barriers
-    // which we CAN do but yeah.
-    // XXX: okay learn what image arrays are for, and if the mips are per element or what.
-    comptime max_regions: u32,
-    options: Ctx.CombinedCmdBuf(null).AppendTransferCmdsOptions,
-) void {
-    const cb = combined.cb.asBackendType();
-
-    const zone = Ctx.Zone.begin(self, .{
-        .cb = .fromBackendType(cb),
-        .loc = options.loc,
-    });
-
-    for (options.cmds) |cmd| {
-        switch (cmd) {
-            .copy_buffer_to_read_only_color_image => |cmd_options| {
-                if (cmd_options.regions.len > max_regions) @panic("OOB");
-                transitionImageToTransferDest(self, cb, cmd_options.image.asBackendType());
-                var copies: std.BoundedArray(vk.BufferImageCopy, max_regions) = .{};
-                var mip_levels: u32 = 0;
-                var array_layers: u32 = 0;
-                for (cmd_options.regions) |region| {
-                    mip_levels = @max(mip_levels, region.mip_level + 1);
-                    array_layers = @max(
-                        array_layers,
-                        region.base_array_layer + region.array_layer_count,
-                    );
-                    copies.appendAssumeCapacity(.{
-                        .buffer_offset = region.buffer_offset,
-                        .buffer_row_length = region.buffer_row_length orelse 0,
-                        .buffer_image_height = region.buffer_image_height orelse 0,
-                        .image_subresource = .{
-                            .aspect_mask = .{ .color_bit = true },
-                            .mip_level = region.mip_level,
-                            .base_array_layer = region.base_array_layer,
-                            .layer_count = region.array_layer_count,
-                        },
-                        .image_offset = .{
-                            .x = region.image_offset.x,
-                            .y = region.image_offset.y,
-                            .z = region.image_offset.z,
-                        },
-                        .image_extent = .{
-                            .width = region.image_extent.width,
-                            .height = region.image_extent.height,
-                            .depth = region.image_extent.depth,
-                        },
-                    });
-                }
-                self.backend.device.cmdCopyBufferToImage(
-                    cb,
-                    cmd_options.buf.asBackendType(),
-                    cmd_options.image.asBackendType(),
-                    .transfer_dst_optimal,
-                    @intCast(copies.len),
-                    &copies.buffer,
-                );
-                // XXX: we should be accumulating a list of transitions, and then submitting them all
-                // at once
-                // XXX: document that perf-wise, we assume you're filling all layers and mips
-                transitionImageCopiedToReadOnly(
-                    self,
-                    cb,
-                    cmd_options.image.asBackendType(),
-                    .{
-                        .aspect_mask = .{ .color_bit = true },
-                        .base_mip_level = 0,
-                        .level_count = mip_levels,
-                        .base_array_layer = 0,
-                        .layer_count = array_layers,
-                    },
-                );
-            },
-            .copy_buffer_to_buffer => |cmd_options| {
-                var regions: std.BoundedArray(vk.BufferCopy, max_regions) = .{};
-                for (cmd_options.regions) |region| {
-                    regions.append(.{
-                        .src_offset = region.src_offset,
-                        .dst_offset = region.dst_offset,
-                        .size = region.size,
-                    }) catch @panic("OOB");
-                }
-                self.backend.device.cmdCopyBuffer(
-                    cb,
-                    cmd_options.src.asBackendType(),
-                    cmd_options.dst.asBackendType(),
-                    @intCast(regions.len),
-                    &regions.buffer,
-                );
-            },
-        }
-    }
-
-    zone.end(self, .fromBackendType(cb));
+fn rangeToVk(range: Ctx.ImageTransition.Range) vk.ImageSubresourceRange {
+    return .{
+        .aspect_mask = aspectToVk(range.aspect),
+        .base_mip_level = range.base_mip_level,
+        .level_count = range.mip_level_count,
+        .base_array_layer = range.base_array_layer,
+        .layer_count = range.array_layer_count,
+    };
 }
 
-pub fn waitIdle(self: *const Ctx) void {
+fn imageTransitionUndefinedToTransferDst(
+    options: Ctx.ImageTransition.UndefinedToTransferDstOptions,
+    out_transition: anytype,
+) void {
+    @as(*ibackend.ImageTransition, out_transition).* = .{
+        .src_stage_mask = .{ .top_of_pipe_bit = true },
+        .src_access_mask = .{},
+        .dst_stage_mask = .{ .all_transfer_bit = true },
+        .dst_access_mask = .{ .transfer_write_bit = true },
+        .old_layout = .undefined,
+        .new_layout = .transfer_dst_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.image.asBackendType(),
+        .subresource_range = rangeToVk(options.range),
+    };
+}
+
+fn imageTransitionTransferDstToReadOnly(
+    options: Ctx.ImageTransition.TransferDstToReadOnlyOptions,
+    out_transition: anytype,
+) void {
+    @as(*ibackend.ImageTransition, out_transition).* = .{
+        .src_stage_mask = .{ .copy_bit = true },
+        .src_access_mask = .{ .transfer_write_bit = true },
+        .dst_stage_mask = .{
+            .vertex_shader_bit = options.stage.vertex_shader,
+            .fragment_shader_bit = options.stage.fragment_shader,
+            .compute_shader_bit = options.stage.compute_shader,
+        },
+        .dst_access_mask = .{ .shader_read_bit = true },
+        .old_layout = .transfer_dst_optimal,
+        .new_layout = .read_only_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.image.asBackendType(),
+        .subresource_range = rangeToVk(options.range),
+    };
+}
+
+fn cmdBufTransitionImages(
+    self: *Ctx,
+    combined: Ctx.CombinedCmdBuf(null),
+    transitions: anytype,
+) void {
+    const barriers = Ctx.ImageTransition.asBackendSlice(transitions);
+    self.backend.device.cmdPipelineBarrier2(combined.cb.asBackendType(), &.{
+        .dependency_flags = .{},
+        .memory_barrier_count = 0,
+        .p_memory_barriers = &.{},
+        .buffer_memory_barrier_count = 0,
+        .p_buffer_memory_barriers = &.{},
+        .image_memory_barrier_count = @intCast(barriers.len),
+        .p_image_memory_barriers = barriers.ptr,
+    });
+}
+
+fn imageUploadRegionInit(
+    options: Ctx.ImageUpload.Region.InitOptions,
+    out_region: anytype,
+) void {
+    @as(*ibackend.ImageUploadRegion, out_region).* = .{
+        .buffer_offset = options.buffer_offset,
+        .buffer_row_length = options.buffer_row_length orelse 0,
+        .buffer_image_height = options.buffer_image_height orelse 0,
+        .image_subresource = .{
+            .aspect_mask = aspectToVk(options.aspect),
+            .mip_level = options.mip_level,
+            .base_array_layer = options.base_array_layer,
+            .layer_count = options.array_layer_count,
+        },
+        .image_offset = .{
+            .x = options.image_offset.x,
+            .y = options.image_offset.y,
+            .z = options.image_offset.z,
+        },
+        .image_extent = .{
+            .width = options.image_extent.width,
+            .height = options.image_extent.height,
+            .depth = options.image_extent.depth,
+        },
+    };
+}
+
+fn bufferUploadRegionInit(
+    options: Ctx.BufferUpload.Region.InitOptions,
+    out_region: anytype,
+) void {
+    @as(*ibackend.BufferUploadRegion, out_region).* = .{
+        .src_offset = options.src_offset,
+        .dst_offset = options.dst_offset,
+        .size = options.size,
+    };
+}
+
+fn cmdBufUploadImage(
+    self: *Ctx,
+    combined: Ctx.CombinedCmdBuf(null),
+    dst: Ctx.Image(null),
+    src: Ctx.Buf(.{}),
+    regions: anytype,
+) void {
+    const vk_regions = Ctx.ImageUpload.Region.asBackendSlice(regions);
+    const cb = combined.cb.asBackendType();
+    self.backend.device.cmdCopyBufferToImage(
+        cb,
+        src.asBackendType(),
+        dst.asBackendType(),
+        .transfer_dst_optimal,
+        @intCast(vk_regions.len),
+        vk_regions.ptr,
+    );
+}
+
+fn cmdBufUploadBuffer(
+    self: *Ctx,
+    combined: Ctx.CombinedCmdBuf(null),
+    dst: Ctx.Buf(.{}),
+    src: Ctx.Buf(.{}),
+    regions: anytype,
+) void {
+    const vk_regions = Ctx.BufferUpload.Region.asBackendSlice(regions);
+    const cb = combined.cb.asBackendType();
+    self.backend.device.cmdCopyBuffer(
+        cb,
+        src.asBackendType(),
+        dst.asBackendType(),
+        @intCast(vk_regions.len),
+        vk_regions.ptr,
+    );
+}
+
+fn waitIdle(self: *const Ctx) void {
     self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
 }
 
@@ -2637,15 +2590,11 @@ fn swizzleToVk(
     };
 }
 
-fn aspectToVk(self: Ctx.ImageView.InitOptions.Aspect) vk.ImageAspectFlags {
+fn aspectToVk(self: Ctx.ImageAspect) vk.ImageAspectFlags {
     return .{
         .color_bit = self.color,
         .depth_bit = self.depth,
         .stencil_bit = self.stencil,
-        .metadata_bit = self.metadata,
-        .plane_0_bit = self.plane_0,
-        .plane_1_bit = self.plane_1,
-        .plane_2_bit = self.plane_2,
     };
 }
 
@@ -2724,7 +2673,7 @@ const Swapchain = struct {
     swap_extent: vk.Extent2D,
     external_framebuf_size: struct { u32, u32 },
 
-    pub fn init(
+    fn init(
         instance: vk.InstanceProxy,
         framebuf_size: struct { u32, u32 },
         device: vk.DeviceProxy,
@@ -2826,17 +2775,17 @@ const Swapchain = struct {
         };
     }
 
-    pub fn destroyEverythingExceptSwapchain(self: *@This(), device: vk.DeviceProxy) void {
+    fn destroyEverythingExceptSwapchain(self: *@This(), device: vk.DeviceProxy) void {
         for (self.views.constSlice()) |v| device.destroyImageView(v, null);
     }
 
-    pub fn deinit(self: *@This(), device: vk.DeviceProxy) void {
+    fn deinit(self: *@This(), device: vk.DeviceProxy) void {
         self.destroyEverythingExceptSwapchain(device);
         device.destroySwapchainKHR(self.swapchain, null);
         self.* = undefined;
     }
 
-    pub fn recreate(self: *@This(), gx: *Ctx) void {
+    fn recreate(self: *@This(), gx: *Ctx) void {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
 
@@ -3160,3 +3109,62 @@ fn setenv(name: OsStr, value: OsStr) void {
         }
     }
 }
+
+pub const ibackend: IBackend = .{
+    .Buf = vk.Buffer,
+    .CmdBuf = vk.CommandBuffer,
+    .DescPool = vk.DescriptorPool,
+    .DescSet = vk.DescriptorSet,
+    .DescSetLayout = vk.DescriptorSetLayout,
+    .Memory = vk.DeviceMemory,
+    .Image = vk.Image,
+    .ImageView = vk.ImageView,
+    .Queue = vk.Queue,
+    .Pipeline = vk.Pipeline,
+    .PipelineLayout = vk.PipelineLayout,
+    .Sampler = vk.Sampler,
+    .ImageTransition = vk.ImageMemoryBarrier2,
+    .ImageUploadRegion = vk.BufferImageCopy,
+    .BufferUploadRegion = vk.BufferCopy,
+    .InitOptions = InitOptions,
+    .init = init,
+    .deinit = deinit,
+    .dedicatedBufCreate = dedicatedBufCreate,
+    .dedicatedUploadBufCreate = dedicatedUploadBufCreate,
+    .dedicatedReadbackBufCreate = dedicatedReadbackBufCreate,
+    .bufDestroy = bufDestroy,
+    .combinedPipelineLayoutCreate = combinedPipelineLayoutCreate,
+    .combinedPipelineLayoutDestroy = combinedPipelineLayoutDestroy,
+    .zoneBegin = zoneBegin,
+    .zoneEnd = zoneEnd,
+    .imageTransitionUndefinedToTransferDst = imageTransitionUndefinedToTransferDst,
+    .imageTransitionTransferDstToReadOnly = imageTransitionTransferDstToReadOnly,
+    .cmdBufDraw = cmdBufDraw,
+    .cmdBufUploadImage = cmdBufUploadImage,
+    .cmdBufUploadBuffer = cmdBufUploadBuffer,
+    .cmdBufTransitionImages = cmdBufTransitionImages,
+    .imageUploadRegionInit = imageUploadRegionInit,
+    .bufferUploadRegionInit = bufferUploadRegionInit,
+    .combinedCmdBufCreate = combinedCmdBufCreate,
+    .combinedCmdBufSubmit = combinedCmdBufSubmit,
+    .descriptorPoolDestroy = descriptorPoolDestroy,
+    .descriptorPoolCreate = descriptorPoolCreate,
+    .descriptorSetsUpdate = descriptorSetsUpdate,
+    .beginFrame = beginFrame,
+    .endFrame = endFrame,
+    .acquireNextImage = acquireNextImage,
+    .getDevice = getDevice,
+    .imageCreate = imageCreate,
+    .imageDestroy = imageDestroy,
+    .imageMemoryRequirements = imageMemoryRequirements,
+    .imageViewCreate = imageViewCreate,
+    .imageViewDestroy = imageViewDestroy,
+    .memoryCreate = memoryCreate,
+    .memoryDestroy = memoryDestroy,
+    .combinedPipelineDestroy = combinedPipelineDestroy,
+    .combinedPipelinesCreate = combinedPipelinesCreate,
+    .samplerCreate = samplerCreate,
+    .samplerDestroy = samplerDestroy,
+    .timestampCalibration = timestampCalibration,
+    .waitIdle = waitIdle,
+};
