@@ -1443,32 +1443,12 @@ pub fn acquireNextImage(self: *Ctx) Ctx.ImageView {
             });
             defer zone.end(self, .fromBackendType(cb));
 
-            self.backend.device.cmdPipelineBarrier(
+            transitionImageLayout(
+                self,
                 cb,
-                .{ .top_of_pipe_bit = true },
-                .{ .color_attachment_output_bit = true },
-                .{},
-                0,
-                null,
-                0,
-                null,
-                1,
-                &.{.{
-                    .src_access_mask = .{},
-                    .dst_access_mask = .{ .color_attachment_write_bit = true },
-                    .old_layout = .undefined,
-                    .new_layout = .color_attachment_optimal,
-                    .src_queue_family_index = 0, // Ignored
-                    .dst_queue_family_index = 0, // Ignored
-                    .image = self.backend.swapchain.images.get(acquire_result.image_index),
-                    .subresource_range = .{
-                        .aspect_mask = .{ .color_bit = true },
-                        .base_mip_level = 0,
-                        .level_count = 1,
-                        .base_array_layer = 0,
-                        .layer_count = 1,
-                    },
-                }},
+                self.backend.swapchain.images.get(acquire_result.image_index),
+                .undefined,
+                .color_attachment_optimal,
             );
         }
 
@@ -2206,6 +2186,67 @@ pub fn combinedPipelinesCreate(
     }
 }
 
+fn transitionImageLayout(
+    self: *Ctx,
+    cb: vk.CommandBuffer,
+    image: vk.Image,
+    from: vk.ImageLayout,
+    to: vk.ImageLayout,
+) void {
+    var barrier: vk.ImageMemoryBarrier = .{
+        .src_access_mask = .{},
+        .dst_access_mask = .{},
+        .old_layout = from,
+        .new_layout = to,
+        .src_queue_family_index = 0, // Ignored
+        .dst_queue_family_index = 0, // Ignored
+        .image = image,
+        .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+    };
+    var source_stage: vk.PipelineStageFlags = .{};
+    var dest_stage: vk.PipelineStageFlags = .{};
+
+    if (from == .color_attachment_optimal and to == .present_src_khr) {
+        barrier.src_access_mask.color_attachment_write_bit = true;
+        source_stage.color_attachment_output_bit = true;
+        dest_stage.bottom_of_pipe_bit = true;
+    } else if (from == .undefined and to == .color_attachment_optimal) {
+        barrier.dst_access_mask.color_attachment_write_bit = true;
+        source_stage.top_of_pipe_bit = true;
+        dest_stage.color_attachment_output_bit = true;
+    } else if (from == .undefined and to == .transfer_dst_optimal) {
+        barrier.dst_access_mask.transfer_write_bit = true;
+        source_stage.top_of_pipe_bit = true;
+        dest_stage.transfer_bit = true;
+    } else if (from == .transfer_dst_optimal and to == .shader_read_only_optimal) {
+        barrier.src_access_mask.transfer_write_bit = true;
+        barrier.dst_access_mask.shader_read_bit = true;
+        source_stage.transfer_bit = true;
+        dest_stage.fragment_shader_bit = true;
+    } else {
+        std.debug.panic("unsupported layout transition: {} -> {}", .{ from, to });
+    }
+
+    self.backend.device.cmdPipelineBarrier(
+        cb,
+        source_stage,
+        dest_stage,
+        .{},
+        0,
+        null,
+        0,
+        null,
+        1,
+        &.{barrier},
+    );
+}
+
 pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
     if (!options.present) {
         // We aren't presenting, just wrap up this command pool submission by signaling the fence
@@ -2259,32 +2300,12 @@ pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
             });
             defer zone.end(self, .fromBackendType(cb));
 
-            self.backend.device.cmdPipelineBarrier(
+            transitionImageLayout(
+                self,
                 cb,
-                .{ .color_attachment_output_bit = true },
-                .{ .bottom_of_pipe_bit = true },
-                .{},
-                0,
-                null,
-                0,
-                null,
-                1,
-                &.{.{
-                    .src_access_mask = .{ .color_attachment_write_bit = true },
-                    .dst_access_mask = .{},
-                    .old_layout = .color_attachment_optimal,
-                    .new_layout = .present_src_khr,
-                    .src_queue_family_index = 0, // Ignored
-                    .dst_queue_family_index = 0, // Ignored
-                    .image = self.backend.swapchain.images.get(self.backend.image_index.?),
-                    .subresource_range = .{
-                        .aspect_mask = .{ .color_bit = true },
-                        .base_mip_level = 0,
-                        .level_count = 1,
-                        .base_array_layer = 0,
-                        .layer_count = 1,
-                    },
-                }},
+                self.backend.swapchain.images.get(self.backend.image_index.?),
+                .color_attachment_optimal,
+                .present_src_khr,
             );
         }
 
@@ -2440,45 +2461,13 @@ pub fn cmdBufTransferAppend(
     for (options.cmds) |cmd| {
         switch (cmd) {
             .copy_buffer_to_color_image => |cmd_options| {
-                const subresource_range: vk.ImageSubresourceRange = .{
-                    // Note: "If the queue family used to create the VkCommandPool which
-                    // CmdBuf was allocated from does not support
-                    // VK_QUEUE_GRAPHICS_BIT, for each element of pRegions, the aspectMask
-                    // member of imageSubresource must not be VK_IMAGE_ASPECT_DEPTH_BIT or
-                    // VK_IMAGE_ASPECT_STENCIL_BIT"
-                    //
-                    // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdCopyBufferToImage.html
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = cmd_options.base_mip_level,
-                    .level_count = cmd_options.level_count,
-                    .base_array_layer = cmd_options.base_array_layer,
-                    .layer_count = cmd_options.layer_count,
-                };
-
-                // Transition the image to transfer dst optimal
-                self.backend.device.cmdPipelineBarrier(
+                transitionImageLayout(
+                    self,
                     cb,
-                    .{ .top_of_pipe_bit = true },
-                    .{ .transfer_bit = true },
-                    .{},
-                    0,
-                    null,
-                    0,
-                    null,
-                    1,
-                    &.{.{
-                        .src_access_mask = .{},
-                        .dst_access_mask = .{ .transfer_write_bit = true },
-                        .old_layout = .undefined,
-                        .new_layout = .transfer_dst_optimal,
-                        .src_queue_family_index = 0, // Ignored
-                        .dst_queue_family_index = 0, // Ignored
-                        .image = cmd_options.image.asBackendType(),
-                        .subresource_range = subresource_range,
-                    }},
+                    cmd_options.image.asBackendType(),
+                    .undefined,
+                    .transfer_dst_optimal,
                 );
-
-                // Copy data from the buffer to the image
                 var regions: std.BoundedArray(vk.BufferImageCopy, max_regions) = .{};
                 for (cmd_options.regions) |region| {
                     regions.append(.{
@@ -2511,28 +2500,12 @@ pub fn cmdBufTransferAppend(
                     @intCast(regions.len),
                     &regions.buffer,
                 );
-
-                // Transition to the destination layout
-                self.backend.device.cmdPipelineBarrier(
+                transitionImageLayout(
+                    self,
                     cb,
-                    .{ .transfer_bit = true },
-                    .{ .fragment_shader_bit = true },
-                    .{},
-                    0,
-                    null,
-                    0,
-                    null,
-                    1,
-                    &.{.{
-                        .src_access_mask = .{ .transfer_write_bit = true },
-                        .dst_access_mask = .{ .shader_read_bit = true },
-                        .old_layout = .transfer_dst_optimal,
-                        .new_layout = layoutToVk(cmd_options.new_layout),
-                        .src_queue_family_index = 0, // Ignored
-                        .dst_queue_family_index = 0, // Ignored
-                        .image = cmd_options.image.asBackendType(),
-                        .subresource_range = subresource_range,
-                    }},
+                    cmd_options.image.asBackendType(),
+                    .transfer_dst_optimal,
+                    layoutToVk(cmd_options.new_layout),
                 );
             },
             .copy_buffer_to_buffer => |cmd_options| {
