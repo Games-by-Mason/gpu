@@ -510,7 +510,9 @@ pub fn init(options: Ctx.InitOptionsImpl(InitOptions)) @This() {
         .p_next = &device_features_11,
     };
     const device_features_13: vk.PhysicalDeviceVulkan13Features = .{
-        // Support required by Vulkan 1.3
+        // 100% of Windows and Linux devices in `vulkan.gpuinfo.org` support these features at the
+        // time of writing.
+        .synchronization_2 = vk.TRUE,
         .dynamic_rendering = vk.TRUE,
         .p_next = &device_features_12,
     };
@@ -2206,7 +2208,7 @@ fn transitionImageLayout(
         barrier.dst_access_mask.transfer_write_bit = true;
         source_stage.top_of_pipe_bit = true;
         dest_stage.transfer_bit = true;
-    } else if (from == .transfer_dst_optimal and to == .shader_read_only_optimal) {
+    } else if (from == .transfer_dst_optimal and to == .read_only_optimal) {
         barrier.src_access_mask.transfer_write_bit = true;
         barrier.dst_access_mask.shader_read_bit = true;
         source_stage.transfer_bit = true;
@@ -2520,20 +2522,12 @@ pub fn waitIdle(self: *const Ctx) void {
 fn layoutToVk(layout: Ctx.ImageOptions.Layout) vk.ImageLayout {
     return switch (layout) {
         .undefined => .undefined,
-        .general => .general,
         .color_attachment_optimal => .color_attachment_optimal,
         .depth_stencil_attachment_optimal => .depth_stencil_attachment_optimal,
-        .depth_stencil_read_only_optimal => .depth_stencil_read_only_optimal,
-        .shader_read_only_optimal => .shader_read_only_optimal,
         .transfer_src_optimal => .transfer_src_optimal,
         .transfer_dst_optimal => .transfer_dst_optimal,
-        .preinitialized => .preinitialized,
         .depth_read_only_stencil_attachment_optimal => .depth_read_only_stencil_attachment_optimal,
         .depth_attachment_stencil_read_only_optimal => .depth_attachment_stencil_read_only_optimal,
-        .depth_attachment_optimal => .depth_attachment_optimal,
-        .depth_read_only_optimal => .depth_read_only_optimal,
-        .stencil_attachment_optimal => .stencil_attachment_optimal,
-        .stencil_read_only_optimal => .stencil_read_only_optimal,
         .read_only_optimal => .read_only_optimal,
         .attachment_optimal => .attachment_optimal,
     };

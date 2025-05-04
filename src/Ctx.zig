@@ -1165,20 +1165,12 @@ pub const ImageOptions = struct {
 
     pub const Layout = enum {
         undefined,
-        general,
         color_attachment_optimal,
         depth_stencil_attachment_optimal,
-        depth_stencil_read_only_optimal,
-        shader_read_only_optimal,
         transfer_src_optimal,
         transfer_dst_optimal,
-        preinitialized,
         depth_read_only_stencil_attachment_optimal,
         depth_attachment_stencil_read_only_optimal,
-        depth_attachment_optimal,
-        depth_read_only_optimal,
-        stencil_attachment_optimal,
-        stencil_read_only_optimal,
         read_only_optimal,
         attachment_optimal,
     };
