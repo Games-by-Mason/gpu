@@ -888,26 +888,15 @@ pub fn beginFrame(self: *@This()) void {
 }
 
 pub const ImageResultUntyped = struct {
-    image: Image(.{}),
+    image: Image(null),
     dedicated: ?Memory(null),
 };
 
-pub fn Image(kind: ImageKind) type {
+pub fn Image(kind: ?ImageKind) type {
     return enum(u64) {
         _,
 
         pub const ColorOptions = struct {
-            pub const Kind = struct {
-                tiling: ImageOptions.Tiling,
-
-                pub fn asKind(self: @This()) ImageKind {
-                    return .{
-                        .format = .color,
-                        .tiling = self.tiling,
-                    };
-                }
-            };
-
             const Usage = packed struct {
                 transfer_src: bool = false,
                 transfer_dst: bool = false,
@@ -917,10 +906,6 @@ pub fn Image(kind: ImageKind) type {
                 input_attachment: bool = false,
             };
 
-            pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
-                return Backend.imageMemoryRequirements(gx, imageOptions(self));
-            }
-
             name: DebugName,
             flags: ImageOptions.Flags,
             dimensions: ImageOptions.Dimensions,
@@ -929,24 +914,15 @@ pub fn Image(kind: ImageKind) type {
             mip_levels: u16,
             array_layers: u16,
             samples: ImageOptions.Samples,
-            exclusive: bool,
             initial_layout: ImageOptions.Layout,
             usage: Usage,
+
+            pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
+                return Backend.imageMemoryRequirements(gx, imageOptions(self));
+            }
         };
 
         pub const DepthStencilOptions = struct {
-            pub const Kind = struct {
-                format: ImageOptions.Format.DepthStencil,
-                tiling: ImageOptions.Tiling,
-
-                pub fn asKind(self: @This()) ImageKind {
-                    return .{
-                        .format = .{ .depth_stencil = self.format },
-                        .tiling = self.tiling,
-                    };
-                }
-            };
-
             const Usage = packed struct {
                 transfer_src: bool = false,
                 transfer_dst: bool = false,
@@ -967,12 +943,11 @@ pub fn Image(kind: ImageKind) type {
             mip_levels: u16,
             array_layers: u16,
             samples: ImageOptions.Samples,
-            exclusive: bool,
             initial_layout: ImageOptions.Layout,
             usage: Usage = .{},
         };
 
-        pub const Options = if (kind.format) |format| switch (format) {
+        pub const Options = if (kind) |k| switch (k) {
             .color => ColorOptions,
             .depth_stencil => DepthStencilOptions,
         } else @compileError("missing format");
@@ -984,9 +959,8 @@ pub fn Image(kind: ImageKind) type {
             return .{
                 .name = options.name,
                 .flags = options.flags,
-                .tiling = kind.tiling.?,
                 .dimensions = options.dimensions,
-                .format = switch (kind.format.?) {
+                .format = switch (kind.?) {
                     .depth_stencil => |format| .{ .depth_stencil = format },
                     .color => .{ .color = options.format },
                 },
@@ -994,9 +968,8 @@ pub fn Image(kind: ImageKind) type {
                 .mip_levels = options.mip_levels,
                 .array_layers = options.array_layers,
                 .samples = options.samples,
-                .exclusive = options.exclusive,
                 .initial_layout = options.initial_layout,
-                .usage = switch (kind.format.?) {
+                .usage = switch (kind.?) {
                     .depth_stencil => .{
                         .transfer_src = options.usage.transfer_src,
                         .transfer_dst = options.usage.transfer_dst,
@@ -1025,11 +998,16 @@ pub fn Image(kind: ImageKind) type {
         };
 
         pub const AllocOptions = union(enum) {
+            const memory_kind: ?MemoryKind = if (kind) |k| switch (k) {
+                .color => .color_image,
+                .depth_stencil => |format| .{ .depth_stencil_image = format },
+            } else null;
+
             /// Let the driver decide whether to bump allocate the image into the given buffer,
             /// updating offset to reflect the allocation, or to create a dedicated allocation. Use
             /// this approach unless you have a really good reason not to.
             auto: struct {
-                memory: Memory(.{ .image = kind }),
+                memory: Memory(memory_kind),
                 offset: *u64,
             },
             /// Creates a dedicated allocation for this image.
@@ -1038,19 +1016,19 @@ pub fn Image(kind: ImageKind) type {
             /// responsible for ensuring proper alignment, not overrunning the buffer, and checking
             /// that this image does not require a dedicated allocation on the current hardware.
             place: struct {
-                memory: Memory(.{ .image = kind }),
+                memory: Memory(memory_kind),
                 offset: u64,
             },
 
-            fn asUntyped(self: @This()) Image(.{}).AllocOptions {
+            fn asUntyped(self: @This()) Image(null).AllocOptions {
                 return switch (self) {
                     .auto => |auto| .{ .auto = .{
-                        .memory = auto.memory.as(.{ .image = .{} }),
+                        .memory = auto.memory.as(null),
                         .offset = auto.offset,
                     } },
                     .dedicated => .dedicated,
                     .place => |place| .{ .place = .{
-                        .memory = place.memory.as(.{ .image = .{} }),
+                        .memory = place.memory.as(null),
                         .offset = place.offset,
                     } },
                 };
@@ -1063,7 +1041,7 @@ pub fn Image(kind: ImageKind) type {
         };
 
         pub fn init(gx: *Ctx, options: @This().InitOptions) InitResult {
-            comptime assert(kind.nonNull());
+            comptime assert(kind != null);
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
             const result = Backend.imageCreate(
@@ -1090,11 +1068,11 @@ pub fn Image(kind: ImageKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Ctx) void {
-            Backend.imageDestroy(gx, self.as(.{}));
+            Backend.imageDestroy(gx, self.as(null));
         }
 
-        pub inline fn as(self: @This(), comptime result_kind: ImageKind) Image(result_kind) {
-            if (!comptime kind.castAllowed(result_kind)) {
+        pub inline fn as(self: @This(), comptime result_kind: ?ImageKind) Image(result_kind) {
+            if (!comptime ImageKind.castAllowed(kind, result_kind)) {
                 @compileError("cannot convert " ++ @typeName(@This()) ++ " to " ++ @typeName(Image(result_kind)));
             }
 
@@ -1113,31 +1091,22 @@ pub fn Image(kind: ImageKind) type {
     };
 }
 
-pub const ImageKind = struct {
-    pub const Format = union(enum) {
-        color,
-        depth_stencil: ImageOptions.Format.DepthStencil,
+pub const ImageKind = union(enum) {
+    color,
+    depth_stencil: ImageOptions.Format.DepthStencil,
 
-        fn eq(lhs: @This(), rhs: @This()) bool {
-            return switch (lhs) {
-                .color => rhs == .color,
-                .depth_stencil => |lhs_format| switch (rhs) {
-                    .depth_stencil => |rhs_format| lhs_format == rhs_format,
-                    else => false,
-                },
-            };
-        }
-    };
-    format: ?Format = null,
-    tiling: ?ImageOptions.Tiling = null,
-
-    fn nonNull(self: @This()) bool {
-        return self.format != null and self.tiling != null;
+    fn eq(lhs: @This(), rhs: @This()) bool {
+        return switch (lhs) {
+            .color => rhs == .color,
+            .depth_stencil => |lhs_format| switch (rhs) {
+                .depth_stencil => |rhs_format| lhs_format == rhs_format,
+                else => false,
+            },
+        };
     }
 
-    fn castAllowed(self: ImageKind, as: ImageKind) bool {
-        if (as.format != null and self.format == null and !self.format.?.eq(as.format.?)) return false;
-        if (as.tiling != null and self.tiling != as.tiling) return false;
+    fn castAllowed(self: ?@This(), as: ?@This()) bool {
+        if (as != null and self == null and !self.?.eq(as.?)) return false;
         return true;
     }
 };
@@ -1163,11 +1132,6 @@ pub const ImageOptions = struct {
         @"16",
         @"32",
         @"64",
-    };
-
-    pub const Tiling = enum {
-        linear,
-        optimal,
     };
 
     pub const Format = union(enum) {
@@ -1220,29 +1184,18 @@ pub const ImageOptions = struct {
     };
 
     pub const Flags = packed struct {
-        sparse_binding: bool = false,
-        sparse_residency: bool = false,
-        sparse_aliased: bool = false,
-        mutable_format: bool = false,
         cube_compatible: bool = false,
-        alias: bool = false,
-        split_instance_bind_regions: bool = false,
         @"2d_array_compatible": bool = false,
-        block_texel_view_compatible: bool = false,
-        extended_usage: bool = false,
-        protected: bool = false,
     };
 
     name: DebugName,
     flags: Flags,
-    tiling: Tiling,
     dimensions: Dimensions,
     format: Format,
     extent: Extent,
     mip_levels: u16,
     array_layers: u16,
     samples: Samples,
-    exclusive: bool,
     initial_layout: Layout,
     usage: Usage,
 };
@@ -1289,7 +1242,7 @@ pub const ImageView = enum(u64) {
         };
 
         name: DebugName,
-        image: Image(.{}),
+        image: Image(null),
         kind: Kind,
         format: ImageOptions.Format,
         components: ComponentMapping = .{},
@@ -1360,10 +1313,8 @@ pub fn Memory(k: ?MemoryKind) type {
 
         pub const InitOptions = if (kind) |some| switch (some) {
             .buf => InitNoFormatOptions,
-            .image => |image| if (image.format) |format| switch (format) {
-                .color => InitNoFormatOptions,
-                .depth_stencil => InitDepthStencilFormatOptions,
-            } else @compileError("missing image format"),
+            .color_image => InitNoFormatOptions,
+            .depth_stencil_image => InitDepthStencilFormatOptions,
         } else @compileError("missing usage");
 
         unsized: MemoryUnsized,
@@ -1373,9 +1324,7 @@ pub fn Memory(k: ?MemoryKind) type {
             comptime assert(kind != null);
             comptime switch (kind.?) {
                 .buf => |buffer_kind| buffer_kind.assertNonZero(),
-                .image => |image| {
-                    assert(image.nonNull());
-                },
+                .color_image, .depth_stencil_image => {},
             };
 
             const zone = tracy.Zone.begin(.{ .src = @src() });
@@ -1387,17 +1336,10 @@ pub fn Memory(k: ?MemoryKind) type {
                 .name = options.name,
                 .usage = switch (kind.?) {
                     .buf => |buf| .{ .buf = buf },
-                    .image => |image| switch (image.format.?) {
-                        .color => .{
-                            .color_image = .{
-                                .tiling = image.tiling.?,
-                            },
-                        },
-                        .depth_stencil => |format| .{ .depth_stencil_image = .{
-                            .tiling = image.tiling.?,
-                            .format = format,
-                        } },
-                    },
+                    .color_image => .color_image,
+                    .depth_stencil_image => |format| .{ .depth_stencil_image = .{
+                        .format = format,
+                    } },
                 },
                 .access = .none,
                 .size = options.size,
@@ -1431,7 +1373,8 @@ pub fn Memory(k: ?MemoryKind) type {
 }
 
 pub const MemoryKind = union(enum) {
-    image: ImageKind,
+    color_image: void,
+    depth_stencil_image: ImageOptions.Format.DepthStencil,
     buf: BufKind,
 
     fn checkCast(comptime self: ?@This(), comptime rtype: ?@This()) void {
@@ -1505,18 +1448,16 @@ pub const MemoryCreateUntypedOptions = struct {
     };
 
     pub const Usage = union(enum) {
-        color_image: Image(.{}).ColorOptions.Kind,
-        depth_stencil_image: Image(.{}).DepthStencilOptions.Kind,
+        color_image: void,
+        depth_stencil_image: ImageOptions.Format.DepthStencil,
 
         fn asUsage(self: @This()) MemoryKind.Usage {
             return switch (self) {
-                .color_image => |image| .{ .image = .{
+                .color_image => .{ .image = .{
                     .format = .color,
-                    .tiling = image.tiling,
                 } },
                 .depth_stencil_image => |image| .{ .image = .{
                     .format = .{ .depth_stencil = image.format },
-                    .tiling = image.tiling,
                 } },
             };
         }
@@ -1931,7 +1872,7 @@ pub const TransferCmd = union(enum) {
         const Offset = struct { x: i32, y: i32, z: i32 };
 
         buf: Buf(.{ .transfer_src = true }),
-        image: Image(.{ .format = .color }),
+        image: Image(.color),
         base_mip_level: u32 = 0,
         level_count: u32 = 1,
         base_array_layer: u32 = 0,

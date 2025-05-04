@@ -1612,17 +1612,8 @@ pub fn getDevice(self: *const @This()) Ctx.Device {
 fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
     return .{
         .flags = .{
-            .sparse_binding_bit = options.flags.sparse_binding,
-            .sparse_residency_bit = options.flags.sparse_residency,
-            .sparse_aliased_bit = options.flags.sparse_aliased,
-            .mutable_format_bit = options.flags.mutable_format,
             .cube_compatible_bit = options.flags.cube_compatible,
-            .alias_bit = options.flags.alias,
-            .split_instance_bind_regions_bit = options.flags.split_instance_bind_regions,
             .@"2d_array_compatible_bit" = options.flags.@"2d_array_compatible",
-            .block_texel_view_compatible_bit = options.flags.block_texel_view_compatible,
-            .extended_usage_bit = options.flags.extended_usage,
-            .protected_bit = options.flags.protected,
         },
         .image_type = switch (options.dimensions) {
             .@"1d" => .@"1d",
@@ -1646,10 +1637,7 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
             .@"32" => .{ .@"32_bit" = true },
             .@"64" => .{ .@"64_bit" = true },
         },
-        .tiling = switch (options.tiling) {
-            .optimal => .optimal,
-            .linear => .linear,
-        },
+        .tiling = .optimal,
         .usage = .{
             .transfer_src_bit = options.usage.transfer_src,
             .transfer_dst_bit = options.usage.transfer_dst,
@@ -1659,7 +1647,7 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
             .depth_stencil_attachment_bit = options.usage.depth_stencil_attachment,
             .input_attachment_bit = options.usage.input_attachment,
         },
-        .sharing_mode = if (options.exclusive) .exclusive else .concurrent,
+        .sharing_mode = .exclusive,
         .queue_family_index_count = 0,
         .p_queue_family_indices = null,
         .initial_layout = layoutToVk(options.initial_layout),
@@ -1727,7 +1715,7 @@ fn placeImage(
 
 pub fn imageCreate(
     self: *Ctx,
-    alloc_options: Ctx.Image(.{}).AllocOptions,
+    alloc_options: Ctx.Image(null).AllocOptions,
     image_options: Ctx.ImageOptions,
 ) Ctx.ImageResultUntyped {
     // Create the image
@@ -1785,7 +1773,7 @@ pub fn imageCreate(
     }
 }
 
-pub fn imageDestroy(self: *Ctx, image: Ctx.Image(.{})) void {
+pub fn imageDestroy(self: *Ctx, image: Ctx.Image(null)) void {
     self.backend.device.destroyImage(image.asBackendType(), null);
 }
 
@@ -1863,7 +1851,7 @@ pub fn memoryCreate(
     // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
     // able to do this, but we don't need to actually bind it to any memory it's just a handle.
     const memory_type_bits = switch (options.usage) {
-        .color_image => |image| b: {
+        .color_image => b: {
             // "For images created with a color format, the memoryTypeBits member is identical for
             // all VkImage objects created with the same combination of values for the tiling
             // member, the VK_IMAGE_CREATE_SPARSE_BINDING_BIT bit and VK_IMAGE_CREATE_PROTECTED_BIT
@@ -1888,10 +1876,7 @@ pub fn memoryCreate(
                         .mip_levels = 1,
                         .array_layers = 1,
                         .samples = .{ .@"1_bit" = true },
-                        .tiling = switch (image.tiling) {
-                            .optimal => .optimal,
-                            .linear => .linear,
-                        },
+                        .tiling = .optimal,
                         .usage = .{ .sampled_bit = true },
                         .sharing_mode = .exclusive,
                         .queue_family_index_count = 0,
@@ -1908,7 +1893,7 @@ pub fn memoryCreate(
             };
             break :b memory_type_bits;
         },
-        .depth_stencil_image => |image| b: {
+        .depth_stencil_image => |format| b: {
             // "For images created with a depth/stencil format, the memoryTypeBits member is
             // identical for all VkImage objects created with the same combination of values for the
             // format member, the tiling member, the VK_IMAGE_CREATE_SPARSE_BINDING_BIT bit and
@@ -1925,7 +1910,7 @@ pub fn memoryCreate(
                     .p_create_info = &.{
                         .flags = .{},
                         .image_type = .@"2d",
-                        .format = switch (image.format) {
+                        .format = switch (format) {
                             .d24_unorm_s8_uint => .d24_unorm_s8_uint,
                         },
                         .extent = .{
@@ -1936,10 +1921,7 @@ pub fn memoryCreate(
                         .mip_levels = 1,
                         .array_layers = 1,
                         .samples = .{ .@"1_bit" = true },
-                        .tiling = switch (image.tiling) {
-                            .optimal => .optimal,
-                            .linear => .linear,
-                        },
+                        .tiling = .optimal,
                         .usage = .{ .sampled_bit = true },
                         .sharing_mode = .exclusive,
                         .queue_family_index_count = 0,

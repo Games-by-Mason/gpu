@@ -121,12 +121,12 @@ pub fn IBackend(Self: type) type {
 
         imageCreate: fn (
             self: *Ctx,
-            alloc_options: Ctx.Image(.{}).AllocOptions,
+            alloc_options: Ctx.Image(null).AllocOptions,
             image_options: Ctx.ImageOptions,
         ) Ctx.ImageResultUntyped,
         imageDestroy: fn (
             self: *Ctx,
-            image: Ctx.Image(.{}),
+            image: Ctx.Image(null),
         ) void,
         imageMemoryRequirements: fn (
             self: *Ctx,
