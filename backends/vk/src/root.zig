@@ -3003,7 +3003,7 @@ fn vkDebugCallback(
     switch (level) {
         .err => {
             log.err(format, args);
-            return vk.TRUE;
+            @panic("validation error");
         },
         .warn => {
             log.warn(format, args);
