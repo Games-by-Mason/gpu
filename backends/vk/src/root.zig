@@ -992,10 +992,10 @@ fn zoneEnd(self: *Ctx, cb: Ctx.CmdBuf) void {
     }
 }
 
-fn combinedCmdBufCreate(
+fn cmdBufCreate(
     self: *Ctx,
-    options: Ctx.CombinedCmdBufCreateOptions,
-) Ctx.CombinedCmdBuf(null) {
+    options: Ctx.CombinedCmdBuf.InitOptions,
+) Ctx.CmdBuf {
     var cbs = [_]vk.CommandBuffer{.null_handle};
     self.backend.device.allocateCommandBuffers(&.{
         .command_pool = self.backend.cmd_pools[self.frame],
@@ -1012,53 +1012,52 @@ fn combinedCmdBufCreate(
         .p_inheritance_info = null,
     }) catch |err| @panic(@errorName(err));
 
-    const zone = Ctx.Zone.begin(self, .{
-        .cb = .fromBackendType(cb),
-        .loc = options.loc,
-    });
+    return .fromBackendType(cb);
+}
 
-    if (options.kind == .graphics) {
-        self.backend.device.cmdBeginRendering(cb, &.{
-            .flags = .{},
-            .render_area = .{
-                .offset = .{ .x = 0, .y = 0 },
-                .extent = self.backend.swapchain.swap_extent,
+fn cmdBufBeginRendering(
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    options: Ctx.CombinedCmdBuf.BeginRenderingOptions,
+) void {
+    self.backend.device.cmdBeginRendering(cb.asBackendType(), &.{
+        .flags = .{},
+        .render_area = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.backend.swapchain.swap_extent,
+        },
+        .layer_count = 1,
+        .view_mask = 0,
+        .color_attachment_count = 1,
+        .p_color_attachments = &.{.{
+            .image_view = options.out.asBackendType(),
+            .image_layout = .color_attachment_optimal,
+            .resolve_mode = .{},
+            .resolve_image_view = .null_handle,
+            .resolve_image_layout = .undefined,
+            .load_op = switch (options.load_op) {
+                .clear_color => .clear,
+                .load => .load,
+                .dont_care => .dont_care,
             },
-            .layer_count = 1,
-            .view_mask = 0,
-            .color_attachment_count = 1,
-            .p_color_attachments = &.{.{
-                .image_view = options.out.asBackendType(),
-                .image_layout = .color_attachment_optimal,
-                .resolve_mode = .{},
-                .resolve_image_view = .null_handle,
-                .resolve_image_layout = .undefined,
-                .load_op = switch (options.load_op) {
-                    .clear_color => .clear,
-                    .load => .load,
-                    .dont_care => .dont_care,
-                },
-                .store_op = .store,
-                .clear_value = switch (options.load_op) {
-                    .clear_color => |color| .{ .color = .{ .float_32 = color } },
-                    else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
-                },
-            }},
-            .p_depth_attachment = null,
-            .p_stencil_attachment = null,
-        });
-    }
+            .store_op = .store,
+            .clear_value = switch (options.load_op) {
+                .clear_color => |color| .{ .color = .{ .float_32 = color } },
+                else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
+            },
+        }},
+        .p_depth_attachment = null,
+        .p_stencil_attachment = null,
+    });
+}
 
-    return .{
-        .cb = .fromBackendType(cb),
-        .bindings = options.bindings,
-        .zone = zone,
-    };
+fn cmdBufEndRendering(self: *Ctx, cb: Ctx.CmdBuf) void {
+    self.backend.device.cmdEndRendering(cb.asBackendType());
 }
 
 fn cmdBufDraw(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf(null),
+    combined: Ctx.CombinedCmdBuf,
     cmds: []const Ctx.DrawCmd,
 ) void {
     const cb = combined.cb.asBackendType();
@@ -1148,14 +1147,9 @@ fn cmdBufDraw(
 
 fn combinedCmdBufSubmit(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf(null),
-    kind: Ctx.CmdBufKind,
+    combined: Ctx.CombinedCmdBuf,
 ) void {
     const cb = combined.cb.asBackendType();
-
-    if (kind == .graphics) {
-        self.backend.device.cmdEndRendering(cb);
-    }
 
     combined.zone.end(self, combined.cb);
     self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
@@ -2539,7 +2533,7 @@ fn imageTransitionColorOutputAttachmentToReadOnly(
 
 fn cmdBufTransitionImages(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf(null),
+    combined: Ctx.CombinedCmdBuf,
     transitions: anytype,
 ) void {
     const barriers = Ctx.ImageTransition.asBackendSlice(transitions);
@@ -2594,7 +2588,7 @@ fn bufferUploadRegionInit(
 
 fn cmdBufUploadImage(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf(null),
+    combined: Ctx.CombinedCmdBuf,
     dst: Ctx.Image(null),
     src: Ctx.Buf(.{}),
     regions: anytype,
@@ -2613,7 +2607,7 @@ fn cmdBufUploadImage(
 
 fn cmdBufUploadBuffer(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf(null),
+    combined: Ctx.CombinedCmdBuf,
     dst: Ctx.Buf(.{}),
     src: Ctx.Buf(.{}),
     regions: anytype,
@@ -3215,9 +3209,11 @@ pub const ibackend: IBackend = .{
     .cmdBufUploadImage = cmdBufUploadImage,
     .cmdBufUploadBuffer = cmdBufUploadBuffer,
     .cmdBufTransitionImages = cmdBufTransitionImages,
+    .cmdBufBeginRendering = cmdBufBeginRendering,
+    .cmdBufEndRendering = cmdBufEndRendering,
     .imageUploadRegionInit = imageUploadRegionInit,
     .bufferUploadRegionInit = bufferUploadRegionInit,
-    .combinedCmdBufCreate = combinedCmdBufCreate,
+    .cmdBufCreate = cmdBufCreate,
     .combinedCmdBufSubmit = combinedCmdBufSubmit,
     .descriptorPoolDestroy = descriptorPoolDestroy,
     .descriptorPoolCreate = descriptorPoolCreate,

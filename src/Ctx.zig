@@ -423,7 +423,7 @@ pub const ImageTransition = extern struct {
 
         image: Image(null),
         range: Range,
-        stage: Stage,
+        dst_stage: Stage,
     };
 
     pub fn transferDstToReadOnly(options: TransferDstToReadOnlyOptions) @This() {
@@ -554,123 +554,108 @@ pub const CmdBufBindings = struct {
     dynamic_state: bool = false,
 };
 
-pub const CombinedCmdBufCreateOptions = struct {
-    bindings: *Ctx.CmdBufBindings,
-    kind: Ctx.CmdBufKind,
-    loc: *const tracy.SourceLocation,
-    load_op: CombinedCmdBuf(null).GraphicsInitOptions.LoadOp,
-    out: ImageView,
-};
+pub const CombinedCmdBuf = struct {
+    cb: CmdBuf,
+    /// Cached bindings for de-duplicating commands. If you write to the command buffer
+    /// externally, you should update this to reflect your changes. You can set fields to their
+    /// defaults to indicate that the state is unknown.
+    bindings: *CmdBufBindings,
+    zone: Zone,
 
-pub fn CombinedCmdBuf(kind: ?CmdBufKind) type {
-    return struct {
-        cb: CmdBuf,
-        /// Cached bindings for de-duplicating commands. If you write to the command buffer
-        /// externally, you should update this to reflect your changes. You can set fields to their
-        /// defaults to indicate that the state is unknown.
-        bindings: *CmdBufBindings,
-        zone: Zone,
-
-        const GraphicsInitOptions = struct {
-            const LoadOp = union(enum) {
-                load: void,
-                clear_color: [4]f32,
-                dont_care: void,
-            };
-            loc: *const tracy.SourceLocation,
-            load_op: LoadOp,
-            out: ImageView,
-        };
-        const ComputeTransferInitOptions = struct {
-            loc: *const tracy.SourceLocation,
-        };
-        pub const InitOptions = if (kind) |k| switch (k) {
-            .graphics => GraphicsInitOptions,
-            .compute_transfer => ComputeTransferInitOptions,
-        } else void;
-
-        pub fn init(gx: *Ctx, options: @This().InitOptions) @This() {
-            comptime assert(kind != null);
-
-            const zone = tracy.Zone.begin(.{ .src = @src() });
-            defer zone.end();
-
-            assert(gx.in_frame);
-
-            const bindings = gx.cb_bindings[gx.frame].addOne() catch @panic("OOB");
-            bindings.* = .{};
-
-            const untyped = ibackend.combinedCmdBufCreate(gx, .{
-                .bindings = bindings,
-                .kind = kind.?,
-                .loc = options.loc,
-                .load_op = if (kind == .graphics) options.load_op else undefined,
-                .out = if (kind == .graphics) options.out else undefined,
-            });
-
-            return .{
-                .cb = untyped.cb,
-                .bindings = untyped.bindings,
-                .zone = untyped.zone,
-            };
-        }
-
-        pub fn submit(self: @This(), gx: *Ctx) void {
-            comptime assert(kind != null);
-            const zone = CpuZone.begin(.{ .src = @src() });
-            defer zone.end();
-            assert(gx.in_frame);
-            ibackend.combinedCmdBufSubmit(gx, self.asUntyped(), kind.?);
-        }
-
-        inline fn asUntyped(self: @This()) CombinedCmdBuf(null) {
-            return .{
-                .cb = self.cb,
-                .bindings = self.bindings,
-                .zone = self.zone,
-            };
-        }
-
-        pub fn draw(self: @This(), gx: *Ctx, cmds: []const DrawCmd) void {
-            comptime assert(kind == .graphics);
-            const zone = CpuZone.begin(.{ .src = @src() });
-            defer zone.end();
-            if (std.debug.runtime_safety) {
-                for (cmds) |draw_call| {
-                    assert(draw_call.args.offset % 4 == 0);
-                }
-            }
-            ibackend.cmdBufDraw(gx, self.asUntyped(), cmds);
-        }
-
-        pub fn transitionImages(self: @This(), gx: *Ctx, transitions: []const ImageTransition) void {
-            comptime assert(kind != null);
-            ibackend.cmdBufTransitionImages(gx, self.asUntyped(), transitions);
-        }
-
-        pub fn uploadImage(self: @This(), gx: *Ctx, options: ImageUpload) void {
-            comptime assert(kind != null);
-            ibackend.cmdBufUploadImage(
-                gx,
-                self.asUntyped(),
-                options.dst,
-                options.src.as(.{}),
-                options.regions,
-            );
-        }
-
-        pub fn uploadBuffer(self: @This(), gx: *Ctx, options: BufferUpload) void {
-            comptime assert(kind != null);
-            ibackend.cmdBufUploadBuffer(
-                gx,
-                self.asUntyped(),
-                options.dst.as(.{}),
-                options.src.as(.{}),
-                options.regions,
-            );
-        }
+    pub const InitOptions = struct {
+        gx: *Ctx,
+        loc: *const tracy.SourceLocation,
     };
-}
+
+    pub fn init(options: @This().InitOptions) @This() {
+        const zone = tracy.Zone.begin(.{ .src = @src() });
+        defer zone.end();
+
+        assert(options.gx.in_frame);
+
+        const bindings = options.gx.cb_bindings[options.gx.frame].addOne() catch @panic("OOB");
+        bindings.* = .{};
+
+        const cb = ibackend.cmdBufCreate(options.gx, options);
+
+        return .{
+            .cb = cb,
+            .bindings = bindings,
+            .zone = .begin(options.gx, .{
+                .cb = cb,
+                .loc = options.loc,
+            }),
+        };
+    }
+
+    pub const BeginRenderingOptions = struct {
+        const LoadOp = union(enum) {
+            load: void,
+            clear_color: [4]f32,
+            dont_care: void,
+        };
+        load_op: LoadOp,
+        out: ImageView,
+    };
+
+    pub fn beginRendering(self: @This(), gx: *Ctx, options: BeginRenderingOptions) void {
+        ibackend.cmdBufBeginRendering(gx, self.cb, options);
+    }
+
+    pub fn endRendering(self: @This(), gx: *Ctx) void {
+        ibackend.cmdBufEndRendering(gx, self.cb);
+    }
+
+    pub fn submit(self: @This(), gx: *Ctx) void {
+        const zone = CpuZone.begin(.{ .src = @src() });
+        defer zone.end();
+        assert(gx.in_frame);
+        ibackend.combinedCmdBufSubmit(gx, self.asUntyped());
+    }
+
+    inline fn asUntyped(self: @This()) CombinedCmdBuf {
+        return .{
+            .cb = self.cb,
+            .bindings = self.bindings,
+            .zone = self.zone,
+        };
+    }
+
+    pub fn draw(self: @This(), gx: *Ctx, cmds: []const DrawCmd) void {
+        const zone = CpuZone.begin(.{ .src = @src() });
+        defer zone.end();
+        if (std.debug.runtime_safety) {
+            for (cmds) |draw_call| {
+                assert(draw_call.args.offset % 4 == 0);
+            }
+        }
+        ibackend.cmdBufDraw(gx, self.asUntyped(), cmds);
+    }
+
+    pub fn transitionImages(self: @This(), gx: *Ctx, transitions: []const ImageTransition) void {
+        ibackend.cmdBufTransitionImages(gx, self.asUntyped(), transitions);
+    }
+
+    pub fn uploadImage(self: @This(), gx: *Ctx, options: ImageUpload) void {
+        ibackend.cmdBufUploadImage(
+            gx,
+            self.asUntyped(),
+            options.dst,
+            options.src.as(.{}),
+            options.regions,
+        );
+    }
+
+    pub fn uploadBuffer(self: @This(), gx: *Ctx, options: BufferUpload) void {
+        ibackend.cmdBufUploadBuffer(
+            gx,
+            self.asUntyped(),
+            options.dst.as(.{}),
+            options.src.as(.{}),
+            options.regions,
+        );
+    }
+};
 
 pub const CmdBuf = enum(u64) {
     _,
@@ -684,11 +669,6 @@ pub const CmdBuf = enum(u64) {
         comptime assert(@sizeOf(ibackend.CmdBuf) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
-};
-
-pub const CmdBufKind = enum {
-    graphics,
-    compute_transfer,
 };
 
 /// Profiling zones are created automatically when creating or appending to a command buffer. It may

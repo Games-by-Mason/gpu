@@ -89,27 +89,36 @@ imageTransitionColorOutputAttachmentToReadOnly: fn (
 
 cmdBufDraw: fn (
     self: *Ctx,
-    cb: Ctx.CombinedCmdBuf(null),
+    cb: Ctx.CombinedCmdBuf,
     options: []const Ctx.DrawCmd,
 ) void,
 cmdBufTransitionImages: fn (
     self: *Ctx,
-    cb: Ctx.CombinedCmdBuf(null),
+    cb: Ctx.CombinedCmdBuf,
     transitions: anytype,
 ) void,
 cmdBufUploadImage: fn (
     self: *Ctx,
-    cb: Ctx.CombinedCmdBuf(null),
+    cb: Ctx.CombinedCmdBuf,
     dst: Ctx.Image(null),
     src: Ctx.Buf(.{}),
     regions_untyped: anytype,
 ) void,
 cmdBufUploadBuffer: fn (
     self: *Ctx,
-    cb: Ctx.CombinedCmdBuf(null),
+    cb: Ctx.CombinedCmdBuf,
     dst: Ctx.Buf(.{}),
     src: Ctx.Buf(.{}),
     regions_untyped: anytype,
+) void,
+cmdBufBeginRendering: fn (
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    options: Ctx.CombinedCmdBuf.BeginRenderingOptions,
+) void,
+cmdBufEndRendering: fn (
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
 ) void,
 
 imageUploadRegionInit: fn (
@@ -121,14 +130,13 @@ bufferUploadRegionInit: fn (
     out_region: anytype,
 ) void,
 
-combinedCmdBufCreate: fn (
+cmdBufCreate: fn (
     self: *Ctx,
-    options: Ctx.CombinedCmdBufCreateOptions,
-) Ctx.CombinedCmdBuf(null),
+    options: Ctx.CombinedCmdBuf.InitOptions,
+) Ctx.CmdBuf,
 combinedCmdBufSubmit: fn (
     self: *Ctx,
-    combined_command_buffer: Ctx.CombinedCmdBuf(null),
-    kind: Ctx.CmdBufKind,
+    combined_command_buffer: Ctx.CombinedCmdBuf,
 ) void,
 
 descriptorPoolDestroy: fn (
