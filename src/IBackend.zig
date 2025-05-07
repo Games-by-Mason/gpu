@@ -74,6 +74,18 @@ imageTransitionTransferDstToReadOnly: fn (
     options: Ctx.ImageTransition.TransferDstToReadOnlyOptions,
     out_transition: anytype,
 ) void,
+imageTransitionTransferDstToColorOutputAttachment: fn (
+    options: Ctx.ImageTransition.TransferDstToColorOutputAttachmentOptions,
+    out_transition: anytype,
+) void,
+imageTransitionReadOnlyToColorOutputAttachment: fn (
+    options: Ctx.ImageTransition.ReadOnlyToColorOutputAttachmentOptions,
+    out_transition: anytype,
+) void,
+imageTransitionColorOutputAttachmentToReadOnly: fn (
+    options: Ctx.ImageTransition.ColorOutputAttachmentToReadOnlyOptions,
+    out_transition: anytype,
+) void,
 
 cmdBufDraw: fn (
     self: *Ctx,

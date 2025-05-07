@@ -432,6 +432,60 @@ pub const ImageTransition = extern struct {
         return result;
     }
 
+    pub const TransferDstToColorOutputAttachmentOptions = struct {
+        pub const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+            compute_shader: bool = false,
+        };
+
+        image: Image(null),
+        range: Range,
+        dst_stage: Stage,
+    };
+
+    pub fn transferDstToColorOutputAttachment(options: TransferDstToColorOutputAttachmentOptions) @This() {
+        var result: @This() = undefined;
+        ibackend.imageTransitionTransferDstToColorOutputAttachment(options, &result.backend);
+        return result;
+    }
+
+    pub const ReadOnlyToColorOutputAttachmentOptions = struct {
+        pub const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+            compute_shader: bool = false,
+        };
+
+        image: Image(null),
+        range: Range,
+        src_stage: Stage,
+    };
+
+    pub fn readOnlyToColorOutputAttachment(options: ReadOnlyToColorOutputAttachmentOptions) @This() {
+        var result: @This() = undefined;
+        ibackend.imageTransitionReadOnlyToColorOutputAttachment(options, &result.backend);
+        return result;
+    }
+
+    pub const ColorOutputAttachmentToReadOnlyOptions = struct {
+        pub const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+            compute_shader: bool = false,
+        };
+
+        image: Image(null),
+        range: Range,
+        dst_stage: Stage,
+    };
+
+    pub fn colorOutputAttachmentToReadOnly(options: ColorOutputAttachmentToReadOnlyOptions) @This() {
+        var result: @This() = undefined;
+        ibackend.imageTransitionColorOutputAttachmentToReadOnly(options, &result.backend);
+        return result;
+    }
+
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;
 };
 
@@ -1218,6 +1272,7 @@ pub const ImageOptions = struct {
     pub const Format = union(enum) {
         pub const Color = enum {
             r8g8b8a8_srgb,
+            b8g8r8a8_srgb,
         };
         pub const DepthStencil = enum {
             d24_unorm_s8_uint,
