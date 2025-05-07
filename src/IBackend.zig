@@ -156,7 +156,10 @@ descriptorSetsUpdate: fn (
 
 beginFrame: fn (self: *Ctx) void,
 endFrame: fn (self: *Ctx, options: Ctx.EndFrameOptions) void,
-acquireNextImage: fn (self: *Ctx) Ctx.ImageView,
+acquireNextImage: fn (
+    self: *Ctx,
+    framebuf_extent: Ctx.Extent2D,
+) Ctx.Attachment,
 
 getDevice: fn (self: *const Ctx) Ctx.Device,
 

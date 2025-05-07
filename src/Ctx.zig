@@ -20,7 +20,10 @@ const ibackend: gpu.IBackend = Backend.ibackend;
 
 const tracy_gpu_pool = "gpu";
 
-pub const FramebufSize = struct { u32, u32 };
+pub const Extent2D = struct {
+    width: u32,
+    height: u32,
+};
 
 pub const MemoryRequirements = struct {
     const DedicatedAllocationAffinity = enum {
@@ -75,7 +78,6 @@ device: Device,
 frames_in_flight: u4,
 /// The current frame in flight.
 frame: u8 = 0,
-framebuf_size: FramebufSize = .{ 0.0, 0.0 },
 in_frame: bool = false,
 
 combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
@@ -133,7 +135,7 @@ pub const InitOptions = struct {
         .patch = 0,
     },
     frames_in_flight: u4,
-    framebuf_size: struct { u32, u32 },
+    framebuf_extent: Extent2D,
     backend: ibackend.InitOptions,
     device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
     timestamp_queries: bool,
@@ -547,6 +549,11 @@ pub const BufferUpload = struct {
     regions: []const Region,
 };
 
+pub const Attachment = struct {
+    view: ImageView,
+    extent: Extent2D,
+};
+
 pub const CmdBufBindings = struct {
     pipeline: ?Pipeline = null,
     indices: ?Buf(.{ .index = true }) = null,
@@ -595,7 +602,7 @@ pub const CombinedCmdBuf = struct {
             dont_care: void,
         };
         load_op: LoadOp,
-        out: ImageView,
+        out: Attachment,
     };
 
     pub fn beginRendering(self: @This(), gx: *Ctx, options: BeginRenderingOptions) void {
@@ -761,16 +768,15 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
 /// nanoseconds spent blocking.
 ///
 /// Returns null if the swapchain needed to be recreated, in which case you should drop this frame.
-pub fn acquireNextImage(self: *@This(), framebuf_size: Ctx.FramebufSize) ImageView {
+pub fn acquireNextImage(self: *@This(), framebuf_extent: Ctx.Extent2D) Attachment {
     const zone = CpuZone.begin(.{
         .src = @src(),
         .color = global_options.blocking_zone_color,
     });
     defer zone.end();
-    assert(framebuf_size[0] != 0 and framebuf_size[0] != 0);
+    assert(framebuf_extent.width != 0 and framebuf_extent.height != 0);
     assert(self.in_frame);
-    self.framebuf_size = framebuf_size;
-    return ibackend.acquireNextImage(self);
+    return ibackend.acquireNextImage(self, framebuf_extent);
 }
 
 pub const DescPool = enum(u64) {

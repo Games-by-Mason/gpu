@@ -556,7 +556,7 @@ fn init(self: *Ctx, any_options: anytype) void {
 
     const swapchain = Swapchain.init(
         instance_proxy,
-        options.framebuf_size,
+        options.framebuf_extent,
         device,
         best_physical_device,
         surface,
@@ -1024,13 +1024,16 @@ fn cmdBufBeginRendering(
         .flags = .{},
         .render_area = .{
             .offset = .{ .x = 0, .y = 0 },
-            .extent = self.backend.swapchain.swap_extent,
+            .extent = .{
+                .width = options.out.extent.width,
+                .height = options.out.extent.height,
+            },
         },
         .layer_count = 1,
         .view_mask = 0,
         .color_attachment_count = 1,
         .p_color_attachments = &.{.{
-            .image_view = options.out.asBackendType(),
+            .image_view = options.out.view.asBackendType(),
             .image_layout = .color_attachment_optimal,
             .resolve_mode = .{},
             .resolve_image_view = .null_handle,
@@ -1368,7 +1371,7 @@ fn descriptorSetsUpdate(
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-fn acquireNextImage(self: *Ctx) Ctx.ImageView {
+fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.Attachment {
     // Acquire the image
     const acquire_result = b: {
         const acquire_zone = Zone.begin(.{
@@ -1376,6 +1379,9 @@ fn acquireNextImage(self: *Ctx) Ctx.ImageView {
             .name = "acquire next image",
         });
         defer acquire_zone.end();
+        if (self.backend.swapchain.out_of_date) {
+            self.backend.swapchain.recreate(self, framebuf_extent);
+        }
         while (true) {
             break :b self.backend.device.acquireNextImageKHR(
                 self.backend.swapchain.swapchain,
@@ -1384,7 +1390,7 @@ fn acquireNextImage(self: *Ctx) Ctx.ImageView {
                 .null_handle,
             ) catch |err| switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    self.backend.swapchain.recreate(self);
+                    self.backend.swapchain.recreate(self, framebuf_extent);
                     continue;
                 },
                 error.OutOfHostMemory,
@@ -1452,7 +1458,13 @@ fn acquireNextImage(self: *Ctx) Ctx.ImageView {
         ) catch |err| @panic(@errorName(err));
     }
 
-    return .fromBackendType(self.backend.swapchain.views.get(acquire_result.image_index));
+    return .{
+        .view = .fromBackendType(self.backend.swapchain.views.get(acquire_result.image_index)),
+        .extent = .{
+            .width = self.backend.swapchain.swap_extent.width,
+            .height = self.backend.swapchain.swap_extent.height,
+        },
+    };
 }
 
 fn beginFrame(self: *Ctx) void {
@@ -2298,13 +2310,13 @@ fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
         ) catch |err| @panic(@errorName(err));
     }
 
-    const suboptimal_out_of_date = b: {
+    {
         const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
         defer queue_present_zone.end();
         const swapchain = [_]vk.SwapchainKHR{self.backend.swapchain.swapchain};
         const image_index = [_]u32{self.backend.image_index.?};
 
-        const suboptimal_out_of_date = if (self.backend.device.queuePresentKHR(
+        const result = self.backend.device.queuePresentKHR(
             self.backend.queue,
             &.{
                 .wait_semaphore_count = 1,
@@ -2314,10 +2326,11 @@ fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
                 .p_image_indices = &image_index,
                 .p_results = null,
             },
-        )) |result|
-            result == .suboptimal_khr
-        else |err| switch (err) {
-            error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => true,
+        ) catch |err| b: switch (err) {
+            error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
+                self.backend.swapchain.out_of_date = true;
+                break :b .success;
+            },
             error.OutOfHostMemory,
             error.OutOfDeviceMemory,
             error.Unknown,
@@ -2325,13 +2338,9 @@ fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
             error.DeviceLost,
             => @panic(@errorName(err)),
         };
-        break :b suboptimal_out_of_date;
-    };
-
-    const framebuffer_size_changed = !std.meta.eql(self.backend.swapchain.external_framebuf_size, self.framebuf_size);
-
-    if (suboptimal_out_of_date or framebuffer_size_changed) {
-        self.backend.swapchain.recreate(self);
+        if (result == .suboptimal_khr) {
+            self.backend.swapchain.out_of_date = true;
+        }
     }
 }
 
@@ -2734,11 +2743,12 @@ const Swapchain = struct {
     images: std.BoundedArray(vk.Image, max_swapchain_depth),
     views: std.BoundedArray(vk.ImageView, max_swapchain_depth),
     swap_extent: vk.Extent2D,
-    external_framebuf_size: struct { u32, u32 },
+    external_framebuf_size: Ctx.Extent2D,
+    out_of_date: bool = false,
 
     fn init(
         instance: vk.InstanceProxy,
-        framebuf_size: struct { u32, u32 },
+        framebuf_extent: Ctx.Extent2D,
         device: vk.DeviceProxy,
         physical_device: PhysicalDevice,
         surface: vk.SurfaceKHR,
@@ -2755,15 +2765,14 @@ const Swapchain = struct {
         const swap_extent = if (surface_capabilities.current_extent.width == std.math.maxInt(u32) and
             surface_capabilities.current_extent.height == std.math.maxInt(u32))
         e: {
-            const width, const height = framebuf_size;
             break :e vk.Extent2D{
                 .width = std.math.clamp(
-                    width,
+                    framebuf_extent.width,
                     surface_capabilities.min_image_extent.width,
                     surface_capabilities.max_image_extent.width,
                 ),
                 .height = std.math.clamp(
-                    height,
+                    framebuf_extent.height,
                     surface_capabilities.min_image_extent.height,
                     surface_capabilities.max_image_extent.height,
                 ),
@@ -2834,7 +2843,7 @@ const Swapchain = struct {
             .images = images,
             .views = views,
             .swap_extent = swap_extent,
-            .external_framebuf_size = framebuf_size,
+            .external_framebuf_size = framebuf_extent,
         };
     }
 
@@ -2848,7 +2857,7 @@ const Swapchain = struct {
         self.* = undefined;
     }
 
-    fn recreate(self: *@This(), gx: *Ctx) void {
+    fn recreate(self: *@This(), gx: *Ctx, framebuf_extent: Ctx.Extent2D) void {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
 
@@ -2865,7 +2874,7 @@ const Swapchain = struct {
         self.destroyEverythingExceptSwapchain(gx.backend.device);
         self.* = .init(
             gx.backend.instance,
-            gx.framebuf_size,
+            framebuf_extent,
             gx.backend.device,
             gx.backend.physical_device,
             gx.backend.surface,
