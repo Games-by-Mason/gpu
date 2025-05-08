@@ -16,7 +16,6 @@ pub const Options = struct {
     /// additional type safety.
     combined_pipeline_layouts: []const *const Ctx.CombinedPipelineLayout.InitOptions = &.{},
     max_frames_in_flight: u4 = 2,
-    max_cbs_per_frame: u8 = 64,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
 };
 

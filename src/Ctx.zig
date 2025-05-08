@@ -25,6 +25,25 @@ pub const Extent2D = struct {
     height: u32,
 };
 
+pub const Offset2D = struct {
+    x: i32,
+    y: i32,
+};
+
+pub const Rect2D = struct {
+    offset: Offset2D,
+    extent: Extent2D,
+};
+
+pub const Viewport = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    min_depth: f32,
+    max_depth: f32,
+};
+
 pub const MemoryRequirements = struct {
     const DedicatedAllocationAffinity = enum {
         discouraged,
@@ -81,8 +100,6 @@ frame: u8 = 0,
 in_frame: bool = false,
 
 combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
-
-cb_bindings: [global_options.max_frames_in_flight]std.BoundedArray(CmdBufBindings, global_options.max_cbs_per_frame) = @splat(.{}),
 
 max_alignment: bool,
 
@@ -554,45 +571,44 @@ pub const Attachment = struct {
     extent: Extent2D,
 };
 
-pub const CmdBufBindings = struct {
-    pipeline: ?Pipeline = null,
-    indices: ?Buf(.{ .index = true }) = null,
-    descriptor_set: ?DescSet(null) = null,
-    dynamic_state: bool = false,
-};
+pub const CmdBuf = enum(u64) {
+    _,
 
-pub const CombinedCmdBuf = struct {
-    cb: CmdBuf,
-    /// Cached bindings for de-duplicating commands. If you write to the command buffer
-    /// externally, you should update this to reflect your changes. You can set fields to their
-    /// defaults to indicate that the state is unknown.
-    bindings: *CmdBufBindings,
-    zone: Zone,
+    /// A unique ID used for Tracy queries.
+    pub const TracyQueryId = packed struct(u16) {
+        pub const cap = std.math.maxInt(@FieldType(@This(), "index"));
+        frame: u8,
+        index: u8,
 
-    pub const InitOptions = struct {
-        gx: *Ctx,
-        loc: *const tracy.SourceLocation,
+        /// Returns the next available query ID for this frame, or panics if there are none left.
+        pub fn next(gx: *Ctx) @This() {
+            if (gx.tracy_queries[gx.frame] > TracyQueryId.cap) @panic("out of Tracy queries");
+            const result: @This() = .{
+                .index = @intCast(gx.tracy_queries[gx.frame]),
+                .frame = gx.frame,
+            };
+            gx.tracy_queries[gx.frame] += 1;
+            return result;
+        }
     };
 
-    pub fn init(options: @This().InitOptions) @This() {
+    pub fn init(
+        gx: *Ctx,
+        comptime loc: tracy.SourceLocation.InitOptions,
+    ) @This() {
+        return .initFromPtr(gx, .init(loc));
+    }
+
+    pub fn initFromPtr(
+        gx: *Ctx,
+        loc: *const tracy.SourceLocation,
+    ) @This() {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
-
-        assert(options.gx.in_frame);
-
-        const bindings = options.gx.cb_bindings[options.gx.frame].addOne() catch @panic("OOB");
-        bindings.* = .{};
-
-        const cb = ibackend.cmdBufCreate(options.gx, options);
-
-        return .{
-            .cb = cb,
-            .bindings = bindings,
-            .zone = .begin(options.gx, .{
-                .cb = cb,
-                .loc = options.loc,
-            }),
-        };
+        assert(gx.in_frame);
+        const cb = ibackend.cmdBufCreate(gx, loc);
+        cb.beginZoneFromPtr(gx, loc);
+        return cb;
     }
 
     pub const BeginRenderingOptions = struct {
@@ -603,25 +619,36 @@ pub const CombinedCmdBuf = struct {
         };
         load_op: LoadOp,
         out: Attachment,
+        viewport: Viewport,
+        scissor: Rect2D,
     };
 
     pub fn beginRendering(self: @This(), gx: *Ctx, options: BeginRenderingOptions) void {
-        ibackend.cmdBufBeginRendering(gx, self.cb, options);
+        ibackend.cmdBufBeginRendering(gx, self, options);
+        ibackend.cmdBufSetViewport(gx, self, options.viewport);
+        ibackend.cmdBufSetScissor(gx, self, options.scissor);
     }
 
     pub fn endRendering(self: @This(), gx: *Ctx) void {
-        ibackend.cmdBufEndRendering(gx, self.cb);
+        ibackend.cmdBufEndRendering(gx, self);
+    }
+
+    pub fn setViewport(self: @This(), gx: *Ctx, viewport: Viewport) void {
+        ibackend.cmdBufSetViewport(gx, self, viewport);
+    }
+
+    pub fn setScissor(self: @This(), gx: *Ctx, scissor: Extent2D) void {
+        ibackend.cmdBufSetScissor(gx, self, scissor);
     }
 
     pub fn submit(self: @This(), gx: *Ctx) void {
         const zone = CpuZone.begin(.{ .src = @src() });
         defer zone.end();
         assert(gx.in_frame);
-        ibackend.combinedCmdBufSubmit(gx, self);
+        ibackend.cmdBufSubmit(gx, self);
     }
 
     pub const DrawOptions = struct {
-        combined_pipeline: CombinedPipeline(null),
         vertex_count: u32,
         instance_count: u32,
         first_vertex: u32,
@@ -629,8 +656,23 @@ pub const CombinedCmdBuf = struct {
         descriptor_set: DescSet(null),
     };
 
-    // XXX: don't put gx on options structs because you wanna be able to store them without storing
-    // redundant info, at least for a call like this
+    pub fn bindPipeline(self: @This(), gx: *Ctx, combined: CombinedPipeline(null)) void {
+        const zone = CpuZone.begin(.{ .src = @src() });
+        defer zone.end();
+        ibackend.cmdBufBindPipeline(gx, self, combined);
+    }
+
+    pub fn bindDescSet(
+        self: @This(),
+        gx: *Ctx,
+        pipeline: CombinedPipeline(null),
+        set: DescSet(null),
+    ) void {
+        const zone = CpuZone.begin(.{ .src = @src() });
+        defer zone.end();
+        ibackend.cmdBufBindDescSet(gx, self, pipeline, set);
+    }
+
     pub fn draw(self: @This(), gx: *Ctx, options: DrawOptions) void {
         const zone = CpuZone.begin(.{ .src = @src() });
         defer zone.end();
@@ -660,10 +702,18 @@ pub const CombinedCmdBuf = struct {
             options.regions,
         );
     }
-};
 
-pub const CmdBuf = enum(u64) {
-    _,
+    pub fn beginZone(self: @This(), gx: *Ctx, comptime loc: tracy.SourceLocation.InitOptions) void {
+        self.beginZoneFromPtr(gx, .init(loc));
+    }
+
+    pub fn beginZoneFromPtr(self: @This(), gx: *Ctx, loc: *const tracy.SourceLocation) void {
+        ibackend.cmdBufBeginZone(gx, self, loc);
+    }
+
+    pub fn endZone(self: @This(), gx: *Ctx) void {
+        ibackend.cmdBufEndZone(gx, self);
+    }
 
     pub inline fn fromBackendType(value: ibackend.CmdBuf) @This() {
         comptime assert(@sizeOf(ibackend.CmdBuf) == @sizeOf(@This()));
@@ -673,41 +723,6 @@ pub const CmdBuf = enum(u64) {
     pub inline fn asBackendType(self: @This()) ibackend.CmdBuf {
         comptime assert(@sizeOf(ibackend.CmdBuf) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
-    }
-};
-
-/// Profiling zones are created automatically when creating or appending to a command buffer. It may
-/// be desirable to create them manually when modifying a command buffer from outside the library.
-pub const Zone = struct {
-    /// A unique ID used for Tracy queries.
-    pub const TracyQueryId = packed struct(u16) {
-        pub const cap = std.math.maxInt(@FieldType(@This(), "index"));
-        frame: u8,
-        index: u8,
-
-        /// Returns the next available query ID for this frame, or panics if there are none left.
-        pub fn next(gx: *Ctx) @This() {
-            if (gx.tracy_queries[gx.frame] > TracyQueryId.cap) @panic("out of Tracy queries");
-            const result: @This() = .{
-                .index = @intCast(gx.tracy_queries[gx.frame]),
-                .frame = gx.frame,
-            };
-            gx.tracy_queries[gx.frame] += 1;
-            return result;
-        }
-    };
-
-    pub const BeginOptions = struct {
-        cb: CmdBuf,
-        loc: *const tracy.SourceLocation,
-    };
-
-    pub fn begin(gx: *Ctx, options: BeginOptions) Zone {
-        return ibackend.zoneBegin(gx, options);
-    }
-
-    pub fn end(_: @This(), gx: *Ctx, cb: CmdBuf) void {
-        ibackend.zoneEnd(gx, cb);
     }
 };
 
@@ -1010,7 +1025,6 @@ pub fn beginFrame(self: *@This()) void {
     defer zone.end();
     assert(!self.in_frame);
     self.in_frame = true;
-    self.cb_bindings[self.frame].clear();
     ibackend.beginFrame(self);
     self.tracy_queries[self.frame] = 0;
 }

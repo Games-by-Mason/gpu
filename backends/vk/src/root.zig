@@ -612,10 +612,10 @@ fn init(self: *Ctx, any_options: anytype) void {
         for (&tracy_query_pools, 0..) |*pool, i| {
             pool.* = device.createQueryPool(&.{
                 .query_type = .timestamp,
-                .query_count = Ctx.Zone.TracyQueryId.cap,
+                .query_count = Ctx.CmdBuf.TracyQueryId.cap,
             }, null) catch |err| @panic(@errorName(err));
             setName(debug_messenger, device, pool.*, .{ .str = "Tracy", .index = i });
-            device.resetQueryPool(pool.*, 0, Ctx.Zone.TracyQueryId.cap);
+            device.resetQueryPool(pool.*, 0, Ctx.CmdBuf.TracyQueryId.cap);
         }
     }
 
@@ -947,41 +947,40 @@ fn combinedPipelineLayoutDestroy(
     self.backend.device.destroyDescriptorSetLayout(layout.descriptor_set.asBackendType(), null);
 }
 
-fn zoneBegin(self: *Ctx, options: Ctx.Zone.BeginOptions) Ctx.Zone {
+fn cmdBufBeginZone(self: *Ctx, cb: Ctx.CmdBuf, loc: *const tracy.SourceLocation) void {
     if (self.backend.debug_messenger != .null_handle) {
-        self.backend.device.cmdBeginDebugUtilsLabelEXT(options.cb.asBackendType(), &.{
-            .p_label_name = options.loc.name orelse options.loc.function,
+        self.backend.device.cmdBeginDebugUtilsLabelEXT(cb.asBackendType(), &.{
+            .p_label_name = loc.name orelse loc.function,
             .color = .{
-                @as(f32, @floatFromInt(options.loc.color.r)) / 255.0,
-                @as(f32, @floatFromInt(options.loc.color.g)) / 255.0,
-                @as(f32, @floatFromInt(options.loc.color.b)) / 255.0,
-                @as(f32, @floatFromInt(options.loc.color.a)) / 255.0,
+                @as(f32, @floatFromInt(loc.color.r)) / 255.0,
+                @as(f32, @floatFromInt(loc.color.g)) / 255.0,
+                @as(f32, @floatFromInt(loc.color.b)) / 255.0,
+                @as(f32, @floatFromInt(loc.color.a)) / 255.0,
             },
         });
     }
     if (tracy.enabled and self.timestamp_queries) {
-        const query_id: Ctx.Zone.TracyQueryId = .next(self);
+        const query_id: Ctx.CmdBuf.TracyQueryId = .next(self);
         self.device.tracy_queue.beginZone(.{
             .query_id = @bitCast(query_id),
-            .loc = options.loc,
+            .loc = loc,
         });
         self.backend.device.cmdWriteTimestamp(
-            options.cb.asBackendType(),
+            cb.asBackendType(),
             .{ .top_of_pipe_bit = true },
             self.backend.tracy_query_pools[self.frame],
             query_id.index,
         );
     }
-    return .{};
 }
 
-fn zoneEnd(self: *Ctx, cb: Ctx.CmdBuf) void {
+fn cmdBufEndZone(self: *Ctx, cb: Ctx.CmdBuf) void {
     if (self.backend.debug_messenger != .null_handle) {
         self.backend.device.cmdEndDebugUtilsLabelEXT(cb.asBackendType());
     }
 
     if (tracy.enabled and self.timestamp_queries) {
-        const query_id: Ctx.Zone.TracyQueryId = .next(self);
+        const query_id: Ctx.CmdBuf.TracyQueryId = .next(self);
         self.backend.device.cmdWriteTimestamp(
             cb.asBackendType(),
             .{ .bottom_of_pipe_bit = true },
@@ -994,7 +993,7 @@ fn zoneEnd(self: *Ctx, cb: Ctx.CmdBuf) void {
 
 fn cmdBufCreate(
     self: *Ctx,
-    options: Ctx.CombinedCmdBuf.InitOptions,
+    loc: *const tracy.SourceLocation,
 ) Ctx.CmdBuf {
     var cbs = [_]vk.CommandBuffer{.null_handle};
     self.backend.device.allocateCommandBuffers(&.{
@@ -1004,7 +1003,7 @@ fn cmdBufCreate(
     }, &cbs) catch |err| @panic(@errorName(err));
     const cb = cbs[0];
     setName(self.backend.debug_messenger, self.backend.device, cb, .{
-        .str = options.loc.name orelse options.loc.function,
+        .str = loc.name orelse loc.function,
     });
 
     self.backend.device.beginCommandBuffer(cb, &.{
@@ -1018,7 +1017,7 @@ fn cmdBufCreate(
 fn cmdBufBeginRendering(
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    options: Ctx.CombinedCmdBuf.BeginRenderingOptions,
+    options: Ctx.CmdBuf.BeginRenderingOptions,
 ) void {
     self.backend.device.cmdBeginRendering(cb.asBackendType(), &.{
         .flags = .{},
@@ -1052,6 +1051,17 @@ fn cmdBufBeginRendering(
         .p_depth_attachment = null,
         .p_stencil_attachment = null,
     });
+
+    self.backend.device.cmdSetScissor(cb.asBackendType(), 0, 1, &.{.{
+        .offset = .{
+            .x = options.scissor.offset.x,
+            .y = options.scissor.offset.y,
+        },
+        .extent = .{
+            .width = options.scissor.extent.width,
+            .height = options.scissor.extent.height,
+        },
+    }});
 }
 
 fn cmdBufEndRendering(self: *Ctx, cb: Ctx.CmdBuf) void {
@@ -1060,65 +1070,11 @@ fn cmdBufEndRendering(self: *Ctx, cb: Ctx.CmdBuf) void {
 
 fn cmdBufDraw(
     self: *Ctx,
-    combined_cb: Ctx.CombinedCmdBuf,
-    options: Ctx.CombinedCmdBuf.DrawOptions,
+    cb: Ctx.CmdBuf,
+    options: Ctx.CmdBuf.DrawOptions,
 ) void {
-    const cb = combined_cb.cb.asBackendType();
-    const bindings = combined_cb.bindings;
-
-    // XXX: pull these out into their own function calls or no? the nice thing about having it here is
-    // there's no hidden state between calls, and you're supposed to call thsi function infrequently anyway
-    // right?
-    if (options.combined_pipeline.pipeline != bindings.pipeline) {
-        bindings.pipeline = options.combined_pipeline.pipeline;
-
-        // Bind the pipeline
-        self.backend.device.cmdBindPipeline(
-            cb,
-            .graphics,
-            options.combined_pipeline.pipeline.asBackendType(),
-        );
-
-        if (!bindings.dynamic_state) {
-            bindings.dynamic_state = true;
-
-            self.backend.device.cmdSetViewport(cb, 0, 1, &.{.{
-                .x = 0.0,
-                .y = 0.0,
-                .width = @floatFromInt(self.backend.swapchain.swap_extent.width),
-                .height = @floatFromInt(self.backend.swapchain.swap_extent.height),
-                .min_depth = 0.0,
-                .max_depth = 1.0,
-            }});
-
-            self.backend.device.cmdSetScissor(cb, 0, 1, &.{.{
-                .offset = .{ .x = 0, .y = 0 },
-                .extent = self.backend.swapchain.swap_extent,
-            }});
-        }
-    }
-
-    // Rebind the descriptor set if it changed. If we had multiple we'd have to invalidate any
-    // descriptor sets following and including the last compatible one, but this isn't a concern
-    // since we only support one: it's either the same and compatible or different and needs to
-    // be rebound.
-    if (options.descriptor_set != bindings.descriptor_set) {
-        bindings.descriptor_set = options.descriptor_set;
-        self.backend.device.cmdBindDescriptorSets(
-            cb,
-            .graphics,
-            options.combined_pipeline.layout.asBackendType(),
-            0,
-            1,
-            &.{options.descriptor_set.asBackendType()},
-            0,
-            &[0]u32{},
-        );
-    }
-
-    // Issue the draw call
     self.backend.device.cmdDraw(
-        cb,
+        cb.asBackendType(),
         options.vertex_count,
         options.instance_count,
         options.first_vertex,
@@ -1126,36 +1082,100 @@ fn cmdBufDraw(
     );
 }
 
-fn combinedCmdBufSubmit(
+fn cmdBufSetViewport(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf,
+    cb: Ctx.CmdBuf,
+    viewport: Ctx.Viewport,
 ) void {
-    const cb = combined.cb.asBackendType();
+    self.backend.device.cmdSetViewport(cb.asBackendType(), 0, 1, &.{.{
+        .x = viewport.x,
+        .y = viewport.y,
+        .width = viewport.width,
+        .height = viewport.height,
+        .min_depth = viewport.min_depth,
+        .max_depth = viewport.max_depth,
+    }});
+}
 
-    combined.zone.end(self, combined.cb);
-    self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
+fn cmdBufSetScissor(
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    scissor: Ctx.Rect2D,
+) void {
+    self.backend.device.cmdSetScissor(cb.asBackendType(), 0, 1, &.{.{
+        .offset = .{
+            .x = scissor.offset.x,
+            .y = scissor.offset.y,
+        },
+        .extent = .{
+            .width = scissor.extent.width,
+            .height = scissor.extent.height,
+        },
+    }});
+}
 
-    {
-        const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
-        defer queue_submit_zone.end();
-        const cbs = [_]vk.CommandBuffer{cb};
-        const submit_infos = [_]vk.SubmitInfo{.{
-            .wait_semaphore_count = 0,
-            .p_wait_semaphores = &.{},
-            .p_wait_dst_stage_mask = &.{},
-            .command_buffer_count = cbs.len,
-            .p_command_buffers = &cbs,
-            .signal_semaphore_count = 0,
-            .p_signal_semaphores = &.{},
-            .p_next = null,
-        }};
-        self.backend.device.queueSubmit(
-            self.backend.queue,
-            submit_infos.len,
-            &submit_infos,
-            .null_handle,
-        ) catch |err| @panic(@errorName(err));
-    }
+fn cmdBufBindPipeline(
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    combined_pipeline: Ctx.CombinedPipeline(null),
+) void {
+    self.backend.device.cmdBindPipeline(
+        cb.asBackendType(),
+        .graphics,
+        combined_pipeline.pipeline.asBackendType(),
+    );
+}
+
+fn cmdBufBindDescSet(
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    pipeline: Ctx.CombinedPipeline(null),
+    set: Ctx.DescSet(null),
+) void {
+    self.backend.device.cmdBindDescriptorSets(
+        cb.asBackendType(),
+        .graphics,
+        pipeline.layout.asBackendType(),
+        0,
+        1,
+        &.{set.asBackendType()},
+        0,
+        &[0]u32{},
+    );
+}
+
+fn cmdBufPrepareSubmit(
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+) void {
+    cb.endZone(self);
+    self.backend.device.endCommandBuffer(cb.asBackendType()) catch |err| @panic(@errorName(err));
+}
+
+fn cmdBufSubmit(
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+) void {
+    cmdBufPrepareSubmit(self, cb);
+    const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
+    defer queue_submit_zone.end();
+    const cbs = [_]vk.CommandBuffer{cb.asBackendType()};
+    const submit_infos = [_]vk.SubmitInfo{.{
+        .wait_semaphore_count = 0,
+        .p_wait_semaphores = &.{},
+        .p_wait_dst_stage_mask = &.{},
+        .command_buffer_count = cbs.len,
+        .p_command_buffers = &cbs,
+        .signal_semaphore_count = 0,
+        .p_signal_semaphores = &.{},
+        .p_next = null,
+    }};
+    self.backend.device.queueSubmit(
+        self.backend.queue,
+        submit_infos.len,
+        &submit_infos,
+        .null_handle,
+    ) catch |err| @panic(@errorName(err));
 }
 
 fn descriptorPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
@@ -1388,37 +1408,18 @@ fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.Attachment {
         const transition_zone = Zone.begin(.{ .name = "prepare swapchain image", .src = @src() });
         defer transition_zone.end();
 
-        var cbs = [_]vk.CommandBuffer{.null_handle};
-        self.backend.device.allocateCommandBuffers(&.{
-            .command_pool = self.backend.cmd_pools[self.frame],
-            .level = .primary,
-            .command_buffer_count = cbs.len,
-        }, &cbs) catch |err| @panic(@errorName(err));
-        const cb = cbs[0];
-        setName(self.backend.debug_messenger, self.backend.device, cb, .{
-            .str = "Prepare Swapchain Image",
+        const cb: Ctx.CmdBuf = .init(self, .{
+            .name = "Prepare Swapchain Image",
+            .src = @src(),
         });
 
-        {
-            self.backend.device.beginCommandBuffer(cb, &.{
-                .flags = .{ .one_time_submit_bit = true },
-                .p_inheritance_info = null,
-            }) catch |err| @panic(@errorName(err));
-            defer self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
+        transitionImageToAttachmentOptimal(
+            self,
+            cb.asBackendType(),
+            self.backend.swapchain.images.get(acquire_result.image_index),
+        );
 
-            const zone = Ctx.Zone.begin(self, .{
-                .cb = .fromBackendType(cb),
-                .loc = .init(.{ .name = "prepare swapchain image", .src = @src() }),
-            });
-            defer zone.end(self, .fromBackendType(cb));
-
-            transitionImageToAttachmentOptimal(
-                self,
-                cb,
-                self.backend.swapchain.images.get(acquire_result.image_index),
-            );
-        }
-
+        cmdBufPrepareSubmit(self, cb);
         self.backend.device.queueSubmit(
             self.backend.queue,
             1,
@@ -1427,7 +1428,7 @@ fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.Attachment {
                 .p_wait_semaphores = &.{self.backend.image_availables[self.frame]},
                 .p_wait_dst_stage_mask = &.{.{ .top_of_pipe_bit = true }},
                 .command_buffer_count = 1,
-                .p_command_buffers = &.{cb},
+                .p_command_buffers = &.{cb.asBackendType()},
                 .signal_semaphore_count = 0,
                 .p_signal_semaphores = &.{},
                 .p_next = null,
@@ -1481,7 +1482,7 @@ fn beginFrame(self: *Ctx) void {
 
         const queries = self.tracy_queries[self.frame];
         if (queries > 0) {
-            var results: [Ctx.Zone.TracyQueryId.cap * 2]u64 = undefined;
+            var results: [Ctx.CmdBuf.TracyQueryId.cap * 2]u64 = undefined;
             const result = self.backend.device.getQueryPoolResults(
                 self.backend.tracy_query_pools[self.frame],
                 0,
@@ -1507,7 +1508,7 @@ fn beginFrame(self: *Ctx) void {
                 if (available) {
                     const time = results[i * 2];
                     self.device.tracy_queue.emitTime(.{
-                        .query_id = @bitCast(Ctx.Zone.TracyQueryId{
+                        .query_id = @bitCast(Ctx.CmdBuf.TracyQueryId{
                             .index = @intCast(i),
                             .frame = self.frame,
                         }),
@@ -1516,6 +1517,7 @@ fn beginFrame(self: *Ctx) void {
                 }
             }
 
+            // We can't use our command buffer abstraction here because it issues queries
             var cbs = [_]vk.CommandBuffer{.null_handle};
             self.backend.device.allocateCommandBuffers(&.{
                 .command_pool = self.backend.cmd_pools[self.frame],
@@ -1526,21 +1528,17 @@ fn beginFrame(self: *Ctx) void {
             setName(self.backend.debug_messenger, self.backend.device, cb, .{
                 .str = "Clear Tracy Query Pool",
             });
-
-            {
-                self.backend.device.beginCommandBuffer(cb, &.{
-                    .flags = .{ .one_time_submit_bit = true },
-                    .p_inheritance_info = null,
-                }) catch |err| @panic(@errorName(err));
-                defer self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
-                self.backend.device.cmdResetQueryPool(
-                    cb,
-                    self.backend.tracy_query_pools[self.frame],
-                    0,
-                    Ctx.Zone.TracyQueryId.cap,
-                );
-            }
-
+            self.backend.device.beginCommandBuffer(cb, &.{
+                .flags = .{ .one_time_submit_bit = true },
+                .p_inheritance_info = null,
+            }) catch |err| @panic(@errorName(err));
+            self.backend.device.cmdResetQueryPool(
+                cb,
+                self.backend.tracy_query_pools[self.frame],
+                0,
+                Ctx.CmdBuf.TracyQueryId.cap,
+            );
+            self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
             self.backend.device.queueSubmit(
                 self.backend.queue,
                 1,
@@ -2235,40 +2233,18 @@ fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
         const transition_zone = Zone.begin(.{ .name = "finalize swapchain image", .src = @src() });
         defer transition_zone.end();
 
-        var cbs = [_]vk.CommandBuffer{.null_handle};
-        self.backend.device.allocateCommandBuffers(&.{
-            .command_pool = self.backend.cmd_pools[self.frame],
-            .level = .primary,
-            .command_buffer_count = cbs.len,
-        }, &cbs) catch |err| @panic(@errorName(err));
-        const cb = cbs[0];
-        setName(self.backend.debug_messenger, self.backend.device, cb, .{
-            .str = "Finalize Swapchain Image",
+        const cb: Ctx.CmdBuf = .init(self, .{
+            .name = "Finalize Swapchain Image",
+            .src = @src(),
         });
 
-        {
-            const submit_zone = Zone.begin(.{ .name = "prepare", .src = @src() });
-            defer submit_zone.end();
+        transitionImageAttachmentToPresent(
+            self,
+            cb.asBackendType(),
+            self.backend.swapchain.images.get(self.backend.image_index.?),
+        );
 
-            self.backend.device.beginCommandBuffer(cb, &.{
-                .flags = .{ .one_time_submit_bit = true },
-                .p_inheritance_info = null,
-            }) catch |err| @panic(@errorName(err));
-            defer self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
-
-            const zone = Ctx.Zone.begin(self, .{
-                .cb = .fromBackendType(cb),
-                .loc = .init(.{ .name = "finalize swapchain image", .src = @src() }),
-            });
-            defer zone.end(self, .fromBackendType(cb));
-
-            transitionImageAttachmentToPresent(
-                self,
-                cb,
-                self.backend.swapchain.images.get(self.backend.image_index.?),
-            );
-        }
-
+        cmdBufPrepareSubmit(self, cb);
         self.backend.device.queueSubmit(
             self.backend.queue,
             1,
@@ -2277,7 +2253,7 @@ fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
                 .p_wait_semaphores = &.{},
                 .p_wait_dst_stage_mask = &.{},
                 .command_buffer_count = 1,
-                .p_command_buffers = &.{cb},
+                .p_command_buffers = &.{cb.asBackendType()},
                 .signal_semaphore_count = 1,
                 .p_signal_semaphores = &.{
                     self.backend.ready_for_present[self.frame],
@@ -2520,11 +2496,11 @@ fn imageTransitionColorOutputAttachmentToReadOnly(
 
 fn cmdBufTransitionImages(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf,
+    cb: Ctx.CmdBuf,
     transitions: anytype,
 ) void {
     const barriers = Ctx.ImageTransition.asBackendSlice(transitions);
-    self.backend.device.cmdPipelineBarrier2(combined.cb.asBackendType(), &.{
+    self.backend.device.cmdPipelineBarrier2(cb.asBackendType(), &.{
         .dependency_flags = .{},
         .memory_barrier_count = 0,
         .p_memory_barriers = &.{},
@@ -2575,15 +2551,14 @@ fn bufferUploadRegionInit(
 
 fn cmdBufUploadImage(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf,
+    cb: Ctx.CmdBuf,
     dst: Ctx.Image(null),
     src: Ctx.Buf(.{}),
     regions: anytype,
 ) void {
     const vk_regions = Ctx.ImageUpload.Region.asBackendSlice(regions);
-    const cb = combined.cb.asBackendType();
     self.backend.device.cmdCopyBufferToImage(
-        cb,
+        cb.asBackendType(),
         src.asBackendType(),
         dst.asBackendType(),
         .transfer_dst_optimal,
@@ -2594,15 +2569,14 @@ fn cmdBufUploadImage(
 
 fn cmdBufUploadBuffer(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf,
+    cb: Ctx.CmdBuf,
     dst: Ctx.Buf(.{}),
     src: Ctx.Buf(.{}),
     regions: anytype,
 ) void {
     const vk_regions = Ctx.BufferUpload.Region.asBackendSlice(regions);
-    const cb = combined.cb.asBackendType();
     self.backend.device.cmdCopyBuffer(
-        cb,
+        cb.asBackendType(),
         src.asBackendType(),
         dst.asBackendType(),
         @intCast(vk_regions.len),
@@ -3185,8 +3159,8 @@ pub const ibackend: IBackend = .{
     .bufDestroy = bufDestroy,
     .combinedPipelineLayoutCreate = combinedPipelineLayoutCreate,
     .combinedPipelineLayoutDestroy = combinedPipelineLayoutDestroy,
-    .zoneBegin = zoneBegin,
-    .zoneEnd = zoneEnd,
+    .cmdBufBeginZone = cmdBufBeginZone,
+    .cmdBufEndZone = cmdBufEndZone,
     .imageTransitionUndefinedToTransferDst = imageTransitionUndefinedToTransferDst,
     .imageTransitionTransferDstToReadOnly = imageTransitionTransferDstToReadOnly,
     .imageTransitionReadOnlyToColorOutputAttachment = imageTransitionReadOnlyToColorOutputAttachment,
@@ -3198,10 +3172,14 @@ pub const ibackend: IBackend = .{
     .cmdBufTransitionImages = cmdBufTransitionImages,
     .cmdBufBeginRendering = cmdBufBeginRendering,
     .cmdBufEndRendering = cmdBufEndRendering,
+    .cmdBufSetViewport = cmdBufSetViewport,
+    .cmdBufSetScissor = cmdBufSetScissor,
+    .cmdBufBindPipeline = cmdBufBindPipeline,
+    .cmdBufBindDescSet = cmdBufBindDescSet,
     .imageUploadRegionInit = imageUploadRegionInit,
     .bufferUploadRegionInit = bufferUploadRegionInit,
     .cmdBufCreate = cmdBufCreate,
-    .combinedCmdBufSubmit = combinedCmdBufSubmit,
+    .cmdBufSubmit = cmdBufSubmit,
     .descriptorPoolDestroy = descriptorPoolDestroy,
     .descriptorPoolCreate = descriptorPoolCreate,
     .descriptorSetsUpdate = descriptorSetsUpdate,

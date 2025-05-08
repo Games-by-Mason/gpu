@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const Ctx = @import("Ctx.zig");
 const Allocator = std.mem.Allocator;
 
@@ -57,11 +58,12 @@ combinedPipelineLayoutDestroy: fn (
     layout: Ctx.CombinedPipelineLayout,
 ) void,
 
-zoneBegin: fn (
+cmdBufBeginZone: fn (
     self: *Ctx,
-    options: Ctx.Zone.BeginOptions,
-) Ctx.Zone,
-zoneEnd: fn (
+    cb: Ctx.CmdBuf,
+    loc: *const tracy.SourceLocation,
+) void,
+cmdBufEndZone: fn (
     self: *Ctx,
     cb: Ctx.CmdBuf,
 ) void,
@@ -89,24 +91,24 @@ imageTransitionColorOutputAttachmentToReadOnly: fn (
 
 cmdBufDraw: fn (
     self: *Ctx,
-    combined_cb: Ctx.CombinedCmdBuf,
-    options: Ctx.CombinedCmdBuf.DrawOptions,
+    cb: Ctx.CmdBuf,
+    options: Ctx.CmdBuf.DrawOptions,
 ) void,
 cmdBufTransitionImages: fn (
     self: *Ctx,
-    cb: Ctx.CombinedCmdBuf,
+    cb: Ctx.CmdBuf,
     transitions: anytype,
 ) void,
 cmdBufUploadImage: fn (
     self: *Ctx,
-    cb: Ctx.CombinedCmdBuf,
+    cb: Ctx.CmdBuf,
     dst: Ctx.Image(null),
     src: Ctx.Buf(.{}),
     regions_untyped: anytype,
 ) void,
 cmdBufUploadBuffer: fn (
     self: *Ctx,
-    cb: Ctx.CombinedCmdBuf,
+    cb: Ctx.CmdBuf,
     dst: Ctx.Buf(.{}),
     src: Ctx.Buf(.{}),
     regions_untyped: anytype,
@@ -114,11 +116,32 @@ cmdBufUploadBuffer: fn (
 cmdBufBeginRendering: fn (
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    options: Ctx.CombinedCmdBuf.BeginRenderingOptions,
+    options: Ctx.CmdBuf.BeginRenderingOptions,
 ) void,
 cmdBufEndRendering: fn (
     self: *Ctx,
     cb: Ctx.CmdBuf,
+) void,
+cmdBufSetViewport: fn (
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    viewport: Ctx.Viewport,
+) void,
+cmdBufSetScissor: fn (
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    scissor: Ctx.Rect2D,
+) void,
+cmdBufBindPipeline: fn (
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    combined: Ctx.CombinedPipeline(null),
+) void,
+cmdBufBindDescSet: fn (
+    self: *Ctx,
+    cb: Ctx.CmdBuf,
+    pipeline: Ctx.CombinedPipeline(null),
+    set: Ctx.DescSet(null),
 ) void,
 
 imageUploadRegionInit: fn (
@@ -132,11 +155,11 @@ bufferUploadRegionInit: fn (
 
 cmdBufCreate: fn (
     self: *Ctx,
-    options: Ctx.CombinedCmdBuf.InitOptions,
+    loc: *const tracy.SourceLocation,
 ) Ctx.CmdBuf,
-combinedCmdBufSubmit: fn (
+cmdBufSubmit: fn (
     self: *Ctx,
-    combined_command_buffer: Ctx.CombinedCmdBuf,
+    combined_command_buffer: Ctx.CmdBuf,
 ) void,
 
 descriptorPoolDestroy: fn (
