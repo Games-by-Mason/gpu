@@ -183,7 +183,7 @@ fn init(self: *Ctx, any_options: anytype) void {
             });
         }
         if (validation_layer_missing) {
-            log.warn("{s}: requested but not found, validation disabled", .{val_layer_name});
+            log.warn("{s}: requested but not found", .{val_layer_name});
         }
     }
 
@@ -204,7 +204,7 @@ fn init(self: *Ctx, any_options: anytype) void {
                 break :b true;
             }
         } else {
-            log.warn("{s}: requested but not found, debug disabled", .{dbg_ext_name});
+            log.warn("{s}: requested but not found", .{dbg_ext_name});
             break :b false;
         }
     } else false;
@@ -1469,8 +1469,16 @@ fn beginFrame(self: *Ctx) void {
         .src = @src(),
         .name = "reset cmd pool",
     });
-    const cmd_pool = self.backend.cmd_pools[self.frame];
-    self.backend.device.resetCommandPool(cmd_pool, .{}) catch |err| @panic(@errorName(err));
+    const cmd_pool = &self.backend.cmd_pools[self.frame];
+    self.backend.device.resetCommandPool(cmd_pool.*, .{}) catch |err| @panic(@errorName(err));
+    if (self.validate) {
+        // https://github.com/Games-by-Mason/gpu/issues/3
+        self.backend.device.destroyCommandPool(cmd_pool.*, null);
+        cmd_pool.* = self.backend.device.createCommandPool(&.{
+            .flags = .{ .transient_bit = true },
+            .queue_family_index = self.backend.queue_family_index,
+        }, null) catch |err| @panic(@errorName(err));
+    }
     reset_cmd_pool_zone.end();
 
     if (tracy.enabled and self.timestamp_queries) {
@@ -2864,9 +2872,8 @@ const TimestampQueries = struct {
 };
 
 const enabled_validation_features = [_]vk.ValidationFeatureEnableEXT{
-    // See https://github.com/Games-by-Mason/gpu/issues/3
-    // .gpu_assisted_ext,
-    // .gpu_assisted_reserve_binding_slot_ext,
+    .gpu_assisted_ext,
+    .gpu_assisted_reserve_binding_slot_ext,
     .best_practices_ext,
     .synchronization_validation_ext,
 };

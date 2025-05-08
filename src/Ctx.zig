@@ -105,6 +105,7 @@ max_alignment: bool,
 
 timestamp_queries: bool,
 tracy_queries: [global_options.max_frames_in_flight]u16 = @splat(0),
+validate: bool,
 
 pub const DebugMode = enum(u8) {
     /// Enables graphics API validation and debug output. High performance cost.
@@ -156,10 +157,7 @@ pub const InitOptions = struct {
     backend: ibackend.InitOptions,
     device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
     timestamp_queries: bool,
-    /// Ideally we'd always enable validation in debug mode. See tracking issue, you may want to
-    /// override this decision while doing graphics work:
-    /// https://github.com/Games-by-Mason/gpu/issues/3
-    debug: DebugMode = if (builtin.mode == .Debug) .output else .none,
+    debug: DebugMode = if (builtin.mode == .Debug) .validate else .none,
     /// Disables potentially problematic features. For example, disables all implicit layers in
     /// Vulkan. This may disrupt functionality expected by the user and should only be enabled
     /// when a problem occurs.
@@ -182,6 +180,7 @@ pub fn init(options: InitOptions) @This() {
         .combined_pipeline_layout_typed = undefined,
         .max_alignment = options.max_alignment,
         .timestamp_queries = options.timestamp_queries,
+        .validate = options.debug.gte(.validate),
     };
 
     ibackend.init(&gx, options);
