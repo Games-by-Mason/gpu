@@ -50,7 +50,7 @@ bufDestroy: fn (
 
 combinedPipelineLayoutCreate: fn (
     self: *Ctx,
-    comptime max_descriptors: u32,
+    comptime max_descs: u32,
     options: Ctx.CombinedPipelineLayout.InitOptions,
 ) Ctx.CombinedPipelineLayout,
 combinedPipelineLayoutDestroy: fn (
@@ -162,16 +162,16 @@ cmdBufSubmit: fn (
     combined_command_buffer: Ctx.CmdBuf,
 ) void,
 
-descriptorPoolDestroy: fn (
+descPoolDestroy: fn (
     self: *Ctx,
     pool: Ctx.DescPool,
 ) void,
-descriptorPoolCreate: fn (
+descPoolCreate: fn (
     self: *Ctx,
     comptime max_cmds: u32,
     options: Ctx.DescPool.InitOptions,
 ) Ctx.DescPool,
-descriptorSetsUpdate: fn (
+descSetsUpdate: fn (
     self: *Ctx,
     comptime max_updates: u32,
     updates: []const Ctx.DescUpdateCmd,

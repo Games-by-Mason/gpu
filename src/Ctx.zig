@@ -99,8 +99,6 @@ frames_in_flight: u4,
 frame: u8 = 0,
 in_frame: bool = false,
 
-combined_pipeline_layout_typed: [global_options.combined_pipeline_layouts.len]CombinedPipelineLayout,
-
 max_alignment: bool,
 
 timestamp_queries: bool,
@@ -177,7 +175,6 @@ pub fn init(options: InitOptions) @This() {
         .backend = undefined,
         .device = undefined,
         .frames_in_flight = options.frames_in_flight,
-        .combined_pipeline_layout_typed = undefined,
         .max_alignment = options.max_alignment,
         .timestamp_queries = options.timestamp_queries,
         .validate = options.debug.gte(.validate),
@@ -192,30 +189,12 @@ pub fn init(options: InitOptions) @This() {
         gx.device.storage_buf_offset_alignment = Device.max_storage_buf_offset_alignment;
     }
 
-    comptime var max_descriptors = 0;
-    inline for (global_options.combined_pipeline_layouts) |layout| {
-        max_descriptors = @max(layout.descriptors.len, max_descriptors);
-    }
-
-    inline for (global_options.combined_pipeline_layouts, 0..) |create_options, i| {
-        gx.combined_pipeline_layout_typed[i] = CombinedPipelineLayout.init(
-            &gx,
-            max_descriptors,
-            create_options.*,
-        );
-    }
-
     return gx;
 }
 
 /// Destroys the context. Must not be in use, see `waitIdle`.
 pub fn deinit(self: *@This(), gpa: Allocator) void {
-    for (self.combined_pipeline_layout_typed) |layout| {
-        layout.deinit(self);
-    }
-
     ibackend.deinit(self, gpa);
-
     self.* = undefined;
 }
 
@@ -647,14 +626,6 @@ pub const CmdBuf = enum(u64) {
         ibackend.cmdBufSubmit(gx, self);
     }
 
-    pub const DrawOptions = struct {
-        vertex_count: u32,
-        instance_count: u32,
-        first_vertex: u32,
-        first_instance: u32,
-        descriptor_set: DescSet,
-    };
-
     pub fn bindPipeline(self: @This(), gx: *Ctx, pipeline: Pipeline) void {
         const zone = CpuZone.begin(.{ .src = @src() });
         defer zone.end();
@@ -671,6 +642,14 @@ pub const CmdBuf = enum(u64) {
         defer zone.end();
         ibackend.cmdBufBindDescSet(gx, self, pipeline, set);
     }
+
+    pub const DrawOptions = struct {
+        vertex_count: u32,
+        instance_count: u32,
+        first_vertex: u32,
+        first_instance: u32,
+        desc_set: DescSet,
+    };
 
     pub fn draw(self: @This(), gx: *Ctx, options: DrawOptions) void {
         const zone = CpuZone.begin(.{ .src = @src() });
@@ -788,11 +767,11 @@ pub const DescPool = enum(u64) {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
         assert(options.cmds.len <= max_cmds);
-        return ibackend.descriptorPoolCreate(gx, max_cmds, options);
+        return ibackend.descPoolCreate(gx, max_cmds, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
-        return ibackend.descriptorPoolDestroy(gx, self);
+        return ibackend.descPoolDestroy(gx, self);
     }
 
     pub inline fn fromBackendType(value: ibackend.DescPool) @This() {
@@ -979,7 +958,7 @@ pub fn updateDescSets(
 ) void {
     if (cmds.len == 0) return;
     assert(cmds.len <= max_updates);
-    ibackend.descriptorSetsUpdate(self, max_updates, cmds);
+    ibackend.descSetsUpdate(self, max_updates, cmds);
 }
 
 /// Will blocks until the next frame in flight's resources can be reclaimed.
@@ -1562,7 +1541,7 @@ pub const MemoryCreateUntypedOptions = struct {
 /// layouts, both handles are equivalent.
 pub const CombinedPipelineLayout = struct {
     pipeline: PipelineLayout,
-    descriptor_set: DescSetLayout,
+    desc_set: DescSetLayout,
 
     pub const InitOptions = struct {
         pub const Desc = struct {
@@ -1588,15 +1567,15 @@ pub const CombinedPipelineLayout = struct {
         };
 
         name: DebugName,
-        descriptors: []const Desc,
+        descs: []const Desc,
 
-        fn descriptor(comptime self: *const @This(), comptime name: []const u8) *const Desc {
+        fn getDesc(comptime self: *const @This(), comptime name: []const u8) *const Desc {
             const index = self.binding(name);
-            return &self.descriptors[index];
+            return &self.descs[index];
         }
 
         fn binding(comptime self: *const @This(), comptime name: []const u8) u32 {
-            const result = comptime for (self.descriptors, 0..) |desc, i| {
+            const result = comptime for (self.descs, 0..) |desc, i| {
                 if (std.mem.eql(u8, desc.name, name)) {
                     break i;
                 }
@@ -1604,50 +1583,9 @@ pub const CombinedPipelineLayout = struct {
             return result;
         }
 
-        pub const CreateCmdOptions = struct {
-            pipeline_name: DebugName,
-            shader_name: DebugName,
-            stages: InitCombinedPipelineCmd.Stages,
-            input_assembly: InitCombinedPipelineCmd.InputAssembly,
-            result: *Pipeline,
-        };
-
-        pub inline fn createCmd(
-            comptime self: *const @This(),
-            gx: *const Ctx,
-            options: CreateCmdOptions,
-        ) InitCombinedPipelineCmd {
-            return .{
-                .pipeline_name = options.pipeline_name,
-                .shader_name = options.shader_name,
-                .layout = CombinedPipelineLayout.get(gx, self),
-                .stages = options.stages,
-                .result = @ptrCast(options.result),
-                .input_assembly = options.input_assembly,
-            };
-        }
-
-        pub const CreateDescSetOptions = struct {
-            name: DebugName,
-            result: *DescSet,
-        };
-
-        pub fn createDescSetCmd(
-            comptime self: *const @This(),
-            gx: *const Ctx,
-            options: CreateDescSetOptions,
-        ) DescPool.InitOptions.Cmd {
-            return .{
-                .name = options.name,
-                .layout = CombinedPipelineLayout.get(gx, self).descriptor_set,
-                .layout_create_options = self,
-                .result = @ptrCast(options.result),
-            };
-        }
-
         pub fn UpdateDescOptions(self: *const @This(), comptime name: []const u8) type {
             const b = self.binding(name);
-            const desc = self.descriptors[b];
+            const desc = self.descs[b];
             return struct {
                 set: DescSet,
                 value: switch (desc.kind) {
@@ -1673,9 +1611,9 @@ pub const CombinedPipelineLayout = struct {
             options: self.UpdateDescOptions(name),
         ) DescUpdateCmd {
             const b = comptime self.binding(name);
-            const desc = self.descriptors[b];
+            const desc = self.descs[b];
 
-            if (index >= self.descriptors[b].count) {
+            if (index >= self.descs[b].count) {
                 @compileError("out of bounds update");
             }
 
@@ -1698,20 +1636,14 @@ pub const CombinedPipelineLayout = struct {
 
     pub fn init(
         gx: *Ctx,
-        comptime max_descriptors: u32,
+        comptime max_descs: u32,
         options: @This().InitOptions,
     ) CombinedPipelineLayout {
-        return ibackend.combinedPipelineLayoutCreate(gx, max_descriptors, options);
+        return ibackend.combinedPipelineLayoutCreate(gx, max_descs, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
         ibackend.combinedPipelineLayoutDestroy(gx, self);
-    }
-
-    pub fn get(self: *const Ctx, comptime kind: *const @This().InitOptions) @This() {
-        inline for (global_options.combined_pipeline_layouts, 0..) |curr, i| {
-            if (curr == kind) return self.combined_pipeline_layout_typed[i];
-        } else @compileError("layout kind not registered in global options");
     }
 };
 

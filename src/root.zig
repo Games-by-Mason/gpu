@@ -12,9 +12,6 @@ pub const tracy = @import("tracy");
 pub const Options = struct {
     /// Must implement `IBackend`
     Backend: type,
-    /// Pipeline layouts can be created at runtime, but specifying them at compile time offers
-    /// additional type safety.
-    combined_pipeline_layouts: []const *const Ctx.CombinedPipelineLayout.InitOptions = &.{},
     max_frames_in_flight: u4 = 2,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
 };

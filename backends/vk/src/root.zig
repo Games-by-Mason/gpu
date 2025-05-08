@@ -903,26 +903,26 @@ fn combinedPipelineLayoutCreate(
     options: Ctx.CombinedPipelineLayout.InitOptions,
 ) Ctx.CombinedPipelineLayout {
     // Create the descriptor set layout
-    var descriptors: std.BoundedArray(vk.DescriptorSetLayoutBinding, max_descriptors) = .{};
-    for (options.descriptors, 0..) |descriptor, i| {
-        descriptors.append(.{
+    var descs: std.BoundedArray(vk.DescriptorSetLayoutBinding, max_descriptors) = .{};
+    for (options.descs, 0..) |desc, i| {
+        descs.append(.{
             .binding = @intCast(i),
-            .descriptor_type = switch (descriptor.kind) {
+            .descriptor_type = switch (desc.kind) {
                 .uniform_buffer => .uniform_buffer,
                 .storage_buffer => .storage_buffer,
                 .combined_image_sampler => .combined_image_sampler,
             },
-            .descriptor_count = descriptor.count,
+            .descriptor_count = desc.count,
             .stage_flags = .{
-                .vertex_bit = descriptor.stages.vertex,
-                .fragment_bit = descriptor.stages.fragment,
+                .vertex_bit = desc.stages.vertex,
+                .fragment_bit = desc.stages.fragment,
             },
             .p_immutable_samplers = null,
         }) catch @panic("OOB");
     }
     const descriptor_set_layout = self.backend.device.createDescriptorSetLayout(&.{
-        .binding_count = @intCast(descriptors.len),
-        .p_bindings = &descriptors.buffer,
+        .binding_count = @intCast(descs.len),
+        .p_bindings = &descs.buffer,
     }, null) catch @panic("OOM");
     setName(self.backend.debug_messenger, self.backend.device, descriptor_set_layout, options.name);
 
@@ -934,7 +934,7 @@ fn combinedPipelineLayoutCreate(
     setName(self.backend.debug_messenger, self.backend.device, pipeline_layout, options.name);
 
     return .{
-        .descriptor_set = .fromBackendType(descriptor_set_layout),
+        .desc_set = .fromBackendType(descriptor_set_layout),
         .pipeline = .fromBackendType(pipeline_layout),
     };
 }
@@ -944,7 +944,7 @@ fn combinedPipelineLayoutDestroy(
     layout: Ctx.CombinedPipelineLayout,
 ) void {
     self.backend.device.destroyPipelineLayout(layout.pipeline.asBackendType(), null);
-    self.backend.device.destroyDescriptorSetLayout(layout.descriptor_set.asBackendType(), null);
+    self.backend.device.destroyDescriptorSetLayout(layout.desc_set.asBackendType(), null);
 }
 
 fn cmdBufBeginZone(self: *Ctx, cb: Ctx.CmdBuf, loc: *const tracy.SourceLocation) void {
@@ -1178,35 +1178,35 @@ fn cmdBufSubmit(
     ) catch |err| @panic(@errorName(err));
 }
 
-fn descriptorPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
+fn descPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
     self.backend.device.destroyDescriptorPool(pool.asBackendType(), null);
 }
 
-fn descriptorPoolReset(self: *Ctx, pool: Ctx.DescPool) void {
+fn descPoolReset(self: *Ctx, pool: Ctx.DescPool) void {
     self.backend.device.resetDescriptorPool(pool.asBackendType(), .{}) catch |err| @panic(@errorName(err));
 }
 
-fn descriptorPoolCreate(
+fn descPoolCreate(
     self: *Ctx,
     comptime max_cmds: u32,
     options: Ctx.DescPool.InitOptions,
 ) Ctx.DescPool {
     // Create a descriptor pool
-    const descriptor_pool = b: {
+    const desc_pool = b: {
         var uniform_buffers: u32 = 0;
         var storage_buffers: u32 = 0;
         var combined_image_samplers: u32 = 0;
         var descriptors: u32 = 0;
 
         for (options.cmds) |cmd| {
-            for (cmd.layout_create_options.descriptors) |descriptor| {
-                switch (descriptor.kind) {
+            for (cmd.layout_create_options.descs) |desc| {
+                switch (desc.kind) {
                     .uniform_buffer => uniform_buffers += 1,
                     .storage_buffer => storage_buffers += 1,
                     .combined_image_sampler => combined_image_samplers += 1,
                 }
             }
-            descriptors += @intCast(cmd.layout_create_options.descriptors.len);
+            descriptors += @intCast(cmd.layout_create_options.descs.len);
         }
 
         // Descriptor count must be greater than zero, so skip any that are zero
@@ -1225,15 +1225,15 @@ fn descriptorPoolCreate(
             .descriptor_count = combined_image_samplers,
         });
 
-        const descriptor_pool = self.backend.device.createDescriptorPool(&.{
+        const desc_pool = self.backend.device.createDescriptorPool(&.{
             .pool_size_count = @intCast(sizes.len),
             .p_pool_sizes = &sizes.buffer,
             .flags = .{},
             .max_sets = @intCast(options.cmds.len),
         }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.debug_messenger, self.backend.device, descriptor_pool, options.name);
+        setName(self.backend.debug_messenger, self.backend.device, desc_pool, options.name);
 
-        break :b descriptor_pool;
+        break :b desc_pool;
     };
 
     // Create the descriptor sets
@@ -1247,7 +1247,7 @@ fn descriptorPoolCreate(
 
         // Allocate the descriptor sets
         self.backend.device.allocateDescriptorSets(&.{
-            .descriptor_pool = descriptor_pool,
+            .descriptor_pool = desc_pool,
             .descriptor_set_count = @intCast(layout_buf.len),
             .p_set_layouts = &layout_buf.buffer,
         }, &results) catch |err| @panic(@errorName(err));
@@ -1260,10 +1260,10 @@ fn descriptorPoolCreate(
     }
 
     // Return the descriptor pool
-    return .fromBackendType(descriptor_pool);
+    return .fromBackendType(desc_pool);
 }
 
-fn descriptorSetsUpdate(
+fn descSetsUpdate(
     self: *Ctx,
     comptime max_updates: u32,
     updates: []const Ctx.DescUpdateCmd,
@@ -3187,9 +3187,9 @@ pub const ibackend: IBackend = .{
     .bufferUploadRegionInit = bufferUploadRegionInit,
     .cmdBufCreate = cmdBufCreate,
     .cmdBufSubmit = cmdBufSubmit,
-    .descriptorPoolDestroy = descriptorPoolDestroy,
-    .descriptorPoolCreate = descriptorPoolCreate,
-    .descriptorSetsUpdate = descriptorSetsUpdate,
+    .descPoolDestroy = descPoolDestroy,
+    .descPoolCreate = descPoolCreate,
+    .descSetsUpdate = descSetsUpdate,
     .beginFrame = beginFrame,
     .endFrame = endFrame,
     .acquireNextImage = acquireNextImage,
