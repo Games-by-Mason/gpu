@@ -1060,92 +1060,70 @@ fn cmdBufEndRendering(self: *Ctx, cb: Ctx.CmdBuf) void {
 
 fn cmdBufDraw(
     self: *Ctx,
-    combined: Ctx.CombinedCmdBuf,
-    cmds: []const Ctx.DrawCmd,
+    combined_cb: Ctx.CombinedCmdBuf,
+    options: Ctx.CombinedCmdBuf.DrawOptions,
 ) void {
-    const cb = combined.cb.asBackendType();
+    const cb = combined_cb.cb.asBackendType();
+    const bindings = combined_cb.bindings;
 
-    const bindings = combined.bindings;
+    // XXX: pull these out into their own function calls or no? the nice thing about having it here is
+    // there's no hidden state between calls, and you're supposed to call thsi function infrequently anyway
+    // right?
+    if (options.combined_pipeline.pipeline != bindings.pipeline) {
+        bindings.pipeline = options.combined_pipeline.pipeline;
 
-    for (cmds) |draw| {
-        if (draw.combined_pipeline.pipeline != bindings.pipeline) {
-            bindings.pipeline = draw.combined_pipeline.pipeline;
+        // Bind the pipeline
+        self.backend.device.cmdBindPipeline(
+            cb,
+            .graphics,
+            options.combined_pipeline.pipeline.asBackendType(),
+        );
 
-            // Bind the pipeline
-            self.backend.device.cmdBindPipeline(
-                cb,
-                .graphics,
-                draw.combined_pipeline.pipeline.asBackendType(),
-            );
+        if (!bindings.dynamic_state) {
+            bindings.dynamic_state = true;
 
-            if (!bindings.dynamic_state) {
-                bindings.dynamic_state = true;
+            self.backend.device.cmdSetViewport(cb, 0, 1, &.{.{
+                .x = 0.0,
+                .y = 0.0,
+                .width = @floatFromInt(self.backend.swapchain.swap_extent.width),
+                .height = @floatFromInt(self.backend.swapchain.swap_extent.height),
+                .min_depth = 0.0,
+                .max_depth = 1.0,
+            }});
 
-                self.backend.device.cmdSetViewport(cb, 0, 1, &.{.{
-                    .x = 0.0,
-                    .y = 0.0,
-                    .width = @floatFromInt(self.backend.swapchain.swap_extent.width),
-                    .height = @floatFromInt(self.backend.swapchain.swap_extent.height),
-                    .min_depth = 0.0,
-                    .max_depth = 1.0,
-                }});
-
-                self.backend.device.cmdSetScissor(cb, 0, 1, &.{.{
-                    .offset = .{ .x = 0, .y = 0 },
-                    .extent = self.backend.swapchain.swap_extent,
-                }});
-            }
-        }
-
-        // Rebind the descriptor set if it changed. If we had multiple we'd have to invalidate any
-        // descriptor sets following and including the last compatible one, but this isn't a concern
-        // since we only support one: it's either the same and compatible or different and needs to
-        // be rebound.
-        if (draw.descriptor_set != bindings.descriptor_set) {
-            bindings.descriptor_set = draw.descriptor_set;
-            self.backend.device.cmdBindDescriptorSets(
-                cb,
-                .graphics,
-                draw.combined_pipeline.layout.asBackendType(),
-                0,
-                1,
-                &.{draw.descriptor_set.asBackendType()},
-                0,
-                &[0]u32{},
-            );
-        }
-
-        // Issue the draw call
-        if (draw.indices) |indices| {
-            // Rebind the index buffer if it has changed
-            if (indices != bindings.indices) {
-                bindings.indices = indices;
-                comptime assert(Ctx.DrawCmd.IndexedIndirect.Index == u16); // Make sure we're binding it as the right type
-                self.backend.device.cmdBindIndexBuffer(
-                    cb,
-                    indices.asBackendType(),
-                    0,
-                    .uint16,
-                );
-            }
-
-            self.backend.device.cmdDrawIndexedIndirect(
-                cb,
-                draw.args.buf.asBackendType(),
-                draw.args.offset,
-                draw.args_count,
-                @sizeOf(Ctx.DrawCmd.IndexedIndirect),
-            );
-        } else {
-            self.backend.device.cmdDrawIndirect(
-                cb,
-                draw.args.buf.asBackendType(),
-                draw.args.offset,
-                draw.args_count,
-                @sizeOf(Ctx.DrawCmd.Indirect),
-            );
+            self.backend.device.cmdSetScissor(cb, 0, 1, &.{.{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = self.backend.swapchain.swap_extent,
+            }});
         }
     }
+
+    // Rebind the descriptor set if it changed. If we had multiple we'd have to invalidate any
+    // descriptor sets following and including the last compatible one, but this isn't a concern
+    // since we only support one: it's either the same and compatible or different and needs to
+    // be rebound.
+    if (options.descriptor_set != bindings.descriptor_set) {
+        bindings.descriptor_set = options.descriptor_set;
+        self.backend.device.cmdBindDescriptorSets(
+            cb,
+            .graphics,
+            options.combined_pipeline.layout.asBackendType(),
+            0,
+            1,
+            &.{options.descriptor_set.asBackendType()},
+            0,
+            &[0]u32{},
+        );
+    }
+
+    // Issue the draw call
+    self.backend.device.cmdDraw(
+        cb,
+        options.vertex_count,
+        options.instance_count,
+        options.first_vertex,
+        options.first_instance,
+    );
 }
 
 fn combinedCmdBufSubmit(

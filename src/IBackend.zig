@@ -89,8 +89,8 @@ imageTransitionColorOutputAttachmentToReadOnly: fn (
 
 cmdBufDraw: fn (
     self: *Ctx,
-    cb: Ctx.CombinedCmdBuf,
-    options: []const Ctx.DrawCmd,
+    combined_cb: Ctx.CombinedCmdBuf,
+    options: Ctx.CombinedCmdBuf.DrawOptions,
 ) void,
 cmdBufTransitionImages: fn (
     self: *Ctx,

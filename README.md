@@ -1,6 +1,6 @@
 # GPU
 
-A light graphics API abstraction for desktop, and eventually console. Designed exclusively for bindless and draw indirect based rendering.
+A light graphics API abstraction for desktop, and eventually console. Designed for bindless rendering.
 
 # Status
 

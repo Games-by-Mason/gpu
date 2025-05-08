@@ -617,36 +617,34 @@ pub const CombinedCmdBuf = struct {
         const zone = CpuZone.begin(.{ .src = @src() });
         defer zone.end();
         assert(gx.in_frame);
-        ibackend.combinedCmdBufSubmit(gx, self.asUntyped());
+        ibackend.combinedCmdBufSubmit(gx, self);
     }
 
-    inline fn asUntyped(self: @This()) CombinedCmdBuf {
-        return .{
-            .cb = self.cb,
-            .bindings = self.bindings,
-            .zone = self.zone,
-        };
-    }
+    pub const DrawOptions = struct {
+        combined_pipeline: CombinedPipeline(null),
+        vertex_count: u32,
+        instance_count: u32,
+        first_vertex: u32,
+        first_instance: u32,
+        descriptor_set: DescSet(null),
+    };
 
-    pub fn draw(self: @This(), gx: *Ctx, cmds: []const DrawCmd) void {
+    // XXX: don't put gx on options structs because you wanna be able to store them without storing
+    // redundant info, at least for a call like this
+    pub fn draw(self: @This(), gx: *Ctx, options: DrawOptions) void {
         const zone = CpuZone.begin(.{ .src = @src() });
         defer zone.end();
-        if (std.debug.runtime_safety) {
-            for (cmds) |draw_call| {
-                assert(draw_call.args.offset % 4 == 0);
-            }
-        }
-        ibackend.cmdBufDraw(gx, self.asUntyped(), cmds);
+        ibackend.cmdBufDraw(gx, self, options);
     }
 
     pub fn transitionImages(self: @This(), gx: *Ctx, transitions: []const ImageTransition) void {
-        ibackend.cmdBufTransitionImages(gx, self.asUntyped(), transitions);
+        ibackend.cmdBufTransitionImages(gx, self, transitions);
     }
 
     pub fn uploadImage(self: @This(), gx: *Ctx, options: ImageUpload) void {
         ibackend.cmdBufUploadImage(
             gx,
-            self.asUntyped(),
+            self,
             options.dst,
             options.src.as(.{}),
             options.regions,
