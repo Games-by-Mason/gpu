@@ -652,20 +652,20 @@ pub const CmdBuf = enum(u64) {
         instance_count: u32,
         first_vertex: u32,
         first_instance: u32,
-        descriptor_set: DescSet(null),
+        descriptor_set: DescSet,
     };
 
-    pub fn bindPipeline(self: @This(), gx: *Ctx, combined: CombinedPipeline(null)) void {
+    pub fn bindPipeline(self: @This(), gx: *Ctx, pipeline: Pipeline) void {
         const zone = CpuZone.begin(.{ .src = @src() });
         defer zone.end();
-        ibackend.cmdBufBindPipeline(gx, self, combined);
+        ibackend.cmdBufBindPipeline(gx, self, pipeline);
     }
 
     pub fn bindDescSet(
         self: @This(),
         gx: *Ctx,
-        pipeline: CombinedPipeline(null),
-        set: DescSet(null),
+        pipeline: Pipeline,
+        set: DescSet,
     ) void {
         const zone = CpuZone.begin(.{ .src = @src() });
         defer zone.end();
@@ -725,31 +725,6 @@ pub const CmdBuf = enum(u64) {
     }
 };
 
-pub const DrawCmd = struct {
-    pub const IndexedIndirect = extern struct {
-        pub const Index = u16;
-
-        index_count: u32,
-        instance_count: u32,
-        first_index: u32,
-        vertex_offset: i32,
-        first_instance: u32,
-    };
-
-    pub const Indirect = extern struct {
-        vertex_count: u32,
-        instance_count: u32,
-        first_vertex: u32,
-        first_instance: u32,
-    };
-
-    combined_pipeline: CombinedPipeline(null),
-    args: Buf(.{ .indirect = true }).UnsizedView,
-    args_count: u32,
-    indices: ?Buf(.{ .index = true }) = null,
-    descriptor_set: DescSet(null),
-};
-
 pub const EndFrameOptions = struct {
     /// If true, presents the current image, otherwise ends the frame without presentation.
     ///
@@ -799,7 +774,7 @@ pub const DescPool = enum(u64) {
             name: DebugName,
             layout: DescSetLayout,
             layout_create_options: *const CombinedPipelineLayout.InitOptions,
-            result: *DescSet(null),
+            result: *DescSet,
         };
         name: DebugName,
         cmds: []const Cmd,
@@ -845,27 +820,19 @@ pub const DescSetLayout = enum(u64) {
     }
 };
 
-pub fn DescSet(layout: ?*const CombinedPipelineLayout.InitOptions) type {
-    return enum(u64) {
-        const type_dependency = layout;
+pub const DescSet = enum(u64) {
+    _,
 
-        _,
+    pub inline fn fromBackendType(value: ibackend.DescSet) @This() {
+        comptime assert(@sizeOf(ibackend.DescSet) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(value));
+    }
 
-        pub inline fn asUntyped(self: @This()) DescSet(null) {
-            return @enumFromInt(@intFromEnum(self));
-        }
-
-        pub inline fn fromBackendType(value: ibackend.DescSet) @This() {
-            comptime assert(@sizeOf(ibackend.DescSet) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(value));
-        }
-
-        pub inline fn asBackendType(self: @This()) ibackend.DescSet {
-            comptime assert(@sizeOf(ibackend.DescSet) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(self));
-        }
-    };
-}
+    pub inline fn asBackendType(self: @This()) ibackend.DescSet {
+        comptime assert(@sizeOf(ibackend.DescSet) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(self));
+    }
+};
 
 // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
 pub const StorageBufSize = u27;
@@ -997,7 +964,7 @@ pub const DescUpdateCmd = struct {
         combined_image_sampler: CombinedImageSampler,
     };
 
-    set: DescSet(null),
+    set: DescSet,
     binding: u32,
     index: u8 = 0,
     value: Value,
@@ -1637,20 +1604,18 @@ pub const CombinedPipelineLayout = struct {
             return result;
         }
 
-        pub fn CreateCmdOptions(self: *const @This()) type {
-            return struct {
-                pipeline_name: DebugName,
-                shader_name: DebugName,
-                stages: InitCombinedPipelineCmd.Stages,
-                input_assembly: InitCombinedPipelineCmd.InputAssembly,
-                result: *CombinedPipeline(self),
-            };
-        }
+        pub const CreateCmdOptions = struct {
+            pipeline_name: DebugName,
+            shader_name: DebugName,
+            stages: InitCombinedPipelineCmd.Stages,
+            input_assembly: InitCombinedPipelineCmd.InputAssembly,
+            result: *Pipeline,
+        };
 
         pub inline fn createCmd(
             comptime self: *const @This(),
             gx: *const Ctx,
-            options: CreateCmdOptions(self),
+            options: CreateCmdOptions,
         ) InitCombinedPipelineCmd {
             return .{
                 .pipeline_name = options.pipeline_name,
@@ -1662,38 +1627,15 @@ pub const CombinedPipelineLayout = struct {
             };
         }
 
-        pub fn DrawCmdOptions(self: *const CombinedPipelineLayout.InitOptions) type {
-            return struct {
-                combined_pipeline: CombinedPipeline(self),
-                args: Buf(.{ .indirect = true }).UnsizedView,
-                args_count: u32,
-                indices: ?Buf(.{ .index = true }) = null,
-                descriptor_set: DescSet(self),
-            };
-        }
-
-        pub inline fn drawCmd(comptime self: *const @This(), options: @This().DrawCmdOptions(self)) DrawCmd {
-            return .{
-                .combined_pipeline = options.combined_pipeline.asUntyped(),
-                .args = options.args,
-                .args_count = options.args_count,
-                .indices = options.indices,
-                .descriptor_set = options.descriptor_set.asUntyped(),
-            };
-        }
-
-        pub fn CreateDescSetOptions(comptime self: *const CombinedPipelineLayout.InitOptions) type {
-            return struct {
-                comptime layout: *const CombinedPipelineLayout.InitOptions = self,
-                name: DebugName,
-                result: *DescSet(self),
-            };
-        }
+        pub const CreateDescSetOptions = struct {
+            name: DebugName,
+            result: *DescSet,
+        };
 
         pub fn createDescSetCmd(
             comptime self: *const @This(),
             gx: *const Ctx,
-            options: @This().CreateDescSetOptions(self),
+            options: CreateDescSetOptions,
         ) DescPool.InitOptions.Cmd {
             return .{
                 .name = options.name,
@@ -1707,7 +1649,7 @@ pub const CombinedPipelineLayout = struct {
             const b = self.binding(name);
             const desc = self.descriptors[b];
             return struct {
-                set: DescSet(self),
+                set: DescSet,
                 value: switch (desc.kind) {
                     .storage_buffer => Buf(.{ .storage = true }).View,
                     .uniform_buffer => Buf(.{ .uniform = true }).UnsizedView,
@@ -1738,7 +1680,7 @@ pub const CombinedPipelineLayout = struct {
             }
 
             return .{
-                .set = options.set.asUntyped(),
+                .set = options.set,
                 .binding = b,
                 .index = index,
                 .value = switch (desc.kind) {
@@ -1787,7 +1729,7 @@ pub const PipelineLayout = enum(u64) {
     }
 };
 
-pub const Pipeline = enum(u64) {
+pub const PipelineHandle = enum(u64) {
     _,
 
     pub inline fn fromBackendType(value: ibackend.Pipeline) @This() {
@@ -1833,29 +1775,18 @@ pub const InitCombinedPipelineCmd = struct {
     shader_name: DebugName,
     layout: CombinedPipelineLayout,
     stages: Stages,
-    result: *CombinedPipeline(null),
+    result: *Pipeline,
     input_assembly: InputAssembly,
 };
 
-pub fn CombinedPipeline(init_options: ?*const CombinedPipelineLayout.InitOptions) type {
-    return struct {
-        const type_dependency = init_options;
+pub const Pipeline = struct {
+    handle: PipelineHandle,
+    layout: PipelineLayout,
 
-        pipeline: Pipeline,
-        layout: PipelineLayout,
-
-        pub fn deinit(self: @This(), gx: *Ctx) void {
-            ibackend.combinedPipelineDestroy(gx, self.asUntyped());
-        }
-
-        pub inline fn asUntyped(self: @This()) CombinedPipeline(null) {
-            return .{
-                .pipeline = self.pipeline,
-                .layout = self.layout,
-            };
-        }
-    };
-}
+    pub fn deinit(self: @This(), gx: *Ctx) void {
+        ibackend.pipelineDestroy(gx, self);
+    }
+};
 
 pub fn initCombinedPipelines(
     self: *@This(),
@@ -1865,7 +1796,7 @@ pub fn initCombinedPipelines(
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
     if (cmds.len == 0) return;
-    ibackend.combinedPipelinesCreate(self, max_cmds, cmds);
+    ibackend.pipelinesCreate(self, max_cmds, cmds);
 }
 
 pub const Sampler = enum(u64) {

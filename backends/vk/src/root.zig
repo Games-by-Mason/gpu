@@ -1117,20 +1117,20 @@ fn cmdBufSetScissor(
 fn cmdBufBindPipeline(
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    combined_pipeline: Ctx.CombinedPipeline(null),
+    pipeline: Ctx.Pipeline,
 ) void {
     self.backend.device.cmdBindPipeline(
         cb.asBackendType(),
         .graphics,
-        combined_pipeline.pipeline.asBackendType(),
+        pipeline.handle.asBackendType(),
     );
 }
 
 fn cmdBufBindDescSet(
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    pipeline: Ctx.CombinedPipeline(null),
-    set: Ctx.DescSet(null),
+    pipeline: Ctx.Pipeline,
+    set: Ctx.DescSet,
 ) void {
     self.backend.device.cmdBindDescriptorSets(
         cb.asBackendType(),
@@ -1941,11 +1941,11 @@ fn memoryDestroy(self: *Ctx, memory: Ctx.MemoryUnsized) void {
     self.backend.device.freeMemory(memory.asBackendType(), null);
 }
 
-fn combinedPipelineDestroy(self: *Ctx, combined: Ctx.CombinedPipeline(null)) void {
-    self.backend.device.destroyPipeline(combined.pipeline.asBackendType(), null);
+fn pipelineDestroy(self: *Ctx, pipeline: Ctx.Pipeline) void {
+    self.backend.device.destroyPipeline(pipeline.handle.asBackendType(), null);
 }
 
-fn combinedPipelinesCreate(
+fn pipelinesCreate(
     self: *Ctx,
     comptime max_cmds: u32,
     cmds: []const Ctx.InitCombinedPipelineCmd,
@@ -2144,7 +2144,7 @@ fn combinedPipelinesCreate(
         setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.pipeline_name);
         cmd.result.* = .{
             .layout = cmd.layout.pipeline,
-            .pipeline = .fromBackendType(pipeline),
+            .handle = .fromBackendType(pipeline),
         };
     }
 }
@@ -3201,8 +3201,8 @@ pub const ibackend: IBackend = .{
     .imageViewDestroy = imageViewDestroy,
     .memoryCreate = memoryCreate,
     .memoryDestroy = memoryDestroy,
-    .combinedPipelineDestroy = combinedPipelineDestroy,
-    .combinedPipelinesCreate = combinedPipelinesCreate,
+    .pipelineDestroy = pipelineDestroy,
+    .pipelinesCreate = pipelinesCreate,
     .samplerCreate = samplerCreate,
     .samplerDestroy = samplerDestroy,
     .timestampCalibration = timestampCalibration,

@@ -135,13 +135,13 @@ cmdBufSetScissor: fn (
 cmdBufBindPipeline: fn (
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    combined: Ctx.CombinedPipeline(null),
+    combined: Ctx.Pipeline,
 ) void,
 cmdBufBindDescSet: fn (
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    pipeline: Ctx.CombinedPipeline(null),
-    set: Ctx.DescSet(null),
+    pipeline: Ctx.Pipeline,
+    set: Ctx.DescSet,
 ) void,
 
 imageUploadRegionInit: fn (
@@ -217,11 +217,11 @@ memoryDestroy: fn (
     memory: Ctx.MemoryUnsized,
 ) void,
 
-combinedPipelineDestroy: fn (
+pipelineDestroy: fn (
     self: *Ctx,
-    combined: Ctx.CombinedPipeline(null),
+    combined: Ctx.Pipeline,
 ) void,
-combinedPipelinesCreate: fn (
+pipelinesCreate: fn (
     self: *Ctx,
     comptime max_cmds: u32,
     cmds: []const Ctx.InitCombinedPipelineCmd,
