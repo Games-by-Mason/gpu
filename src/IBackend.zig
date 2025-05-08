@@ -223,7 +223,6 @@ pipelineDestroy: fn (
 ) void,
 pipelinesCreate: fn (
     self: *Ctx,
-    comptime max_cmds: u32,
     cmds: []const Ctx.InitCombinedPipelineCmd,
 ) void,
 

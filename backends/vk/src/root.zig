@@ -1947,10 +1947,9 @@ fn pipelineDestroy(self: *Ctx, pipeline: Ctx.Pipeline) void {
 
 fn pipelinesCreate(
     self: *Ctx,
-    comptime max_cmds: u32,
     cmds: []const Ctx.InitCombinedPipelineCmd,
 ) void {
-    // Other settings
+    // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
         .viewport,
         .scissor,
@@ -1959,21 +1958,16 @@ fn pipelinesCreate(
         .dynamic_state_count = dynamic_states.len,
         .p_dynamic_states = &dynamic_states,
     };
-
-    const vertex_binding_descriptons = [_]vk.VertexInputBindingDescription{};
-    const vertex_attribute_descriptons = [_]vk.VertexInputAttributeDescription{};
-    const vertex_input_info: vk.PipelineVertexInputStateCreateInfo = .{
-        .vertex_binding_description_count = vertex_binding_descriptons.len,
-        .p_vertex_binding_descriptions = &vertex_binding_descriptons,
-        .vertex_attribute_description_count = vertex_attribute_descriptons.len,
-        .p_vertex_attribute_descriptions = &vertex_attribute_descriptons,
+    const vertex_input: vk.PipelineVertexInputStateCreateInfo = .{
+        .vertex_binding_description_count = 0,
+        .p_vertex_binding_descriptions = &.{},
+        .vertex_attribute_description_count = 0,
+        .p_vertex_attribute_descriptions = &.{},
     };
-
     const viewport_state: vk.PipelineViewportStateCreateInfo = .{
         .viewport_count = 1,
         .scissor_count = 1,
     };
-
     const rasterizer: vk.PipelineRasterizationStateCreateInfo = .{
         .depth_clamp_enable = vk.FALSE,
         .rasterizer_discard_enable = vk.FALSE,
@@ -1986,7 +1980,6 @@ fn pipelinesCreate(
         .depth_bias_clamp = 0.0,
         .depth_bias_slope_factor = 0.0,
     };
-
     const multisampling: vk.PipelineMultisampleStateCreateInfo = .{
         .sample_shading_enable = vk.FALSE,
         .rasterization_samples = .{ .@"1_bit" = true },
@@ -1994,7 +1987,6 @@ fn pipelinesCreate(
         .alpha_to_coverage_enable = vk.FALSE,
         .alpha_to_one_enable = vk.FALSE,
     };
-
     const color_blend_attachments = [_]vk.PipelineColorBlendAttachmentState{
         .{
             .color_write_mask = .{
@@ -2012,7 +2004,6 @@ fn pipelinesCreate(
             .alpha_blend_op = .add,
         },
     };
-
     const color_blending: vk.PipelineColorBlendStateCreateInfo = .{
         .logic_op_enable = vk.FALSE,
         .attachment_count = color_blend_attachments.len,
@@ -2020,16 +2011,7 @@ fn pipelinesCreate(
         .logic_op = .copy,
         .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 },
     };
-
-    // Pipeline create info
-    const max_shader_stages = Ctx.InitCombinedPipelineCmd.Stages.max_stages;
-    var shader_stages_buf: std.BoundedArray(vk.PipelineShaderStageCreateInfo, max_cmds * max_shader_stages) = .{};
-    defer for (shader_stages_buf.constSlice()) |stage| {
-        self.backend.device.destroyShaderModule(stage.module, null);
-    };
-    var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, max_cmds) = .{};
-    var input_assembly_buf: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, max_cmds) = .{};
-    const rendering_create_info: vk.PipelineRenderingCreateInfo = .{
+    const rendering: vk.PipelineRenderingCreateInfo = .{
         .view_mask = 0,
         .color_attachment_count = 1,
         .p_color_attachment_formats = &.{
@@ -2038,8 +2020,17 @@ fn pipelinesCreate(
         .depth_attachment_format = .undefined,
         .stencil_attachment_format = .undefined,
     };
+
+    // Pipeline create info
+    const max_shader_stages = Ctx.InitCombinedPipelineCmd.Stages.max_stages;
+    var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
+    defer for (shader_stages.constSlice()) |stage| {
+        self.backend.device.destroyShaderModule(stage.module, null);
+    };
+    var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
+    var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
     for (cmds) |cmd| {
-        const input_assembly = input_assembly_buf.addOneAssumeCapacity();
+        const input_assembly = input_assemblys.addOneAssumeCapacity();
         input_assembly.* = switch (cmd.input_assembly) {
             .point_list => .{
                 .topology = .point_list,
@@ -2082,35 +2073,33 @@ fn pipelinesCreate(
                 .primitive_restart_enable = vk.FALSE,
             },
         };
+
         const vertex_module = self.backend.device.createShaderModule(&.{
             .code_size = cmd.stages.vertex.spv.len * @sizeOf(u32),
             .p_code = cmd.stages.vertex.spv.ptr,
         }, null) catch |err| @panic(@errorName(err));
         setName(self.backend.debug_messenger, self.backend.device, vertex_module, cmd.stages.vertex.name);
-
-        shader_stages_buf.appendAssumeCapacity(.{
+        shader_stages.appendAssumeCapacity(.{
             .stage = .{ .vertex_bit = true },
             .module = vertex_module,
             .p_name = "main",
         });
-
         const fragment_module = self.backend.device.createShaderModule(&.{
             .code_size = cmd.stages.fragment.spv.len * @sizeOf(u32),
             .p_code = cmd.stages.fragment.spv.ptr,
         }, null) catch |err| @panic(@errorName(err));
         setName(self.backend.debug_messenger, self.backend.device, fragment_module, cmd.stages.fragment.name);
-
-        shader_stages_buf.appendAssumeCapacity(.{
+        shader_stages.appendAssumeCapacity(.{
             .stage = .{ .fragment_bit = true },
             .module = fragment_module,
             .p_name = "main",
         });
+        const shader_stages_slice = shader_stages.constSlice()[shader_stages.len - 2 ..];
 
-        const shader_stages = shader_stages_buf.constSlice()[shader_stages_buf.len - 2 ..];
         pipeline_infos.appendAssumeCapacity(.{
-            .stage_count = max_shader_stages,
-            .p_stages = shader_stages.ptr,
-            .p_vertex_input_state = &vertex_input_info,
+            .stage_count = @intCast(shader_stages_slice.len),
+            .p_stages = shader_stages_slice.ptr,
+            .p_vertex_input_state = &vertex_input,
             .p_input_assembly_state = input_assembly,
             .p_viewport_state = &viewport_state,
             .p_rasterization_state = &rasterizer,
@@ -2123,12 +2112,12 @@ fn pipelinesCreate(
             .subpass = 0,
             .base_pipeline_handle = .null_handle,
             .base_pipeline_index = -1,
-            .p_next = &rendering_create_info,
+            .p_next = &rendering,
         });
     }
 
     // Create the pipelines
-    var pipelines: [max_cmds]vk.Pipeline = undefined;
+    var pipelines: [global_options.init_pipelines_buf_len]vk.Pipeline = undefined;
     const create_result = self.backend.device.createGraphicsPipelines(
         .null_handle,
         @intCast(pipeline_infos.len),
@@ -2141,7 +2130,7 @@ fn pipelinesCreate(
         else => |err| @panic(@tagName(err)),
     }
     for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
-        setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.pipeline_name);
+        setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.name);
         cmd.result.* = .{
             .layout = cmd.layout.pipeline,
             .handle = .fromBackendType(pipeline),

@@ -1648,8 +1648,7 @@ pub const InitCombinedPipelineCmd = struct {
         patch_list: void,
     };
 
-    pipeline_name: DebugName,
-    shader_name: DebugName,
+    name: DebugName,
     layout: CombinedPipelineLayout,
     stages: Stages,
     result: *Pipeline,
@@ -1665,15 +1664,14 @@ pub const Pipeline = struct {
     }
 };
 
-pub fn initCombinedPipelines(
+pub fn initPipelines(
     self: *@This(),
-    comptime max_cmds: u32,
     cmds: []const InitCombinedPipelineCmd,
 ) InitPipelinesError!void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
-    if (cmds.len == 0) return;
-    ibackend.pipelinesCreate(self, max_cmds, cmds);
+    assert(cmds.len < global_options.init_pipelines_buf_len);
+    ibackend.pipelinesCreate(self, cmds);
 }
 
 pub const Sampler = enum(u64) {
