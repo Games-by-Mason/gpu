@@ -2983,6 +2983,11 @@ fn vkDebugCallback(
             // Don't warn us that validation is on every time validation is on, but do log it as
             // debug
             615892639, 2132353751, 1734198062 => level = .debug,
+            // Don't warn us that we aren't using a pipeline cache. This library is intended for
+            // renderers that create a small number of pipelines, caching them to a file comes with
+            // additional possible instability that isn't worth the very mild savings we'd get:
+            // https://zeux.io/2019/07/17/serializing-pipeline-cache/
+            785173 => level = .debug,
             // Don't warn us about skipping unsupported drivers, but do log it as debug
             0 => if (d.*.p_message_id_name) |name| {
                 if (std.mem.eql(u8, std.mem.span(name), "Loader Message")) {
