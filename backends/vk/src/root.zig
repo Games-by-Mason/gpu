@@ -1286,12 +1286,12 @@ fn descSetsUpdate(
             const update_curr = updates[i + batch_size];
 
             switch (update_curr.value) {
-                .uniform_buffer_view => |view| buffer_infos.appendAssumeCapacity(.{
+                .uniform_buf => |view| buffer_infos.appendAssumeCapacity(.{
                     .buffer = view.buf.asBackendType(),
                     .offset = view.offset,
                     .range = view.size,
                 }),
-                .storage_buffer_view => |view| buffer_infos.appendAssumeCapacity(.{
+                .storage_buf => |view| buffer_infos.appendAssumeCapacity(.{
                     .buffer = view.buf.asBackendType(),
                     .offset = view.offset,
                     .range = view.size,
@@ -1322,7 +1322,7 @@ fn descSetsUpdate(
 
         // Write the update
         switch (batch_kind) {
-            .uniform_buffer_view => {
+            .uniform_buf => {
                 const batch_buffer_infos = buffer_infos.constSlice()[buffer_infos.len - batch_size ..];
                 write_sets.appendAssumeCapacity(.{
                     .dst_set = batch_set.asBackendType(),
@@ -1335,7 +1335,7 @@ fn descSetsUpdate(
                     .p_texel_buffer_view = &[0]vk.BufferView{},
                 });
             },
-            .storage_buffer_view => {
+            .storage_buf => {
                 const batch_buffer_infos = buffer_infos.constSlice()[buffer_infos.len - batch_size ..];
                 write_sets.appendAssumeCapacity(.{
                     .dst_set = batch_set.asBackendType(),

@@ -938,8 +938,8 @@ pub const DescUpdateCmd = struct {
             layout: Layout,
         };
 
-        storage_buffer_view: Buf(.{}).View,
-        uniform_buffer_view: Buf(.{}).View,
+        storage_buf: Buf(.{ .storage = true }).View,
+        uniform_buf: Buf(.{ .uniform = true }).View,
         combined_image_sampler: CombinedImageSampler,
     };
 
@@ -1569,68 +1569,14 @@ pub const CombinedPipelineLayout = struct {
         name: DebugName,
         descs: []const Desc,
 
-        fn getDesc(comptime self: *const @This(), comptime name: []const u8) *const Desc {
-            const index = self.binding(name);
-            return &self.descs[index];
-        }
-
-        fn binding(comptime self: *const @This(), comptime name: []const u8) u32 {
+        // XXX: ...remove? use enums or something?
+        pub fn binding(comptime self: *const @This(), comptime name: []const u8) u32 {
             const result = comptime for (self.descs, 0..) |desc, i| {
                 if (std.mem.eql(u8, desc.name, name)) {
                     break i;
                 }
             } else @compileError("no such binding " ++ name);
             return result;
-        }
-
-        pub fn UpdateDescOptions(self: *const @This(), comptime name: []const u8) type {
-            const b = self.binding(name);
-            const desc = self.descs[b];
-            return struct {
-                set: DescSet,
-                value: switch (desc.kind) {
-                    .storage_buffer => Buf(.{ .storage = true }).View,
-                    .uniform_buffer => Buf(.{ .uniform = true }).UnsizedView,
-                    .combined_image_sampler => DescUpdateCmd.Value.CombinedImageSampler,
-                },
-            };
-        }
-
-        pub inline fn updateDescCmd(
-            comptime self: *const @This(),
-            comptime name: []const u8,
-            options: self.UpdateDescOptions(name),
-        ) DescUpdateCmd {
-            return self.updateDescItemCmd(name, 0, options);
-        }
-
-        pub inline fn updateDescItemCmd(
-            comptime self: *const @This(),
-            comptime name: []const u8,
-            comptime index: u32,
-            options: self.UpdateDescOptions(name),
-        ) DescUpdateCmd {
-            const b = comptime self.binding(name);
-            const desc = self.descs[b];
-
-            if (index >= self.descs[b].count) {
-                @compileError("out of bounds update");
-            }
-
-            return .{
-                .set = options.set,
-                .binding = b,
-                .index = index,
-                .value = switch (desc.kind) {
-                    .uniform_buffer => |uniform_buffer| .{ .uniform_buffer_view = .{
-                        .buf = options.value.buf.as(.{}),
-                        .offset = options.value.offset,
-                        .size = uniform_buffer.size,
-                    } },
-                    .storage_buffer => .{ .storage_buffer_view = options.value.as(.{}) },
-                    .combined_image_sampler => .{ .combined_image_sampler = options.value },
-                },
-            };
         }
     };
 
