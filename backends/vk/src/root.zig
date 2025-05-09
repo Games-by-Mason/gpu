@@ -25,6 +25,7 @@ instance: vk.InstanceProxy,
 physical_device: PhysicalDevice,
 swapchain: Swapchain,
 debug_messenger: vk.DebugUtilsMessengerEXT,
+pipeline_cache: vk.PipelineCache,
 
 // Queues & commands
 timestamp_period: f32,
@@ -504,6 +505,7 @@ fn init(self: *Ctx, any_options: anytype) void {
         // time of writing.
         .synchronization_2 = vk.TRUE,
         .dynamic_rendering = vk.TRUE,
+        .pipeline_creation_cache_control = vk.TRUE,
         .p_next = &device_features_12,
     };
     const device_features: vk.PhysicalDeviceFeatures = .{
@@ -622,10 +624,17 @@ fn init(self: *Ctx, any_options: anytype) void {
     const queue = device.getDeviceQueue(best_physical_device.queue_family_index, 0);
     setName(debug_messenger, device, queue, .{ .str = graphics_queue_name });
 
+    const pipeline_cache = device.createPipelineCache(&.{
+        .flags = .{ .externally_synchronized_bit = true },
+        .initial_data_size = 0,
+        .p_initial_data = null,
+    }, null) catch |err| @panic(@errorName(err));
+
     self.backend = .{
         .surface = surface,
         .base_wrapper = base_wrapper,
         .debug_messenger = debug_messenger,
+        .pipeline_cache = pipeline_cache,
         .instance = instance_proxy,
         .device = device,
         .swapchain = swapchain,
@@ -643,6 +652,9 @@ fn init(self: *Ctx, any_options: anytype) void {
 }
 
 fn deinit(self: *Ctx, gpa: Allocator) void {
+    // Destroy the pipeline cache
+    self.backend.device.destroyPipelineCache(self.backend.pipeline_cache, null);
+
     // Destroy the Tracy data
     for (self.backend.tracy_query_pools) |pool| {
         self.backend.device.destroyQueryPool(pool, null);
@@ -2119,7 +2131,7 @@ fn pipelinesCreate(
     // Create the pipelines
     var pipelines: [global_options.init_pipelines_buf_len]vk.Pipeline = undefined;
     const create_result = self.backend.device.createGraphicsPipelines(
-        .null_handle,
+        self.backend.pipeline_cache,
         @intCast(pipeline_infos.len),
         &pipeline_infos.buffer,
         null,
@@ -2972,11 +2984,6 @@ fn vkDebugCallback(
             // Don't warn us that validation is on every time validation is on, but do log it as
             // debug
             615892639, 2132353751, 1734198062 => level = .debug,
-            // Don't warn us that we aren't using a pipeline cache. This library is intended for
-            // renderers that create a small number of pipelines, caching them to a file comes with
-            // additional possible instability that isn't worth the very mild savings we'd get:
-            // https://zeux.io/2019/07/17/serializing-pipeline-cache/
-            785173 => level = .debug,
             // Don't warn us about skipping unsupported drivers, but do log it as debug
             0 => if (d.*.p_message_id_name) |name| {
                 if (std.mem.eql(u8, std.mem.span(name), "Loader Message")) {
