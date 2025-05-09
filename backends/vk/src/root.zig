@@ -1194,17 +1194,10 @@ fn descPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
     self.backend.device.destroyDescriptorPool(pool.asBackendType(), null);
 }
 
-fn descPoolReset(self: *Ctx, pool: Ctx.DescPool) void {
-    self.backend.device.resetDescriptorPool(pool.asBackendType(), .{}) catch |err| @panic(@errorName(err));
-}
-
-fn descPoolCreate(
-    self: *Ctx,
-    comptime max_cmds: u32,
-    options: Ctx.DescPool.InitOptions,
-) Ctx.DescPool {
-    // Create a descriptor pool
+fn descPoolCreate(self: *Ctx, options: Ctx.DescPool.InitOptions) Ctx.DescPool {
+    // Create the descriptor pool
     const desc_pool = b: {
+        // Calculate the size of the pool
         var uniform_buffers: u32 = 0;
         var storage_buffers: u32 = 0;
         var combined_image_samplers: u32 = 0;
@@ -1237,6 +1230,7 @@ fn descPoolCreate(
             .descriptor_count = combined_image_samplers,
         });
 
+        // Create the descriptor pool
         const desc_pool = self.backend.device.createDescriptorPool(&.{
             .pool_size_count = @intCast(sizes.len),
             .p_pool_sizes = &sizes.buffer,
@@ -1251,8 +1245,8 @@ fn descPoolCreate(
     // Create the descriptor sets
     {
         // Collect the arguments for descriptor set creation
-        var layout_buf: std.BoundedArray(vk.DescriptorSetLayout, max_cmds) = .{};
-        var results: [max_cmds]vk.DescriptorSet = undefined;
+        var layout_buf: std.BoundedArray(vk.DescriptorSetLayout, global_options.init_desc_pool_buf_len) = .{};
+        var results: [global_options.init_desc_pool_buf_len]vk.DescriptorSet = undefined;
         for (options.cmds) |cmd| {
             layout_buf.appendAssumeCapacity(cmd.layout.asBackendType());
         }

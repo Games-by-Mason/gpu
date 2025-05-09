@@ -168,7 +168,6 @@ descPoolDestroy: fn (
 ) void,
 descPoolCreate: fn (
     self: *Ctx,
-    comptime max_cmds: u32,
     options: Ctx.DescPool.InitOptions,
 ) Ctx.DescPool,
 descSetsUpdate: fn (

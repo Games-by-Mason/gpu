@@ -15,6 +15,7 @@ pub const Options = struct {
     max_frames_in_flight: u4 = 2,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
     init_pipelines_buf_len: u32 = 16,
+    init_desc_pool_buf_len: u32 = 16,
 };
 
 const options_name = "gpu_options";

@@ -759,15 +759,10 @@ pub const DescPool = enum(u64) {
         cmds: []const Cmd,
     };
 
-    pub fn init(
-        gx: *Ctx,
-        comptime max_cmds: u32,
-        options: @This().InitOptions,
-    ) @This() {
+    pub fn init(gx: *Ctx, options: @This().InitOptions) @This() {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
-        assert(options.cmds.len <= max_cmds);
-        return ibackend.descPoolCreate(gx, max_cmds, options);
+        return ibackend.descPoolCreate(gx, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
