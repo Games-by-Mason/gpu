@@ -648,7 +648,6 @@ pub const CmdBuf = enum(u64) {
         instance_count: u32,
         first_vertex: u32,
         first_instance: u32,
-        desc_set: DescSet,
     };
 
     pub fn draw(self: @This(), gx: *Ctx, options: DrawOptions) void {
@@ -752,7 +751,7 @@ pub const DescPool = enum(u64) {
         pub const Cmd = struct {
             name: DebugName,
             layout: DescSetLayout,
-            layout_create_options: *const CombinedPipelineLayout.InitOptions,
+            layout_options: *const CombinedPipelineLayout.InitOptions,
             result: *DescSet,
         };
         name: DebugName,
@@ -1558,7 +1557,7 @@ pub const CombinedPipelineLayout = struct {
         name: DebugName,
         descs: []const Desc,
 
-        pub fn binding(comptime self: *const @This(), comptime name: []const u8) u32 {
+        pub fn getBindingIndex(comptime self: *const @This(), comptime name: []const u8) u32 {
             const result = comptime for (self.descs, 0..) |desc, i| {
                 if (std.mem.eql(u8, desc.name, name)) {
                     break i;

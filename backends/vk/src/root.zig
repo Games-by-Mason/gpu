@@ -1204,14 +1204,14 @@ fn descPoolCreate(self: *Ctx, options: Ctx.DescPool.InitOptions) Ctx.DescPool {
         var descriptors: u32 = 0;
 
         for (options.cmds) |cmd| {
-            for (cmd.layout_create_options.descs) |desc| {
+            for (cmd.layout_options.descs) |desc| {
                 switch (desc.kind) {
                     .uniform_buffer => uniform_buffers += 1,
                     .storage_buffer => storage_buffers += 1,
                     .combined_image_sampler => combined_image_samplers += 1,
                 }
             }
-            descriptors += @intCast(cmd.layout_create_options.descs.len);
+            descriptors += @intCast(cmd.layout_options.descs.len);
         }
 
         // Descriptor count must be greater than zero, so skip any that are zero
