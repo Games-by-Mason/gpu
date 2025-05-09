@@ -11,7 +11,7 @@ DescSetLayout: type,
 Memory: type,
 Image: type,
 ImageView: type,
-Queue: type,
+ShaderModule: type,
 Pipeline: type,
 PipelineLayout: type,
 Sampler: type,
@@ -215,6 +215,15 @@ memoryCreate: fn (
 memoryDestroy: fn (
     self: *Ctx,
     memory: Ctx.MemoryUnsized,
+) void,
+
+shaderModuleCreate: fn (
+    self: *Ctx,
+    options: Ctx.ShaderModule.InitOptions,
+) Ctx.ShaderModule,
+shaderModuleDestroy: fn (
+    self: *Ctx,
+    module: Ctx.ShaderModule,
 ) void,
 
 pipelineDestroy: fn (

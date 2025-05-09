@@ -1627,10 +1627,6 @@ pub const InitPipelinesError = error{
 pub const InitCombinedPipelineCmd = struct {
     pub const Stages = struct {
         pub const max_stages = std.meta.fields(@This()).len;
-        const ShaderModule = struct {
-            spv: []const u32,
-            name: DebugName,
-        };
         vertex: ShaderModule,
         fragment: ShaderModule,
     };
@@ -1653,6 +1649,33 @@ pub const InitCombinedPipelineCmd = struct {
     stages: Stages,
     result: *Pipeline,
     input_assembly: InputAssembly,
+};
+
+pub const ShaderModule = enum(u64) {
+    _,
+
+    pub const InitOptions = struct {
+        name: DebugName,
+        spv: []const u32,
+    };
+
+    pub fn init(gx: *Ctx, options: @This().InitOptions) @This() {
+        return ibackend.shaderModuleCreate(gx, options);
+    }
+
+    pub fn deinit(self: @This(), gx: *Ctx) void {
+        ibackend.shaderModuleDestroy(gx, self);
+    }
+
+    pub inline fn fromBackendType(value: ibackend.ShaderModule) @This() {
+        comptime assert(@sizeOf(ibackend.ShaderModule) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(value));
+    }
+
+    pub inline fn asBackendType(self: @This()) ibackend.ShaderModule {
+        comptime assert(@sizeOf(ibackend.ShaderModule) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(self));
+    }
 };
 
 pub const Pipeline = struct {

@@ -1957,6 +1957,24 @@ fn pipelineDestroy(self: *Ctx, pipeline: Ctx.Pipeline) void {
     self.backend.device.destroyPipeline(pipeline.handle.asBackendType(), null);
 }
 
+fn shaderModuleCreate(self: *Ctx, options: Ctx.ShaderModule.InitOptions) Ctx.ShaderModule {
+    const module = self.backend.device.createShaderModule(&.{
+        .code_size = options.spv.len * @sizeOf(u32),
+        .p_code = options.spv.ptr,
+    }, null) catch |err| @panic(@errorName(err));
+    setName(
+        self.backend.debug_messenger,
+        self.backend.device,
+        module,
+        options.name,
+    );
+    return .fromBackendType(module);
+}
+
+fn shaderModuleDestroy(self: *Ctx, module: Ctx.ShaderModule) void {
+    self.backend.device.destroyShaderModule(module.asBackendType(), null);
+}
+
 fn pipelinesCreate(
     self: *Ctx,
     cmds: []const Ctx.InitCombinedPipelineCmd,
@@ -2036,9 +2054,6 @@ fn pipelinesCreate(
     // Pipeline create info
     const max_shader_stages = Ctx.InitCombinedPipelineCmd.Stages.max_stages;
     var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
-    defer for (shader_stages.constSlice()) |stage| {
-        self.backend.device.destroyShaderModule(stage.module, null);
-    };
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
     for (cmds) |cmd| {
@@ -2086,24 +2101,14 @@ fn pipelinesCreate(
             },
         };
 
-        const vertex_module = self.backend.device.createShaderModule(&.{
-            .code_size = cmd.stages.vertex.spv.len * @sizeOf(u32),
-            .p_code = cmd.stages.vertex.spv.ptr,
-        }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.debug_messenger, self.backend.device, vertex_module, cmd.stages.vertex.name);
         shader_stages.appendAssumeCapacity(.{
             .stage = .{ .vertex_bit = true },
-            .module = vertex_module,
+            .module = cmd.stages.vertex.asBackendType(),
             .p_name = "main",
         });
-        const fragment_module = self.backend.device.createShaderModule(&.{
-            .code_size = cmd.stages.fragment.spv.len * @sizeOf(u32),
-            .p_code = cmd.stages.fragment.spv.ptr,
-        }, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.debug_messenger, self.backend.device, fragment_module, cmd.stages.fragment.name);
         shader_stages.appendAssumeCapacity(.{
             .stage = .{ .fragment_bit = true },
-            .module = fragment_module,
+            .module = cmd.stages.fragment.asBackendType(),
             .p_name = "main",
         });
         const shader_stages_slice = shader_stages.constSlice()[shader_stages.len - 2 ..];
@@ -3151,7 +3156,7 @@ pub const ibackend: IBackend = .{
     .Memory = vk.DeviceMemory,
     .Image = vk.Image,
     .ImageView = vk.ImageView,
-    .Queue = vk.Queue,
+    .ShaderModule = vk.ShaderModule,
     .Pipeline = vk.Pipeline,
     .PipelineLayout = vk.PipelineLayout,
     .Sampler = vk.Sampler,
@@ -3202,6 +3207,8 @@ pub const ibackend: IBackend = .{
     .imageViewDestroy = imageViewDestroy,
     .memoryCreate = memoryCreate,
     .memoryDestroy = memoryDestroy,
+    .shaderModuleCreate = shaderModuleCreate,
+    .shaderModuleDestroy = shaderModuleDestroy,
     .pipelineDestroy = pipelineDestroy,
     .pipelinesCreate = pipelinesCreate,
     .samplerCreate = samplerCreate,
