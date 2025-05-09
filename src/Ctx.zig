@@ -946,14 +946,8 @@ pub const DescUpdateCmd = struct {
 
 /// Submit descriptor set update commands. Fastest when sorted. Copy commands not currently
 /// supported.
-pub fn updateDescSets(
-    self: *@This(),
-    comptime max_updates: u32,
-    cmds: []const DescUpdateCmd,
-) void {
-    if (cmds.len == 0) return;
-    assert(cmds.len <= max_updates);
-    ibackend.descSetsUpdate(self, max_updates, cmds);
+pub fn updateDescSets(self: *@This(), cmds: []const DescUpdateCmd) void {
+    ibackend.descSetsUpdate(self, cmds);
 }
 
 /// Will blocks until the next frame in flight's resources can be reclaimed.

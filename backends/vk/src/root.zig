@@ -1269,14 +1269,12 @@ fn descPoolCreate(self: *Ctx, options: Ctx.DescPool.InitOptions) Ctx.DescPool {
     return .fromBackendType(desc_pool);
 }
 
-fn descSetsUpdate(
-    self: *Ctx,
-    comptime max_updates: u32,
-    updates: []const Ctx.DescUpdateCmd,
-) void {
-    var buffer_infos: std.BoundedArray(vk.DescriptorBufferInfo, max_updates) = .{};
-    var combined_image_samplers: std.BoundedArray(vk.DescriptorImageInfo, max_updates) = .{};
-    var write_sets: std.BoundedArray(vk.WriteDescriptorSet, max_updates) = .{};
+fn descSetsUpdate(self: *Ctx, updates: []const Ctx.DescUpdateCmd) void {
+    const buf_len = global_options.update_desc_sets_buf_len;
+
+    var buffer_infos: std.BoundedArray(vk.DescriptorBufferInfo, buf_len) = .{};
+    var combined_image_samplers: std.BoundedArray(vk.DescriptorImageInfo, buf_len) = .{};
+    var write_sets: std.BoundedArray(vk.WriteDescriptorSet, buf_len) = .{};
 
     // Iterate over the updates
     var i: u32 = 0;

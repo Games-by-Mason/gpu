@@ -172,7 +172,6 @@ descPoolCreate: fn (
 ) Ctx.DescPool,
 descSetsUpdate: fn (
     self: *Ctx,
-    comptime max_updates: u32,
     updates: []const Ctx.DescUpdateCmd,
 ) void,
 
