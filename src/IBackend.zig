@@ -18,7 +18,8 @@ Sampler: type,
 ImageTransition: type,
 ImageUploadRegion: type,
 BufferUploadRegion: type,
-InitOptions: type,
+Attachment: type,
+Options: type,
 
 init: fn (self: *Ctx, options: anytype) void,
 deinit: fn (self: *Ctx, gpa: Allocator) void,
@@ -51,7 +52,7 @@ bufDestroy: fn (
 combinedPipelineLayoutCreate: fn (
     self: *Ctx,
     comptime max_descs: u32,
-    options: Ctx.CombinedPipelineLayout.InitOptions,
+    options: Ctx.CombinedPipelineLayout.Options,
 ) Ctx.CombinedPipelineLayout,
 combinedPipelineLayoutDestroy: fn (
     self: *Ctx,
@@ -72,28 +73,28 @@ imageTransitionUndefinedToTransferDst: fn (
     options: Ctx.ImageTransition.UndefinedToTransferDstOptions,
     out_transition: anytype,
 ) void,
-imageTransitionUndefinedToColorOutputAttachment: fn (
-    options: Ctx.ImageTransition.UndefinedToColorOutputAttachmentOptions,
+imageTransitionUndefinedToColorAttachment: fn (
+    options: Ctx.ImageTransition.UndefinedToColorAttachmentOptions,
     out_transition: anytype,
 ) void,
-imageTransitionUndefinedToColorOutputAttachmentAfterRead: fn (
-    options: Ctx.ImageTransition.UndefinedToColorOutputAttachmentOptionsAfterRead,
+imageTransitionUndefinedToColorAttachmentAfterRead: fn (
+    options: Ctx.ImageTransition.UndefinedToColorAttachmentOptionsAfterRead,
     out_transition: anytype,
 ) void,
 imageTransitionTransferDstToReadOnly: fn (
     options: Ctx.ImageTransition.TransferDstToReadOnlyOptions,
     out_transition: anytype,
 ) void,
-imageTransitionTransferDstToColorOutputAttachment: fn (
-    options: Ctx.ImageTransition.TransferDstToColorOutputAttachmentOptions,
+imageTransitionTransferDstToColorAttachment: fn (
+    options: Ctx.ImageTransition.TransferDstToColorAttachmentOptions,
     out_transition: anytype,
 ) void,
-imageTransitionReadOnlyToColorOutputAttachment: fn (
-    options: Ctx.ImageTransition.ReadOnlyToColorOutputAttachmentOptions,
+imageTransitionReadOnlyToColorAttachment: fn (
+    options: Ctx.ImageTransition.ReadOnlyToColorAttachmentOptions,
     out_transition: anytype,
 ) void,
-imageTransitionColorOutputAttachmentToReadOnly: fn (
-    options: Ctx.ImageTransition.ColorOutputAttachmentToReadOnlyOptions,
+imageTransitionColorAttachmentToReadOnly: fn (
+    options: Ctx.ImageTransition.ColorAttachmentToReadOnlyOptions,
     out_transition: anytype,
 ) void,
 
@@ -124,7 +125,7 @@ cmdBufUploadBuffer: fn (
 cmdBufBeginRendering: fn (
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    options: Ctx.CmdBuf.BeginRenderingOptions,
+    options: anytype,
 ) void,
 cmdBufEndRendering: fn (
     self: *Ctx,
@@ -153,12 +154,16 @@ cmdBufBindDescSet: fn (
 ) void,
 
 imageUploadRegionInit: fn (
-    options: Ctx.ImageUpload.Region.InitOptions,
+    options: Ctx.ImageUpload.Region.Options,
     out_region: anytype,
 ) void,
 bufferUploadRegionInit: fn (
-    options: Ctx.BufferUpload.Region.InitOptions,
+    options: Ctx.BufferUpload.Region.Options,
     out_region: anytype,
+) void,
+attachmentInit: fn (
+    options: Ctx.Attachment.Options,
+    out_attachment: anytype,
 ) void,
 
 cmdBufCreate: fn (
@@ -176,7 +181,7 @@ descPoolDestroy: fn (
 ) void,
 descPoolCreate: fn (
     self: *Ctx,
-    options: Ctx.DescPool.InitOptions,
+    options: Ctx.DescPool.Options,
 ) Ctx.DescPool,
 descSetsUpdate: fn (
     self: *Ctx,
@@ -188,7 +193,7 @@ endFrame: fn (self: *Ctx, options: Ctx.EndFrameOptions) void,
 acquireNextImage: fn (
     self: *Ctx,
     framebuf_extent: Ctx.Extent2D,
-) Ctx.Attachment,
+) Ctx.ImageView.Sized2D,
 
 getDevice: fn (self: *const Ctx) Ctx.Device,
 
@@ -209,7 +214,7 @@ imageMemoryRequirements: fn (
 imageViewCreate: fn (
     self: *Ctx,
     name: Ctx.DebugName,
-    options: Ctx.ImageView.InitOptions,
+    options: Ctx.ImageView.Options,
 ) Ctx.ImageView,
 imageViewDestroy: fn (
     self: *Ctx,
@@ -227,7 +232,7 @@ memoryDestroy: fn (
 
 shaderModuleCreate: fn (
     self: *Ctx,
-    options: Ctx.ShaderModule.InitOptions,
+    options: Ctx.ShaderModule.Options,
 ) Ctx.ShaderModule,
 shaderModuleDestroy: fn (
     self: *Ctx,
@@ -246,7 +251,7 @@ pipelinesCreate: fn (
 samplerCreate: fn (
     self: *Ctx,
     name: Ctx.DebugName,
-    options: Ctx.Sampler.InitOptions,
+    options: Ctx.Sampler.Options,
 ) Ctx.Sampler,
 samplerDestroy: fn (
     self: *Ctx,

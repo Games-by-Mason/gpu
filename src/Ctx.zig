@@ -123,7 +123,7 @@ pub const DebugMode = enum(u8) {
     }
 };
 
-pub const InitOptions = struct {
+pub const Options = struct {
     pub const default_device_type_ranks = b: {
         var ranks = std.EnumArray(Device.Kind, u8).initFill(0);
         ranks.set(.discrete, 2);
@@ -152,7 +152,7 @@ pub const InitOptions = struct {
     },
     frames_in_flight: u4,
     framebuf_extent: Extent2D,
-    backend: ibackend.InitOptions,
+    backend: ibackend.Options,
     device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
     timestamp_queries: bool,
     debug: DebugMode = if (builtin.mode == .Debug) .validate else .none,
@@ -163,7 +163,7 @@ pub const InitOptions = struct {
     max_alignment: bool = false,
 };
 
-pub fn init(options: InitOptions) @This() {
+pub fn init(options: Options) @This() {
     const zone = tracy.Zone.begin(.{ .name = "gpu init", .src = @src() });
     defer zone.end();
     log.debug("Initializing GPU frontend", .{});
@@ -216,14 +216,14 @@ pub fn DedicatedBuf(kind: BufKind) type {
         memory: MemoryUnsized,
         buf: Buf(kind),
 
-        pub const InitOptions = struct {
+        pub const Options = struct {
             name: DebugName,
             size: u64,
         };
 
         pub inline fn init(
             gx: *Ctx,
-            options: @This().InitOptions,
+            options: @This().Options,
         ) DedicatedBuf(kind) {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
@@ -261,14 +261,14 @@ pub fn DedicatedReadbackBuf(kind: BufKind) type {
         buf: Buf(kind),
         data: []const u8,
 
-        pub const InitOptions = struct {
+        pub const Options = struct {
             name: DebugName,
             size: u64,
         };
 
         pub inline fn init(
             gx: *Ctx,
-            options: @This().InitOptions,
+            options: @This().Options,
         ) @This() {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
@@ -315,7 +315,7 @@ pub fn DedicatedUploadBuf(kind: BufKind) type {
         buf: Buf(kind),
         data: []volatile anyopaque,
 
-        pub const InitOptions = struct {
+        pub const Options = struct {
             name: DebugName,
             size: u64,
             prefer_device_local: bool,
@@ -323,7 +323,7 @@ pub fn DedicatedUploadBuf(kind: BufKind) type {
 
         pub inline fn init(
             gx: *Ctx,
-            options: @This().InitOptions,
+            options: @This().Options,
         ) DedicatedUploadBuf(kind) {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
@@ -411,18 +411,18 @@ pub const ImageTransition = extern struct {
         return result;
     }
 
-    pub const UndefinedToColorOutputAttachmentOptions = struct {
+    pub const UndefinedToColorAttachmentOptions = struct {
         image: Image(null),
         range: Range,
     };
 
-    pub fn undefinedToColorOutputAttachment(options: UndefinedToColorOutputAttachmentOptions) @This() {
+    pub fn undefinedToColorAttachment(options: UndefinedToColorAttachmentOptions) @This() {
         var result: @This() = undefined;
-        ibackend.imageTransitionUndefinedToColorOutputAttachment(options, &result.backend);
+        ibackend.imageTransitionUndefinedToColorAttachment(options, &result.backend);
         return result;
     }
 
-    pub const UndefinedToColorOutputAttachmentOptionsAfterRead = struct {
+    pub const UndefinedToColorAttachmentOptionsAfterRead = struct {
         pub const Stage = packed struct {
             vertex_shader: bool = false,
             fragment_shader: bool = false,
@@ -434,9 +434,9 @@ pub const ImageTransition = extern struct {
         src_stage: Stage,
     };
 
-    pub fn undefinedToColorOutputAttachmentAfterRead(options: UndefinedToColorOutputAttachmentOptionsAfterRead) @This() {
+    pub fn undefinedToColorAttachmentAfterRead(options: UndefinedToColorAttachmentOptionsAfterRead) @This() {
         var result: @This() = undefined;
-        ibackend.imageTransitionUndefinedToColorOutputAttachmentAfterRead(options, &result.backend);
+        ibackend.imageTransitionUndefinedToColorAttachmentAfterRead(options, &result.backend);
         return result;
     }
 
@@ -458,18 +458,18 @@ pub const ImageTransition = extern struct {
         return result;
     }
 
-    pub const TransferDstToColorOutputAttachmentOptions = struct {
+    pub const TransferDstToColorAttachmentOptions = struct {
         image: Image(null),
         range: Range,
     };
 
-    pub fn transferDstToColorOutputAttachment(options: TransferDstToColorOutputAttachmentOptions) @This() {
+    pub fn transferDstToColorAttachment(options: TransferDstToColorAttachmentOptions) @This() {
         var result: @This() = undefined;
-        ibackend.imageTransitionTransferDstToColorOutputAttachment(options, &result.backend);
+        ibackend.imageTransitionTransferDstToColorAttachment(options, &result.backend);
         return result;
     }
 
-    pub const ReadOnlyToColorOutputAttachmentOptions = struct {
+    pub const ReadOnlyToColorAttachmentOptions = struct {
         pub const Stage = packed struct {
             vertex_shader: bool = false,
             fragment_shader: bool = false,
@@ -481,13 +481,13 @@ pub const ImageTransition = extern struct {
         src_stage: Stage,
     };
 
-    pub fn readOnlyToColorOutputAttachment(options: ReadOnlyToColorOutputAttachmentOptions) @This() {
+    pub fn readOnlyToColorAttachment(options: ReadOnlyToColorAttachmentOptions) @This() {
         var result: @This() = undefined;
-        ibackend.imageTransitionReadOnlyToColorOutputAttachment(options, &result.backend);
+        ibackend.imageTransitionReadOnlyToColorAttachment(options, &result.backend);
         return result;
     }
 
-    pub const ColorOutputAttachmentToReadOnlyOptions = struct {
+    pub const ColorAttachmentToReadOnlyOptions = struct {
         pub const Stage = packed struct {
             vertex_shader: bool = false,
             fragment_shader: bool = false,
@@ -499,9 +499,9 @@ pub const ImageTransition = extern struct {
         dst_stage: Stage,
     };
 
-    pub fn colorOutputAttachmentToReadOnly(options: ColorOutputAttachmentToReadOnlyOptions) @This() {
+    pub fn colorAttachmentToReadOnly(options: ColorAttachmentToReadOnlyOptions) @This() {
         var result: @This() = undefined;
-        ibackend.imageTransitionColorOutputAttachmentToReadOnly(options, &result.backend);
+        ibackend.imageTransitionColorAttachmentToReadOnly(options, &result.backend);
         return result;
     }
 
@@ -510,7 +510,7 @@ pub const ImageTransition = extern struct {
 
 pub const ImageUpload = struct {
     pub const Region = extern struct {
-        pub const InitOptions = struct {
+        pub const Options = struct {
             aspect: ImageAspect,
             buffer_offset: u64 = 0,
             buffer_row_length: ?u32 = null,
@@ -524,7 +524,7 @@ pub const ImageUpload = struct {
 
         backend: ibackend.ImageUploadRegion,
 
-        pub fn init(options: @This().InitOptions) @This() {
+        pub fn init(options: @This().Options) @This() {
             var result: @This() = undefined;
             ibackend.imageUploadRegionInit(options, &result.backend);
             return result;
@@ -544,7 +544,7 @@ pub const ImageUpload = struct {
 
 pub const BufferUpload = struct {
     pub const Region = extern struct {
-        pub const InitOptions = struct {
+        pub const Options = struct {
             src_offset: u64 = 0,
             dst_offset: u64 = 0,
             size: u64,
@@ -552,7 +552,7 @@ pub const BufferUpload = struct {
 
         backend: ibackend.BufferUploadRegion,
 
-        pub fn init(options: @This().InitOptions) @This() {
+        pub fn init(options: @This().Options) @This() {
             var result: @This() = undefined;
             ibackend.bufferUploadRegionInit(options, &result.backend);
             return result;
@@ -567,8 +567,31 @@ pub const BufferUpload = struct {
 };
 
 pub const Attachment = struct {
-    view: ImageView,
-    extent: Extent2D,
+    backend: ibackend.Attachment,
+
+    const LoadOp = union(enum) {
+        load: void,
+        clear_color: [4]f32,
+        dont_care: void,
+    };
+
+    pub const Layout = enum {};
+
+    // Resolve options not currently supported through the public interface, some thought is needed
+    // to make this compatible with the DX12 style API. Store op is also assumed to be store for
+    // now.
+    pub const Options = struct {
+        view: ImageView,
+        load_op: LoadOp,
+    };
+
+    pub fn init(options: @This().Options) @This() {
+        var result: @This() = undefined;
+        ibackend.attachmentInit(options, &result.backend);
+        return result;
+    }
+
+    pub const asBackendSlice = AsBackendSlice(@This()).mixin;
 };
 
 pub const CmdBuf = enum(u64) {
@@ -617,8 +640,10 @@ pub const CmdBuf = enum(u64) {
             clear_color: [4]f32,
             dont_care: void,
         };
-        load_op: LoadOp,
-        out: Attachment,
+        color_attachments: []const Attachment = &.{},
+        depth_attachment: ?*Attachment = null,
+        stencil_attachment: ?*Attachment = null,
+        area: Rect2D,
         viewport: Viewport,
         scissor: Rect2D,
     };
@@ -755,7 +780,7 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
 /// nanoseconds spent blocking.
 ///
 /// Returns null if the swapchain needed to be recreated, in which case you should drop this frame.
-pub fn acquireNextImage(self: *@This(), framebuf_extent: Ctx.Extent2D) Attachment {
+pub fn acquireNextImage(self: *@This(), framebuf_extent: Ctx.Extent2D) ImageView.Sized2D {
     const zone = CpuZone.begin(.{
         .src = @src(),
         .color = global_options.blocking_zone_color,
@@ -769,18 +794,18 @@ pub fn acquireNextImage(self: *@This(), framebuf_extent: Ctx.Extent2D) Attachmen
 pub const DescPool = enum(u64) {
     _,
 
-    pub const InitOptions = struct {
+    pub const Options = struct {
         pub const Cmd = struct {
             name: DebugName,
             layout: DescSetLayout,
-            layout_options: *const CombinedPipelineLayout.InitOptions,
+            layout_options: *const CombinedPipelineLayout.Options,
             result: *DescSet,
         };
         name: DebugName,
         cmds: []const Cmd,
     };
 
-    pub fn init(gx: *Ctx, options: @This().InitOptions) @This() {
+    pub fn init(gx: *Ctx, options: @This().Options) @This() {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
         return ibackend.descPoolCreate(gx, options);
@@ -914,7 +939,7 @@ pub fn Buf(kind: BufKind) type {
             }
         };
 
-        pub const InitOptions = struct {
+        pub const Options = struct {
             name: DebugName,
             size: u64,
         };
@@ -945,8 +970,6 @@ pub const DescUpdateCmd = struct {
             pub const Layout = enum {
                 read_only,
                 attachment,
-                depth_read_only_stencil_attachment,
-                depth_attachment_stencil_read_only,
             };
 
             view: ImageView,
@@ -991,6 +1014,8 @@ pub const ImageResultUntyped = struct {
 
 pub fn Image(kind: ?ImageKind) type {
     return enum(u64) {
+        const Self = @This();
+
         _,
 
         pub const ColorOptions = struct {
@@ -1134,7 +1159,7 @@ pub fn Image(kind: ?ImageKind) type {
         pub const InitOptions = struct {
             name: DebugName,
             alloc: AllocOptions,
-            image: Options,
+            image: Self.Options,
         };
 
         pub fn init(gx: *Ctx, options: @This().InitOptions) Result {
@@ -1292,7 +1317,12 @@ pub const ImageExtent = struct {
 pub const ImageView = enum(u64) {
     _,
 
-    pub const InitOptions = struct {
+    pub const Sized2D = struct {
+        view: ImageView,
+        extent: Extent2D,
+    };
+
+    pub const Options = struct {
         pub const Kind = enum {
             @"1d",
             @"2d",
@@ -1331,7 +1361,7 @@ pub const ImageView = enum(u64) {
         aspect: ImageAspect,
     };
 
-    pub fn init(gx: *Ctx, name: DebugName, options: @This().InitOptions) ImageView {
+    pub fn init(gx: *Ctx, name: DebugName, options: @This().Options) ImageView {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
         return ibackend.imageViewCreate(gx, name, options);
@@ -1389,7 +1419,7 @@ pub fn Memory(k: ?MemoryKind) type {
             format: ImageOptions.Format.DepthStencil,
         };
 
-        pub const InitOptions = if (kind) |some| switch (some) {
+        pub const Options = if (kind) |some| switch (some) {
             .buf => InitNoFormatOptions,
             .color_image => InitNoFormatOptions,
             .depth_stencil_image => InitDepthStencilFormatOptions,
@@ -1398,7 +1428,7 @@ pub fn Memory(k: ?MemoryKind) type {
         unsized: MemoryUnsized,
         size: u64,
 
-        pub inline fn init(gx: *Ctx, options: @This().InitOptions) @This() {
+        pub inline fn init(gx: *Ctx, options: @This().Options) @This() {
             comptime assert(kind != null);
             comptime switch (kind.?) {
                 .buf => |buffer_kind| buffer_kind.assertNonZero(),
@@ -1555,7 +1585,7 @@ pub const CombinedPipelineLayout = struct {
     pipeline: PipelineLayout,
     desc_set: DescSetLayout,
 
-    pub const InitOptions = struct {
+    pub const Options = struct {
         pub const Desc = struct {
             pub const Kind = union(enum) {
                 uniform_buffer: struct {
@@ -1594,7 +1624,7 @@ pub const CombinedPipelineLayout = struct {
     pub fn init(
         gx: *Ctx,
         comptime max_descs: u32,
-        options: @This().InitOptions,
+        options: @This().Options,
     ) CombinedPipelineLayout {
         return ibackend.combinedPipelineLayoutCreate(gx, max_descs, options);
     }
@@ -1666,12 +1696,12 @@ pub const InitCombinedPipelineCmd = struct {
 pub const ShaderModule = enum(u64) {
     _,
 
-    pub const InitOptions = struct {
+    pub const Options = struct {
         name: DebugName,
         spv: []const u32,
     };
 
-    pub fn init(gx: *Ctx, options: @This().InitOptions) @This() {
+    pub fn init(gx: *Ctx, options: @This().Options) @This() {
         return ibackend.shaderModuleCreate(gx, options);
     }
 
@@ -1712,7 +1742,7 @@ pub fn initPipelines(
 pub const Sampler = enum(u64) {
     _,
 
-    pub const InitOptions = struct {
+    pub const Options = struct {
         pub const Filter = enum {
             nearest,
             linear,
@@ -1786,7 +1816,7 @@ pub const Sampler = enum(u64) {
         border_color: BorderColor,
     };
 
-    pub fn init(gx: *Ctx, name: DebugName, options: @This().InitOptions) Sampler {
+    pub fn init(gx: *Ctx, name: DebugName, options: @This().Options) Sampler {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
         return ibackend.samplerCreate(gx, name, options);
