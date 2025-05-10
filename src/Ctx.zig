@@ -1003,7 +1003,6 @@ pub fn Image(kind: ?ImageKind) type {
                 input_attachment: bool = false,
             };
 
-            name: DebugName,
             flags: ImageOptions.Flags,
             dimensions: ImageOptions.Dimensions,
             format: ImageOptions.Format.Color,
@@ -1032,7 +1031,6 @@ pub fn Image(kind: ?ImageKind) type {
                 return ibackend.imageMemoryRequirements(gx, imageOptions(self));
             }
 
-            name: DebugName,
             flags: ImageOptions.Flags,
             dimensions: ImageOptions.Dimensions,
             extent: ImageExtent,
@@ -1052,7 +1050,6 @@ pub fn Image(kind: ?ImageKind) type {
             assert(options.mip_levels > 0);
             assert(options.array_layers > 0);
             return .{
-                .name = options.name,
                 .flags = options.flags,
                 .dimensions = options.dimensions,
                 .format = switch (kind.?) {
@@ -1135,6 +1132,7 @@ pub fn Image(kind: ?ImageKind) type {
         };
 
         pub const InitOptions = struct {
+            name: DebugName,
             alloc: AllocOptions,
             image: Options,
         };
@@ -1145,6 +1143,7 @@ pub fn Image(kind: ?ImageKind) type {
             defer zone.end();
             const result = ibackend.imageCreate(
                 gx,
+                options.name,
                 options.alloc.asUntyped(),
                 imageOptions(options.image),
             );
@@ -1262,7 +1261,6 @@ pub const ImageOptions = struct {
         @"2d_array_compatible": bool = false,
     };
 
-    name: DebugName,
     flags: Flags,
     dimensions: Dimensions,
     format: Format,
@@ -1322,7 +1320,6 @@ pub const ImageView = enum(u64) {
             a: Swizzle = .identity,
         };
 
-        name: DebugName,
         image: Image(null),
         kind: Kind,
         format: ImageOptions.Format,
@@ -1334,10 +1331,10 @@ pub const ImageView = enum(u64) {
         aspect: ImageAspect,
     };
 
-    pub fn init(gx: *Ctx, options: @This().InitOptions) ImageView {
+    pub fn init(gx: *Ctx, name: DebugName, options: @This().InitOptions) ImageView {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
-        return ibackend.imageViewCreate(gx, options);
+        return ibackend.imageViewCreate(gx, name, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
@@ -1759,7 +1756,6 @@ pub const Sampler = enum(u64) {
             int_opaque_white,
         };
 
-        name: DebugName,
         mag_filter: Filter,
         min_filter: Filter,
         mipmap_mode: Filter,
@@ -1790,10 +1786,10 @@ pub const Sampler = enum(u64) {
         border_color: BorderColor,
     };
 
-    pub fn init(gx: *Ctx, options: @This().InitOptions) Sampler {
+    pub fn init(gx: *Ctx, name: DebugName, options: @This().InitOptions) Sampler {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
-        return ibackend.samplerCreate(gx, options);
+        return ibackend.samplerCreate(gx, name, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {

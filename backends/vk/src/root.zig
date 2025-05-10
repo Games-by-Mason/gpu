@@ -1628,7 +1628,7 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
 
 fn allocImage(
     self: *Ctx,
-    options: Ctx.ImageOptions,
+    name: Ctx.DebugName,
     image: vk.Image,
     reqs: vk.MemoryRequirements,
 ) Ctx.ImageResultUntyped {
@@ -1653,7 +1653,7 @@ fn allocImage(
         .memory_type_index = memory_type_index,
         .p_next = &dedicated_alloc_info,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_messenger, self.backend.device, memory, options.name);
+    setName(self.backend.debug_messenger, self.backend.device, memory, name);
 
     // Bind the image to the memory
     self.backend.device.bindImageMemory(
@@ -1687,12 +1687,13 @@ fn placeImage(
 
 fn imageCreate(
     self: *Ctx,
+    name: Ctx.DebugName,
     alloc_options: Ctx.Image(null).AllocOptions,
     image_options: Ctx.ImageOptions,
 ) Ctx.ImageResultUntyped {
     // Create the image
     const image = self.backend.device.createImage(&imageOptionsToVk(image_options), null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_messenger, self.backend.device, image, image_options.name);
+    setName(self.backend.debug_messenger, self.backend.device, image, name);
 
     switch (alloc_options) {
         .auto => |auto| {
@@ -1712,7 +1713,7 @@ fn imageCreate(
             const dedicated = dedicated_reqs.prefers_dedicated_allocation == vk.TRUE or
                 dedicated_reqs.requires_dedicated_allocation == vk.TRUE;
             if (dedicated) {
-                return allocImage(self, image_options, image, reqs);
+                return allocImage(self, name, image, reqs);
             } else {
                 auto.offset.* = std.mem.alignForward(u64, auto.offset.*, reqs.alignment);
                 const new_offset = auto.offset.* + reqs.size;
@@ -1731,7 +1732,7 @@ fn imageCreate(
             var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
             self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
             const reqs = reqs2.memory_requirements;
-            return allocImage(self, image_options, image, reqs);
+            return allocImage(self, name, image, reqs);
         },
         .place => |place| {
             var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
@@ -1780,6 +1781,7 @@ fn imageMemoryRequirements(
 
 fn imageViewCreate(
     self: *Ctx,
+    name: Ctx.DebugName,
     options: Ctx.ImageView.InitOptions,
 ) Ctx.ImageView {
     const image_view = self.backend.device.createImageView(&.{
@@ -1808,7 +1810,7 @@ fn imageViewCreate(
             .layer_count = options.array_layer_count,
         },
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_messenger, self.backend.device, image_view, options.name);
+    setName(self.backend.debug_messenger, self.backend.device, image_view, name);
     return .fromBackendType(image_view);
 }
 
@@ -2295,6 +2297,7 @@ fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
 
 fn samplerCreate(
     self: *Ctx,
+    name: Ctx.DebugName,
     options: Ctx.Sampler.InitOptions,
 ) Ctx.Sampler {
     const sampler = self.backend.device.createSampler(&.{
@@ -2335,7 +2338,7 @@ fn samplerCreate(
         // in the shader instead.
         .unnormalized_coordinates = vk.FALSE,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_messenger, self.backend.device, sampler, options.name);
+    setName(self.backend.debug_messenger, self.backend.device, sampler, name);
     return .fromBackendType(sampler);
 }
 
@@ -2421,7 +2424,6 @@ fn imageTransitionUndefinedToColorOutputAttachment(
     };
 }
 
-// XXX: come up with good name or make options
 fn imageTransitionUndefinedToColorOutputAttachmentAfterRead(
     options: Ctx.ImageTransition.UndefinedToColorOutputAttachmentOptionsAfterRead,
     out_transition: anytype,

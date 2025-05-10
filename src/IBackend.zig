@@ -194,6 +194,7 @@ getDevice: fn (self: *const Ctx) Ctx.Device,
 
 imageCreate: fn (
     self: *Ctx,
+    name: Ctx.DebugName,
     alloc_options: Ctx.Image(null).AllocOptions,
     image_options: Ctx.ImageOptions,
 ) Ctx.ImageResultUntyped,
@@ -207,6 +208,7 @@ imageMemoryRequirements: fn (
 ) Ctx.MemoryRequirements,
 imageViewCreate: fn (
     self: *Ctx,
+    name: Ctx.DebugName,
     options: Ctx.ImageView.InitOptions,
 ) Ctx.ImageView,
 imageViewDestroy: fn (
@@ -243,6 +245,7 @@ pipelinesCreate: fn (
 
 samplerCreate: fn (
     self: *Ctx,
+    name: Ctx.DebugName,
     options: Ctx.Sampler.InitOptions,
 ) Ctx.Sampler,
 samplerDestroy: fn (
