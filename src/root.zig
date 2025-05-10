@@ -17,6 +17,7 @@ pub const Options = struct {
     init_pipelines_buf_len: u32 = 16,
     init_desc_pool_buf_len: u32 = 16,
     update_desc_sets_buf_len: u32 = 16,
+    combined_pipeline_layout_create_buf_len: u32 = 16,
 };
 
 const options_name = "gpu_options";

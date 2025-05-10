@@ -3,6 +3,12 @@ const tracy = @import("tracy");
 const Ctx = @import("Ctx.zig");
 const Allocator = std.mem.Allocator;
 
+pub const NamedImageFormats = struct {
+    undefined: i32,
+    r8g8b8a8_srgb: i32,
+    d24_unorm_s8_uint: i32,
+};
+
 Buf: type,
 CmdBuf: type,
 DescPool: type,
@@ -20,6 +26,7 @@ ImageUploadRegion: type,
 BufferUploadRegion: type,
 Attachment: type,
 Options: type,
+ImageFormat: type,
 
 init: fn (self: *Ctx, options: anytype) void,
 deinit: fn (self: *Ctx, gpa: Allocator) void,
@@ -51,7 +58,6 @@ bufDestroy: fn (
 
 combinedPipelineLayoutCreate: fn (
     self: *Ctx,
-    comptime max_descs: u32,
     options: Ctx.CombinedPipelineLayout.Options,
 ) Ctx.CombinedPipelineLayout,
 combinedPipelineLayoutDestroy: fn (
@@ -195,7 +201,7 @@ acquireNextImage: fn (
     framebuf_extent: Ctx.Extent2D,
 ) Ctx.ImageView.Sized2D,
 
-getDevice: fn (self: *const Ctx) Ctx.Device,
+getDevice: fn (self: *const Ctx, out: anytype) void,
 
 imageCreate: fn (
     self: *Ctx,
@@ -245,7 +251,7 @@ pipelineDestroy: fn (
 ) void,
 pipelinesCreate: fn (
     self: *Ctx,
-    cmds: []const Ctx.InitCombinedPipelineCmd,
+    cmds: anytype,
 ) void,
 
 samplerCreate: fn (
@@ -261,3 +267,5 @@ samplerDestroy: fn (
 timestampCalibration: fn (self: *Ctx) Ctx.TimestampCalibration,
 
 waitIdle: fn (self: *const Ctx) void,
+
+named_image_formats: NamedImageFormats,

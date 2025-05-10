@@ -87,6 +87,7 @@ pub const Device = struct {
     storage_buf_offset_alignment: u16,
     timestamp_period: f32,
     tracy_queue: TracyQueue,
+    surface_format: ImageFormat,
 };
 
 backend: Backend,
@@ -182,7 +183,7 @@ pub fn init(options: Options) @This() {
 
     ibackend.init(&gx, options);
 
-    gx.device = ibackend.getDevice(&gx);
+    ibackend.getDevice(&gx, &gx.device);
 
     if (gx.max_alignment) {
         gx.device.uniform_buf_offset_alignment = Device.max_uniform_buf_offset_alignment;
@@ -635,11 +636,6 @@ pub const CmdBuf = enum(u64) {
     }
 
     pub const BeginRenderingOptions = struct {
-        const LoadOp = union(enum) {
-            load: void,
-            clear_color: [4]f32,
-            dont_care: void,
-        };
         color_attachments: []const Attachment = &.{},
         depth_attachment: ?*Attachment = null,
         stencil_attachment: ?*Attachment = null,
@@ -1234,6 +1230,30 @@ pub const ImageKind = union(enum) {
     }
 };
 
+pub const ImageFormat = enum(i32) {
+    undefined = ibackend.named_image_formats.undefined,
+    r8g8b8a8_srgb = ibackend.named_image_formats.r8g8b8a8_srgb,
+    d24_unorm_s8_uint = ibackend.named_image_formats.d24_unorm_s8_uint,
+
+    _,
+
+    pub inline fn fromBackendType(value: ibackend.ImageFormat) @This() {
+        comptime assert(@sizeOf(ibackend.ImageFormat) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(value));
+    }
+
+    pub inline fn asBackendType(self: @This()) ibackend.ImageFormat {
+        comptime assert(@sizeOf(ibackend.ImageFormat) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(self));
+    }
+
+    pub fn asBackendSlice(self: []const @This()) []const ibackend.ImageFormat {
+        comptime assert(@sizeOf(@This()) == @sizeOf(ibackend.ImageFormat));
+        comptime assert(@alignOf(@This()) == @alignOf(ibackend.ImageFormat));
+        return @ptrCast(self);
+    }
+};
+
 pub const ImageOptions = struct {
     pub const Dimensions = enum {
         @"1d",
@@ -1254,7 +1274,6 @@ pub const ImageOptions = struct {
     pub const Format = union(enum) {
         pub const Color = enum {
             r8g8b8a8_srgb,
-            b8g8r8a8_srgb,
         };
         pub const DepthStencil = enum {
             d24_unorm_s8_uint,
@@ -1621,12 +1640,8 @@ pub const CombinedPipelineLayout = struct {
         }
     };
 
-    pub fn init(
-        gx: *Ctx,
-        comptime max_descs: u32,
-        options: @This().Options,
-    ) CombinedPipelineLayout {
-        return ibackend.combinedPipelineLayoutCreate(gx, max_descs, options);
+    pub fn init(gx: *Ctx, options: @This().Options) CombinedPipelineLayout {
+        return ibackend.combinedPipelineLayoutCreate(gx, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
@@ -1662,10 +1677,6 @@ pub const PipelineHandle = enum(u64) {
     }
 };
 
-pub const InitPipelinesError = error{
-    Layout,
-};
-
 pub const InitCombinedPipelineCmd = struct {
     pub const Stages = struct {
         pub const max_stages = std.meta.fields(@This()).len;
@@ -1691,6 +1702,9 @@ pub const InitCombinedPipelineCmd = struct {
     stages: Stages,
     result: *Pipeline,
     input_assembly: InputAssembly,
+    color_attachment_formats: []const ImageFormat,
+    depth_attachment_format: ImageFormat,
+    stencil_attachment_format: ImageFormat,
 };
 
 pub const ShaderModule = enum(u64) {
@@ -1724,20 +1738,27 @@ pub const Pipeline = struct {
     handle: PipelineHandle,
     layout: PipelineLayout,
 
+    pub fn init(
+        gx: *Ctx,
+        cmds: []const InitCombinedPipelineCmd,
+    ) void {
+        const zone = tracy.Zone.begin(.{ .src = @src() });
+        defer zone.end();
+        if (std.debug.runtime_safety) {
+            assert(cmds.len < global_options.init_pipelines_buf_len);
+            for (cmds) |cmd| {
+                // Support for up to 4 is guaranteed by our Vulkan version. Once we update to 1.4,
+                // we can bump this to 8.
+                assert(cmd.color_attachment_formats.len <= 4);
+            }
+        }
+        ibackend.pipelinesCreate(gx, cmds);
+    }
+
     pub fn deinit(self: @This(), gx: *Ctx) void {
         ibackend.pipelineDestroy(gx, self);
     }
 };
-
-pub fn initPipelines(
-    self: *@This(),
-    cmds: []const InitCombinedPipelineCmd,
-) InitPipelinesError!void {
-    const zone = tracy.Zone.begin(.{ .src = @src() });
-    defer zone.end();
-    assert(cmds.len < global_options.init_pipelines_buf_len);
-    ibackend.pipelinesCreate(self, cmds);
-}
 
 pub const Sampler = enum(u64) {
     _,

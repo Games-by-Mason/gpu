@@ -911,11 +911,10 @@ fn bufDestroy(self: *Ctx, buffer: Ctx.Buf(.{})) void {
 
 fn combinedPipelineLayoutCreate(
     self: *Ctx,
-    comptime max_descriptors: u32,
     options: Ctx.CombinedPipelineLayout.Options,
 ) Ctx.CombinedPipelineLayout {
     // Create the descriptor set layout
-    var descs: std.BoundedArray(vk.DescriptorSetLayoutBinding, max_descriptors) = .{};
+    var descs: std.BoundedArray(vk.DescriptorSetLayoutBinding, global_options.combined_pipeline_layout_create_buf_len) = .{};
     for (options.descs, 0..) |desc, i| {
         descs.append(.{
             .binding = @intCast(i),
@@ -1543,7 +1542,8 @@ fn beginFrame(self: *Ctx) void {
     }
 }
 
-fn getDevice(self: *const Ctx) Ctx.Device {
+fn getDevice(self: *const Ctx, out_untyped: anytype) void {
+    const out: *Ctx.Device = out_untyped;
     const get_queue_zone = tracy.Zone.begin(.{ .name = "get queues", .src = @src() });
     const calibration = timestampCalibrationImpl(self.backend.device, self.backend.timestamp_queries);
     const tracy_queue = TracyQueue.init(.{
@@ -1556,12 +1556,13 @@ fn getDevice(self: *const Ctx) Ctx.Device {
     });
     get_queue_zone.end();
 
-    return .{
+    out.* = .{
         .kind = self.backend.physical_device.ty,
         .uniform_buf_offset_alignment = self.backend.physical_device.min_uniform_buffer_offset_alignment,
         .storage_buf_offset_alignment = self.backend.physical_device.min_storage_buffer_offset_alignment,
         .timestamp_period = self.backend.timestamp_period,
         .tracy_queue = tracy_queue,
+        .surface_format = .fromBackendType(self.backend.physical_device.surface_format.format),
     };
 }
 
@@ -1942,10 +1943,9 @@ fn shaderModuleDestroy(self: *Ctx, module: Ctx.ShaderModule) void {
     self.backend.device.destroyShaderModule(module.asBackendType(), null);
 }
 
-fn pipelinesCreate(
-    self: *Ctx,
-    cmds: []const Ctx.InitCombinedPipelineCmd,
-) void {
+fn pipelinesCreate(self: *Ctx, cmds_untyped: anytype) void {
+    const cmds: []const Ctx.InitCombinedPipelineCmd = cmds_untyped;
+
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
         .viewport,
@@ -2008,21 +2008,13 @@ fn pipelinesCreate(
         .logic_op = .copy,
         .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 },
     };
-    const rendering: vk.PipelineRenderingCreateInfo = .{
-        .view_mask = 0,
-        .color_attachment_count = 1,
-        .p_color_attachment_formats = &.{
-            self.backend.physical_device.surface_format.format,
-        },
-        .depth_attachment_format = .undefined,
-        .stencil_attachment_format = .undefined,
-    };
 
     // Pipeline create info
     const max_shader_stages = Ctx.InitCombinedPipelineCmd.Stages.max_stages;
     var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
+    var rendering_infos: std.BoundedArray(vk.PipelineRenderingCreateInfo, global_options.init_desc_pool_buf_len) = .{};
     for (cmds) |cmd| {
         const input_assembly = input_assemblys.addOneAssumeCapacity();
         input_assembly.* = switch (cmd.input_assembly) {
@@ -2080,6 +2072,16 @@ fn pipelinesCreate(
         });
         const shader_stages_slice = shader_stages.constSlice()[shader_stages.len - 2 ..];
 
+        const rendering_info = rendering_infos.addOneAssumeCapacity();
+        const color_attachment_formats = Ctx.ImageFormat.asBackendSlice(cmd.color_attachment_formats);
+        rendering_info.* = .{
+            .view_mask = 0,
+            .color_attachment_count = @intCast(color_attachment_formats.len),
+            .p_color_attachment_formats = color_attachment_formats.ptr,
+            .depth_attachment_format = cmd.depth_attachment_format.asBackendType(),
+            .stencil_attachment_format = cmd.stencil_attachment_format.asBackendType(),
+        };
+
         pipeline_infos.appendAssumeCapacity(.{
             .stage_count = @intCast(shader_stages_slice.len),
             .p_stages = shader_stages_slice.ptr,
@@ -2096,7 +2098,7 @@ fn pipelinesCreate(
             .subpass = 0,
             .base_pipeline_handle = .null_handle,
             .base_pipeline_index = -1,
-            .p_next = &rendering,
+            .p_next = rendering_info,
         });
     }
 
@@ -2635,7 +2637,6 @@ fn createImageOptionsFormatToVk(format: Ctx.ImageOptions.Format) vk.Format {
     return switch (format) {
         .color => |color| switch (color) {
             .r8g8b8a8_srgb => .r8g8b8a8_srgb,
-            .b8g8r8a8_srgb => .b8g8r8a8_srgb,
         },
         .depth_stencil => |depth_stencil_format| switch (depth_stencil_format) {
             .d24_unorm_s8_uint => .d24_unorm_s8_uint,
@@ -3194,6 +3195,7 @@ pub const ibackend: IBackend = .{
     .BufferUploadRegion = vk.BufferCopy,
     .Attachment = vk.RenderingAttachmentInfo,
     .Options = Options,
+    .ImageFormat = vk.Format,
     .init = init,
     .deinit = deinit,
     .dedicatedBufCreate = dedicatedBufCreate,
@@ -3248,4 +3250,9 @@ pub const ibackend: IBackend = .{
     .samplerDestroy = samplerDestroy,
     .timestampCalibration = timestampCalibration,
     .waitIdle = waitIdle,
+    .named_image_formats = .{
+        .undefined = @intFromEnum(vk.Format.undefined),
+        .r8g8b8a8_srgb = @intFromEnum(vk.Format.r8g8b8a8_srgb),
+        .d24_unorm_s8_uint = @intFromEnum(vk.Format.d24_unorm_s8_uint),
+    },
 };
