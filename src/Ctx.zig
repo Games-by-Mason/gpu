@@ -422,6 +422,24 @@ pub const ImageTransition = extern struct {
         return result;
     }
 
+    pub const UndefinedToColorOutputAttachmentOptionsAfterRead = struct {
+        pub const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+            compute_shader: bool = false,
+        };
+
+        image: Image(null),
+        range: Range,
+        src_stage: Stage,
+    };
+
+    pub fn undefinedToColorOutputAttachmentAfterRead(options: UndefinedToColorOutputAttachmentOptionsAfterRead) @This() {
+        var result: @This() = undefined;
+        ibackend.imageTransitionUndefinedToColorOutputAttachmentAfterRead(options, &result.backend);
+        return result;
+    }
+
     pub const TransferDstToReadOnlyOptions = struct {
         pub const Stage = packed struct {
             vertex_shader: bool = false,
@@ -1747,21 +1765,34 @@ pub const Sampler = enum(u64) {
         mipmap_mode: Filter,
         address_mode: AddressModes,
         mip_lod_bias: f32,
-        max_anisotropy_hint: f32,
+        max_anisotropy: enum(u8) {
+            none = 0,
+            @"1" = 1,
+            @"2" = 2,
+            @"3" = 3,
+            @"4" = 4,
+            @"5" = 5,
+            @"6" = 6,
+            @"7" = 7,
+            @"8" = 8,
+            @"9" = 9,
+            @"10" = 10,
+            @"11" = 11,
+            @"12" = 12,
+            @"13" = 13,
+            @"14" = 14,
+            @"15" = 15,
+            @"16" = 16,
+        },
         compare_op: ?CompareOp,
         min_lod: f32,
         max_lod: ?f32,
         border_color: BorderColor,
-        unnormalized_coordinates: bool,
     };
 
     pub fn init(gx: *Ctx, options: @This().InitOptions) Sampler {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
-        if (std.debug.runtime_safety) {
-            const ma = options.max_anisotropy_hint;
-            assert(ma == 0.0 or (!std.math.isNan(ma) and ma >= 1.0));
-        }
         return ibackend.samplerCreate(gx, options);
     }
 

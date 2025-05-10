@@ -2308,8 +2308,8 @@ fn samplerCreate(
         .address_mode_v = addressModeToVk(options.address_mode.v),
         .address_mode_w = addressModeToVk(options.address_mode.w),
         .mip_lod_bias = options.mip_lod_bias,
-        .anisotropy_enable = @intFromBool(options.max_anisotropy_hint != 0.0 and self.backend.physical_device.sampler_anisotropy),
-        .max_anisotropy = @min(options.max_anisotropy_hint, self.backend.physical_device.max_sampler_anisotropy),
+        .anisotropy_enable = @intFromBool(options.max_anisotropy != .none and self.backend.physical_device.sampler_anisotropy),
+        .max_anisotropy = @min(@as(f32, @floatFromInt(@as(u8, @intFromEnum(options.max_anisotropy)))), self.backend.physical_device.max_sampler_anisotropy),
         .compare_enable = @intFromBool(options.compare_op != null),
         .compare_op = if (options.compare_op) |compare_op| switch (compare_op) {
             .never => .never,
@@ -2331,7 +2331,9 @@ fn samplerCreate(
             .float_opaque_white => .float_opaque_white,
             .int_opaque_white => .int_opaque_white,
         },
-        .unnormalized_coordinates = @intFromBool(options.unnormalized_coordinates),
+        // Can be useful, but I believe not supported as a sampler option by DX12. Use `texelFetch`
+        // in the shader instead.
+        .unnormalized_coordinates = vk.FALSE,
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, sampler, options.name);
     return .fromBackendType(sampler);
@@ -2408,6 +2410,29 @@ fn imageTransitionUndefinedToColorOutputAttachment(
     @as(*ibackend.ImageTransition, out_transition).* = .{
         .src_stage_mask = .{ .top_of_pipe_bit = true },
         .src_access_mask = .{},
+        .dst_stage_mask = .{ .color_attachment_output_bit = true },
+        .dst_access_mask = .{ .color_attachment_write_bit = true },
+        .old_layout = .undefined,
+        .new_layout = .color_attachment_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.image.asBackendType(),
+        .subresource_range = rangeToVk(options.range),
+    };
+}
+
+// XXX: come up with good name or make options
+fn imageTransitionUndefinedToColorOutputAttachmentAfterRead(
+    options: Ctx.ImageTransition.UndefinedToColorOutputAttachmentOptionsAfterRead,
+    out_transition: anytype,
+) void {
+    @as(*ibackend.ImageTransition, out_transition).* = .{
+        .src_stage_mask = .{
+            .vertex_shader_bit = options.src_stage.vertex_shader,
+            .fragment_shader_bit = options.src_stage.fragment_shader,
+            .compute_shader_bit = options.src_stage.compute_shader,
+        },
+        .src_access_mask = .{ .shader_read_bit = true },
         .dst_stage_mask = .{ .color_attachment_output_bit = true },
         .dst_access_mask = .{ .color_attachment_write_bit = true },
         .old_layout = .undefined,
@@ -3171,6 +3196,7 @@ pub const ibackend: IBackend = .{
     .cmdBufEndZone = cmdBufEndZone,
     .imageTransitionUndefinedToTransferDst = imageTransitionUndefinedToTransferDst,
     .imageTransitionUndefinedToColorOutputAttachment = imageTransitionUndefinedToColorOutputAttachment,
+    .imageTransitionUndefinedToColorOutputAttachmentAfterRead = imageTransitionUndefinedToColorOutputAttachmentAfterRead,
     .imageTransitionTransferDstToReadOnly = imageTransitionTransferDstToReadOnly,
     .imageTransitionReadOnlyToColorOutputAttachment = imageTransitionReadOnlyToColorOutputAttachment,
     .imageTransitionColorOutputAttachmentToReadOnly = imageTransitionColorOutputAttachmentToReadOnly,
