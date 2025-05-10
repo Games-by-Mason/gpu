@@ -72,6 +72,10 @@ imageTransitionUndefinedToTransferDst: fn (
     options: Ctx.ImageTransition.UndefinedToTransferDstOptions,
     out_transition: anytype,
 ) void,
+imageTransitionUndefinedToColorOutputAttachment: fn (
+    options: Ctx.ImageTransition.UndefinedToColorOutputAttachmentOptions,
+    out_transition: anytype,
+) void,
 imageTransitionTransferDstToReadOnly: fn (
     options: Ctx.ImageTransition.TransferDstToReadOnlyOptions,
     out_transition: anytype,

@@ -1063,17 +1063,6 @@ fn cmdBufBeginRendering(
         .p_depth_attachment = null,
         .p_stencil_attachment = null,
     });
-
-    self.backend.device.cmdSetScissor(cb.asBackendType(), 0, 1, &.{.{
-        .offset = .{
-            .x = options.scissor.offset.x,
-            .y = options.scissor.offset.y,
-        },
-        .extent = .{
-            .width = options.scissor.extent.width,
-            .height = options.scissor.extent.height,
-        },
-    }});
 }
 
 fn cmdBufEndRendering(self: *Ctx, cb: Ctx.CmdBuf) void {
@@ -2412,6 +2401,24 @@ fn imageTransitionUndefinedToTransferDst(
     };
 }
 
+fn imageTransitionUndefinedToColorOutputAttachment(
+    options: Ctx.ImageTransition.UndefinedToColorOutputAttachmentOptions,
+    out_transition: anytype,
+) void {
+    @as(*ibackend.ImageTransition, out_transition).* = .{
+        .src_stage_mask = .{ .top_of_pipe_bit = true },
+        .src_access_mask = .{},
+        .dst_stage_mask = .{ .color_attachment_output_bit = true },
+        .dst_access_mask = .{ .color_attachment_write_bit = true },
+        .old_layout = .undefined,
+        .new_layout = .color_attachment_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.image.asBackendType(),
+        .subresource_range = rangeToVk(options.range),
+    };
+}
+
 fn imageTransitionTransferDstToReadOnly(
     options: Ctx.ImageTransition.TransferDstToReadOnlyOptions,
     out_transition: anytype,
@@ -2441,12 +2448,8 @@ fn imageTransitionTransferDstToColorOutputAttachment(
     @as(*ibackend.ImageTransition, out_transition).* = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
-        .dst_stage_mask = .{
-            .vertex_shader_bit = options.dst_stage.vertex_shader,
-            .fragment_shader_bit = options.dst_stage.fragment_shader,
-            .compute_shader_bit = options.dst_stage.compute_shader,
-        },
-        .dst_access_mask = .{ .shader_read_bit = true },
+        .dst_stage_mask = .{ .color_attachment_output_bit = true },
+        .dst_access_mask = .{ .color_attachment_write_bit = true },
         .old_layout = .transfer_dst_optimal,
         .new_layout = .color_attachment_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
@@ -3167,6 +3170,7 @@ pub const ibackend: IBackend = .{
     .cmdBufBeginZone = cmdBufBeginZone,
     .cmdBufEndZone = cmdBufEndZone,
     .imageTransitionUndefinedToTransferDst = imageTransitionUndefinedToTransferDst,
+    .imageTransitionUndefinedToColorOutputAttachment = imageTransitionUndefinedToColorOutputAttachment,
     .imageTransitionTransferDstToReadOnly = imageTransitionTransferDstToReadOnly,
     .imageTransitionReadOnlyToColorOutputAttachment = imageTransitionReadOnlyToColorOutputAttachment,
     .imageTransitionColorOutputAttachmentToReadOnly = imageTransitionColorOutputAttachmentToReadOnly,

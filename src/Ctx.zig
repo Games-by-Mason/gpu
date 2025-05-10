@@ -411,6 +411,17 @@ pub const ImageTransition = extern struct {
         return result;
     }
 
+    pub const UndefinedToColorOutputAttachmentOptions = struct {
+        image: Image(null),
+        range: Range,
+    };
+
+    pub fn undefinedToColorOutputAttachment(options: UndefinedToColorOutputAttachmentOptions) @This() {
+        var result: @This() = undefined;
+        ibackend.imageTransitionUndefinedToColorOutputAttachment(options, &result.backend);
+        return result;
+    }
+
     pub const TransferDstToReadOnlyOptions = struct {
         pub const Stage = packed struct {
             vertex_shader: bool = false,
@@ -430,15 +441,8 @@ pub const ImageTransition = extern struct {
     }
 
     pub const TransferDstToColorOutputAttachmentOptions = struct {
-        pub const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-            compute_shader: bool = false,
-        };
-
         image: Image(null),
         range: Range,
-        dst_stage: Stage,
     };
 
     pub fn transferDstToColorOutputAttachment(options: TransferDstToColorOutputAttachmentOptions) @This() {
@@ -1064,9 +1068,14 @@ pub fn Image(kind: ?ImageKind) type {
             };
         }
 
-        pub const InitResult = struct {
+        pub const Result = struct {
             image: Image(kind),
             dedicated_memory: ?MemoryUnsized,
+
+            pub fn deinit(self: @This(), gx: *Ctx) void {
+                self.image.deinit(gx);
+                if (self.dedicated_memory) |memory| memory.deinit(gx);
+            }
         };
 
         pub const AllocOptions = union(enum) {
@@ -1112,7 +1121,7 @@ pub fn Image(kind: ?ImageKind) type {
             image: Options,
         };
 
-        pub fn init(gx: *Ctx, options: @This().InitOptions) InitResult {
+        pub fn init(gx: *Ctx, options: @This().InitOptions) Result {
             comptime assert(kind != null);
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
