@@ -907,10 +907,10 @@ pub fn bufDestroy(self: *Ctx, buffer: Ctx.Buf(.{})) void {
     self.backend.device.destroyBuffer(buffer.asBackendType(), null);
 }
 
-pub fn combinedPipelineLayoutCreate(
+pub fn pipelineLayoutCreate(
     self: *Ctx,
-    options: Ctx.CombinedPipelineLayout.Options,
-) Ctx.CombinedPipelineLayout {
+    options: Ctx.PipelineLayout.Options,
+) Ctx.PipelineLayout {
     // Create the descriptor set layout
     var descs: std.BoundedArray(vk.DescriptorSetLayoutBinding, global_options.combined_pipeline_layout_create_buf_len) = .{};
     for (options.descs, 0..) |desc, i| {
@@ -944,15 +944,15 @@ pub fn combinedPipelineLayoutCreate(
 
     return .{
         .desc_set = .fromBackendType(descriptor_set_layout),
-        .pipeline = .fromBackendType(pipeline_layout),
+        .handle = .fromBackendType(pipeline_layout),
     };
 }
 
-pub fn combinedPipelineLayoutDestroy(
+pub fn pipelineLayoutDestroy(
     self: *Ctx,
-    layout: Ctx.CombinedPipelineLayout,
+    layout: Ctx.PipelineLayout,
 ) void {
-    self.backend.device.destroyPipelineLayout(layout.pipeline.asBackendType(), null);
+    self.backend.device.destroyPipelineLayout(layout.handle.asBackendType(), null);
     self.backend.device.destroyDescriptorSetLayout(layout.desc_set.asBackendType(), null);
 }
 
@@ -1626,17 +1626,17 @@ fn createImageView(
         },
         .format = options.format.asBackendType(),
         .components = .{
-            .r = swizzleToVk(options.components.r),
-            .g = swizzleToVk(options.components.g),
-            .b = swizzleToVk(options.components.b),
-            .a = swizzleToVk(options.components.a),
+            .r = .identity,
+            .g = .identity,
+            .b = .identity,
+            .a = .identity,
         },
         .subresource_range = .{
             .aspect_mask = aspectToVk(options.aspect),
-            .base_mip_level = options.base_mip_level,
-            .level_count = options.mip_level_count,
-            .base_array_layer = options.base_array_layer,
-            .layer_count = options.array_layer_count,
+            .base_mip_level = 0,
+            .level_count = options.mip_levels,
+            .base_array_layer = 0,
+            .layer_count = options.array_layers,
         },
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, view, name);
@@ -1781,9 +1781,7 @@ pub fn imageCreate(
 pub fn imageDestroy(self: *Ctx, image: Ctx.Image(.any)) void {
     self.backend.device.destroyImageView(image.view.asBackendType(), null);
     self.backend.device.destroyImage(image.handle.asBackendType(), null);
-    if (image.dedicated_memory) |memory| {
-        self.backend.device.freeMemory(memory.asBackendType(), null);
-    }
+    image.dedicated_memory.deinit(self);
 }
 
 pub fn imageMemoryRequirements(
@@ -1950,7 +1948,7 @@ pub fn shaderModuleDestroy(self: *Ctx, module: Ctx.ShaderModule) void {
     self.backend.device.destroyShaderModule(module.asBackendType(), null);
 }
 
-pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.InitPipelineCmd) void {
+pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.Pipeline.InitCmd) void {
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
         .viewport,
@@ -2015,7 +2013,7 @@ pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.InitPipelineCmd) void {
     };
 
     // Pipeline create info
-    const max_shader_stages = Ctx.InitPipelineCmd.Stages.max_stages;
+    const max_shader_stages = Ctx.Pipeline.InitCmd.Stages.max_stages;
     var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
@@ -2098,7 +2096,7 @@ pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.InitPipelineCmd) void {
             .p_depth_stencil_state = null,
             .p_color_blend_state = &color_blending,
             .p_dynamic_state = &dynamic_state,
-            .layout = cmd.layout.pipeline.asBackendType(),
+            .layout = cmd.layout.handle.asBackendType(),
             .render_pass = .null_handle,
             .subpass = 0,
             .base_pipeline_handle = .null_handle,
@@ -2123,7 +2121,7 @@ pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.InitPipelineCmd) void {
     for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
         setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.name);
         cmd.result.* = .{
-            .layout = cmd.layout.pipeline,
+            .layout = cmd.layout.handle,
             .handle = .fromBackendType(pipeline),
         };
     }
@@ -2620,18 +2618,6 @@ pub fn cmdBufUploadBuffer(
 
 pub fn waitIdle(self: *const Ctx) void {
     self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
-}
-
-fn swizzleToVk(swizzle: Ctx.ComponentMapping.Swizzle) vk.ComponentSwizzle {
-    return switch (swizzle) {
-        .identity => .identity,
-        .zero => .zero,
-        .one => .one,
-        .r => .r,
-        .g => .g,
-        .b => .b,
-        .a => .a,
-    };
 }
 
 fn aspectToVk(self: Ctx.ImageAspect) vk.ImageAspectFlags {
@@ -3170,6 +3156,8 @@ pub const ImageUploadRegion = vk.BufferImageCopy;
 pub const BufferUploadRegion = vk.BufferCopy;
 pub const Attachment = vk.RenderingAttachmentInfo;
 pub const ImageFormat = vk.Format;
+
+pub const memory_none: Memory = .null_handle;
 
 pub const named_image_formats: btypes.NamedImageFormats = .{
     .undefined = @intFromEnum(vk.Format.undefined),

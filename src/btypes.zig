@@ -14,22 +14,16 @@ pub const ImageCreateResult = struct {
     dedicated_memory: ?Ctx.Memory(.any),
 };
 
-// XXX: move other types like this here
 pub const ImageOptions = struct {
     flags: Ctx.ImageFlags,
     dimensions: Ctx.Dimensions,
     format: Ctx.ImageFormat,
     extent: Ctx.ImageExtent,
-    mip_levels: u16,
-    array_layers: u16,
     samples: Ctx.Samples,
     usage: ImageUsage,
-    components: Ctx.ComponentMapping,
     aspect: Ctx.ImageAspect,
-    base_mip_level: u32,
-    mip_level_count: u32,
-    base_array_layer: u32,
-    array_layer_count: u32,
+    mip_levels: u32,
+    array_layers: u32,
 };
 
 pub const ImageUsage = packed struct {

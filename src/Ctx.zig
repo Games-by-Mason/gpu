@@ -693,11 +693,10 @@ pub const CmdBuf = enum(u64) {
         );
     }
 
-    // XXX: dead code right now, some errors?
     pub fn uploadBuffer(self: @This(), gx: *Ctx, options: BufferUpload) void {
         Backend.cmdBufUploadBuffer(
             gx,
-            self.asUntyped(),
+            self,
             options.dst.as(.{}),
             options.src.as(.{}),
             options.regions,
@@ -775,7 +774,7 @@ pub const DescPool = enum(u64) {
         pub const Cmd = struct {
             name: DebugName,
             layout: DescSetLayout,
-            layout_options: *const CombinedPipelineLayout.Options,
+            layout_options: *const PipelineLayout.Options,
             result: *DescSet,
         };
         name: DebugName,
@@ -998,24 +997,6 @@ pub const ImageHandle = enum(u64) {
     }
 };
 
-pub const ComponentMapping = struct {
-    pub const Swizzle = enum {
-        identity,
-        zero,
-        one,
-        r,
-        g,
-        b,
-        a,
-    };
-
-    r: Swizzle = .identity,
-    g: Swizzle = .identity,
-    b: Swizzle = .identity,
-    a: Swizzle = .identity,
-};
-
-// XXX: rename image init options to options, and options to descriptor?
 /// Represents a GPU image. The type is generic over color vs depth/stencil as this affects the
 /// allocation requirements, after allocation is complete there is no downside to converting to
 /// `Image(.any)` if desired.
@@ -1026,9 +1007,8 @@ pub fn Image(kind: ImageKind) type {
         /// The image view. On backends that don't differentiate between views and handles, this is
         /// just a duplicate of the image handle.
         view: ImageView,
-        // XXX: make actual handle nullable if gonna store this way?
         /// The memory for this image if it has a dedicated allocation.
-        dedicated_memory: ?MemoryUnsized,
+        dedicated_memory: MemoryUnsized.Optional,
 
         pub const AllocOptions = union(enum) {
             /// Let the driver decide whether to bump allocate the image into the given buffer,
@@ -1082,8 +1062,6 @@ pub fn Image(kind: ImageKind) type {
                     .any => unreachable,
                 },
                 .extent = options.extent,
-                .mip_levels = options.mip_levels,
-                .array_layers = options.array_layers,
                 .samples = options.samples,
                 .usage = switch (kind) {
                     .depth_stencil => .{
@@ -1102,16 +1080,17 @@ pub fn Image(kind: ImageKind) type {
                         .storage = options.usage.storage,
                         .color_attachment = options.usage.color_attachment,
                         .depth_stencil_attachment = false,
-                        .input_attachment = options.usage.input_attachment,
+                        .input_attachment = false,
                     },
                     .any => unreachable,
                 },
-                .components = options.components,
-                .aspect = options.aspect,
-                .base_mip_level = options.base_mip_level,
-                .mip_level_count = options.mip_level_count,
-                .base_array_layer = options.base_array_layer,
-                .array_layer_count = options.array_layer_count,
+                .aspect = switch (kind) {
+                    .depth_stencil => |ds| ds.aspect,
+                    .color => .{ .color = true },
+                    .any => unreachable,
+                },
+                .mip_levels = options.mip_levels,
+                .array_layers = options.array_layers,
             };
         }
 
@@ -1122,24 +1101,16 @@ pub fn Image(kind: ImageKind) type {
                 sampled: bool = false,
                 storage: bool = false,
                 color_attachment: bool = false,
-                input_attachment: bool = false,
             };
 
-            flags: ImageFlags,
-            dimensions: Dimensions,
+            flags: ImageFlags = .{},
+            dimensions: Dimensions = .@"2d",
             format: ImageFormat,
             extent: ImageExtent,
-            mip_levels: u16,
-            array_layers: u16,
-            samples: Samples,
+            samples: Samples = .@"1",
             usage: Usage,
-            components: ComponentMapping = .{},
-            aspect: ImageAspect,
-            // XXX: defaults, same in depth stencil
-            base_mip_level: u32 = 0,
-            mip_level_count: u32 = 1,
-            base_array_layer: u32 = 0,
-            array_layer_count: u32 = 1,
+            mip_levels: u32 = 1,
+            array_layers: u32 = 1,
 
             pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
                 return Backend.imageMemoryRequirements(gx, backendOptions(self));
@@ -1153,26 +1124,20 @@ pub fn Image(kind: ImageKind) type {
                 sampled: bool = false,
                 storage: bool = false,
                 depth_stencil_attachment: bool = false,
-                input_attachment: bool = false,
             };
 
             pub fn memoryRequirements(self: @This(), gx: *Ctx) MemoryRequirements {
                 return Backend.imageMemoryRequirements(gx, backendOptions(self));
             }
 
-            flags: ImageFlags,
-            dimensions: Dimensions,
+            flags: ImageFlags = .{},
+            dimensions: Dimensions = .@"2d",
             extent: ImageExtent,
-            mip_levels: u16,
-            array_layers: u16,
-            samples: Samples,
-            usage: Usage = .{},
-            components: ComponentMapping = .{},
+            samples: Samples = .@"1",
+            usage: Usage,
             aspect: ImageAspect,
-            base_mip_level: u32 = 0,
-            mip_level_count: u32 = 1,
-            base_array_layer: u32 = 0,
-            array_layer_count: u32 = 1,
+            mip_levels: u32 = 1,
+            array_layers: u32 = 1,
         };
 
         pub const InitOptions = struct {
@@ -1205,13 +1170,13 @@ pub fn Image(kind: ImageKind) type {
                 return .{
                     .handle = result.handle,
                     .view = result.view,
-                    .dedicated_memory = dedicated_memory.unsized,
+                    .dedicated_memory = dedicated_memory.unsized.asOptional(),
                 };
             } else {
                 return .{
                     .handle = result.handle,
                     .view = result.view,
-                    .dedicated_memory = null,
+                    .dedicated_memory = .none,
                 };
             }
         }
@@ -1264,11 +1229,6 @@ pub const ImageKind = union(enum) {
             .any => rhs == .any,
         };
     }
-
-    // XXX: needed?
-    fn castAllowed(self: @This(), as: @This()) bool {
-        return as == .any or self.eq(as);
-    }
 };
 
 pub const ImageFormat = enum(i32) {
@@ -1295,7 +1255,6 @@ pub const ImageFormat = enum(i32) {
     }
 };
 
-// XXX: naming? how do you create the other layers if doing an array?
 pub const Dimensions = enum {
     @"1d",
     @"2d",
@@ -1342,6 +1301,30 @@ pub const ImageExtent = struct {
 pub const MemoryUnsized = enum(u64) {
     _,
 
+    pub const Optional = enum(u64) {
+        none = @intFromEnum(Backend.memory_none),
+        _,
+
+        pub fn unwrap(self: @This()) ?MemoryUnsized {
+            if (self == .none) return null;
+            return @enumFromInt(@intFromEnum(self));
+        }
+
+        pub inline fn fromBackendType(value: Backend.Memory) @This() {
+            comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
+            return @enumFromInt(@intFromEnum(value));
+        }
+
+        pub inline fn asBackendType(self: @This()) Backend.Memory {
+            comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
+            return @enumFromInt(@intFromEnum(self));
+        }
+
+        pub fn deinit(self: @This(), gx: *Ctx) void {
+            if (self.unwrap()) |some| some.deinit(gx);
+        }
+    };
+
     pub fn deinit(self: @This(), gx: *Ctx) void {
         tracy.free(.{
             .ptr = @ptrFromInt(@intFromEnum(self)),
@@ -1350,8 +1333,15 @@ pub const MemoryUnsized = enum(u64) {
         Backend.memoryDestroy(gx, self);
     }
 
+    pub fn asOptional(self: @This()) Optional {
+        const result: Optional = @enumFromInt(@intFromEnum(self));
+        assert(result != .none);
+        return result;
+    }
+
     pub inline fn fromBackendType(value: Backend.Memory) @This() {
         comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
+        assert(value != Backend.memory_none);
         return @enumFromInt(@intFromEnum(value));
     }
 
@@ -1398,7 +1388,6 @@ pub fn Memory(k: MemoryKind) type {
 
             assert(options.size > 0);
 
-            // XXX: explicit ascription
             const any = Backend.memoryCreate(gx, .{
                 .name = options.name,
                 .usage = switch (kind) {
@@ -1501,14 +1490,27 @@ pub fn MemoryViewUnsized(kind: MemoryKind) type {
     };
 }
 
-// XXX: naming
 /// Some APIs have separate handles for descriptor set layouts and pipelines (e.g. Vulkan), others
 /// have a single handle that refers to both the pipeline layout state and the descriptor set layout
 /// state (e.g. DirectX 12). On APIs that don't distinguish between pipeline and descriptor set
 /// layouts, both handles are equivalent.
-pub const CombinedPipelineLayout = struct {
-    pipeline: PipelineLayout,
+pub const PipelineLayout = struct {
+    handle: Handle,
     desc_set: DescSetLayout,
+
+    pub const Handle = enum(u64) {
+        _,
+
+        pub inline fn fromBackendType(value: Backend.PipelineLayout) @This() {
+            comptime assert(@sizeOf(Backend.PipelineLayout) == @sizeOf(@This()));
+            return @enumFromInt(@intFromEnum(value));
+        }
+
+        pub inline fn asBackendType(self: @This()) Backend.PipelineLayout {
+            comptime assert(@sizeOf(Backend.PipelineLayout) == @sizeOf(@This()));
+            return @enumFromInt(@intFromEnum(self));
+        }
+    };
 
     pub const Options = struct {
         pub const Desc = struct {
@@ -1546,72 +1548,13 @@ pub const CombinedPipelineLayout = struct {
         }
     };
 
-    pub fn init(gx: *Ctx, options: @This().Options) CombinedPipelineLayout {
-        return Backend.combinedPipelineLayoutCreate(gx, options);
+    pub fn init(gx: *Ctx, options: @This().Options) PipelineLayout {
+        return Backend.pipelineLayoutCreate(gx, options);
     }
 
     pub fn deinit(self: @This(), gx: *Ctx) void {
-        Backend.combinedPipelineLayoutDestroy(gx, self);
+        Backend.pipelineLayoutDestroy(gx, self);
     }
-};
-
-pub const PipelineLayout = enum(u64) {
-    _,
-
-    pub inline fn fromBackendType(value: Backend.PipelineLayout) @This() {
-        comptime assert(@sizeOf(Backend.PipelineLayout) == @sizeOf(@This()));
-        return @enumFromInt(@intFromEnum(value));
-    }
-
-    pub inline fn asBackendType(self: @This()) Backend.PipelineLayout {
-        comptime assert(@sizeOf(Backend.PipelineLayout) == @sizeOf(@This()));
-        return @enumFromInt(@intFromEnum(self));
-    }
-};
-
-pub const PipelineHandle = enum(u64) {
-    _,
-
-    pub inline fn fromBackendType(value: Backend.Pipeline) @This() {
-        comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
-        return @enumFromInt(@intFromEnum(value));
-    }
-
-    pub inline fn asBackendType(self: @This()) Backend.Pipeline {
-        comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
-        return @enumFromInt(@intFromEnum(self));
-    }
-};
-
-// XXX: move onto pipeline?
-pub const InitPipelineCmd = struct {
-    pub const Stages = struct {
-        pub const max_stages = std.meta.fields(@This()).len;
-        vertex: ShaderModule,
-        fragment: ShaderModule,
-    };
-    pub const InputAssembly = union(enum) {
-        const Strip = struct { indexed_primitive_restart: bool = false };
-        point_list: void,
-        line_list: void,
-        line_strip: Strip,
-        triangle_list: void,
-        triangle_strip: Strip,
-        line_list_with_adjacency: void,
-        line_strip_with_adjacency: Strip,
-        triangle_list_with_adjacency: void,
-        triangle_strip_with_adjacency: Strip,
-        patch_list: void,
-    };
-
-    name: DebugName,
-    layout: CombinedPipelineLayout,
-    stages: Stages,
-    result: *Pipeline,
-    input_assembly: InputAssembly,
-    color_attachment_formats: []const ImageFormat,
-    depth_attachment_format: ImageFormat,
-    stencil_attachment_format: ImageFormat,
 };
 
 pub const ShaderModule = enum(u64) {
@@ -1642,12 +1585,56 @@ pub const ShaderModule = enum(u64) {
 };
 
 pub const Pipeline = struct {
-    handle: PipelineHandle,
-    layout: PipelineLayout,
+    handle: Handle,
+    layout: PipelineLayout.Handle,
+
+    pub const Handle = enum(u64) {
+        _,
+
+        pub inline fn fromBackendType(value: Backend.Pipeline) @This() {
+            comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
+            return @enumFromInt(@intFromEnum(value));
+        }
+
+        pub inline fn asBackendType(self: @This()) Backend.Pipeline {
+            comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
+            return @enumFromInt(@intFromEnum(self));
+        }
+    };
+
+    pub const InitCmd = struct {
+        pub const Stages = struct {
+            pub const max_stages = std.meta.fields(@This()).len;
+            vertex: ShaderModule,
+            fragment: ShaderModule,
+        };
+        pub const InputAssembly = union(enum) {
+            const Strip = struct { indexed_primitive_restart: bool = false };
+            point_list: void,
+            line_list: void,
+            line_strip: Strip,
+            triangle_list: void,
+            triangle_strip: Strip,
+            line_list_with_adjacency: void,
+            line_strip_with_adjacency: Strip,
+            triangle_list_with_adjacency: void,
+            triangle_strip_with_adjacency: Strip,
+            patch_list: void,
+        };
+
+        name: DebugName,
+        layout: PipelineLayout,
+        stages: Stages,
+        result: *Pipeline,
+        input_assembly: InputAssembly,
+        color_attachment_formats: []const ImageFormat,
+        depth_attachment_format: ImageFormat,
+        stencil_attachment_format: ImageFormat,
+    };
 
     pub fn init(
         gx: *Ctx,
-        cmds: []const InitPipelineCmd,
+        cmds: []const InitCmd,
     ) void {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
