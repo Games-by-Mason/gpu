@@ -4,7 +4,7 @@ const math = std.math;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
-const IBackend = gpu.IBackend;
+const btypes = gpu.btypes;
 const log = std.log.scoped(.gpu);
 const gpu = @import("gpu");
 const Ctx = gpu.Ctx;
@@ -48,7 +48,7 @@ tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
 
 timestamp_queries: bool,
 
-const Options = struct {
+pub const Options = struct {
     pub const GetInstanceProcAddress = *const fn (
         instance: vk.Instance,
         name: [*:0]const u8,
@@ -81,11 +81,9 @@ const Options = struct {
 
 const graphics_queue_name = "Graphics Queue";
 
-fn init(self: *Ctx, any_options: anytype) void {
+pub fn init(self: *Ctx, options: Ctx.Options) void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
-
-    const options: Ctx.Options = any_options;
 
     log.info("Graphics API: Vulkan {}.{}.{} (variant {})", .{
         vk_version.major,
@@ -651,7 +649,7 @@ fn init(self: *Ctx, any_options: anytype) void {
     };
 }
 
-fn deinit(self: *Ctx, gpa: Allocator) void {
+pub fn deinit(self: *Ctx, gpa: Allocator) void {
     // Destroy the pipeline cache
     self.backend.device.destroyPipelineCache(self.backend.pipeline_cache, null);
 
@@ -699,7 +697,7 @@ fn deinit(self: *Ctx, gpa: Allocator) void {
     self.backend = undefined;
 }
 
-fn dedicatedBufCreate(
+pub fn dedicatedBufCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
@@ -755,7 +753,7 @@ fn dedicatedBufCreate(
     };
 }
 
-fn dedicatedUploadBufCreate(
+pub fn dedicatedUploadBufCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
@@ -824,7 +822,7 @@ fn dedicatedUploadBufCreate(
     };
 }
 
-fn dedicatedReadbackBufCreate(
+pub fn dedicatedReadbackBufCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     kind: Ctx.BufKind,
@@ -905,11 +903,11 @@ fn bufUsageFlagsFromKind(kind: Ctx.BufKind) vk.BufferUsageFlags {
     return result;
 }
 
-fn bufDestroy(self: *Ctx, buffer: Ctx.Buf(.{})) void {
+pub fn bufDestroy(self: *Ctx, buffer: Ctx.Buf(.{})) void {
     self.backend.device.destroyBuffer(buffer.asBackendType(), null);
 }
 
-fn combinedPipelineLayoutCreate(
+pub fn combinedPipelineLayoutCreate(
     self: *Ctx,
     options: Ctx.CombinedPipelineLayout.Options,
 ) Ctx.CombinedPipelineLayout {
@@ -950,7 +948,7 @@ fn combinedPipelineLayoutCreate(
     };
 }
 
-fn combinedPipelineLayoutDestroy(
+pub fn combinedPipelineLayoutDestroy(
     self: *Ctx,
     layout: Ctx.CombinedPipelineLayout,
 ) void {
@@ -958,7 +956,7 @@ fn combinedPipelineLayoutDestroy(
     self.backend.device.destroyDescriptorSetLayout(layout.desc_set.asBackendType(), null);
 }
 
-fn cmdBufBeginZone(self: *Ctx, cb: Ctx.CmdBuf, loc: *const tracy.SourceLocation) void {
+pub fn cmdBufBeginZone(self: *Ctx, cb: Ctx.CmdBuf, loc: *const tracy.SourceLocation) void {
     if (self.backend.debug_messenger != .null_handle) {
         self.backend.device.cmdBeginDebugUtilsLabelEXT(cb.asBackendType(), &.{
             .p_label_name = loc.name orelse loc.function,
@@ -985,7 +983,7 @@ fn cmdBufBeginZone(self: *Ctx, cb: Ctx.CmdBuf, loc: *const tracy.SourceLocation)
     }
 }
 
-fn cmdBufEndZone(self: *Ctx, cb: Ctx.CmdBuf) void {
+pub fn cmdBufEndZone(self: *Ctx, cb: Ctx.CmdBuf) void {
     if (self.backend.debug_messenger != .null_handle) {
         self.backend.device.cmdEndDebugUtilsLabelEXT(cb.asBackendType());
     }
@@ -1002,7 +1000,7 @@ fn cmdBufEndZone(self: *Ctx, cb: Ctx.CmdBuf) void {
     }
 }
 
-fn cmdBufCreate(
+pub fn cmdBufCreate(
     self: *Ctx,
     loc: *const tracy.SourceLocation,
 ) Ctx.CmdBuf {
@@ -1025,12 +1023,11 @@ fn cmdBufCreate(
     return .fromBackendType(cb);
 }
 
-fn cmdBufBeginRendering(
+pub fn cmdBufBeginRendering(
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    options_untyped: anytype,
+    options: Ctx.CmdBuf.BeginRenderingOptions,
 ) void {
-    const options: Ctx.CmdBuf.BeginRenderingOptions = options_untyped;
     const color_attachments = Ctx.Attachment.asBackendSlice(options.color_attachments);
     self.backend.device.cmdBeginRendering(cb.asBackendType(), &.{
         .flags = .{},
@@ -1050,11 +1047,11 @@ fn cmdBufBeginRendering(
     });
 }
 
-fn cmdBufEndRendering(self: *Ctx, cb: Ctx.CmdBuf) void {
+pub fn cmdBufEndRendering(self: *Ctx, cb: Ctx.CmdBuf) void {
     self.backend.device.cmdEndRendering(cb.asBackendType());
 }
 
-fn cmdBufDraw(
+pub fn cmdBufDraw(
     self: *Ctx,
     cb: Ctx.CmdBuf,
     options: Ctx.CmdBuf.DrawOptions,
@@ -1068,7 +1065,7 @@ fn cmdBufDraw(
     );
 }
 
-fn cmdBufSetViewport(
+pub fn cmdBufSetViewport(
     self: *Ctx,
     cb: Ctx.CmdBuf,
     viewport: Ctx.Viewport,
@@ -1083,7 +1080,7 @@ fn cmdBufSetViewport(
     }});
 }
 
-fn cmdBufSetScissor(
+pub fn cmdBufSetScissor(
     self: *Ctx,
     cb: Ctx.CmdBuf,
     scissor: Ctx.Rect2D,
@@ -1100,7 +1097,7 @@ fn cmdBufSetScissor(
     }});
 }
 
-fn cmdBufBindPipeline(
+pub fn cmdBufBindPipeline(
     self: *Ctx,
     cb: Ctx.CmdBuf,
     pipeline: Ctx.Pipeline,
@@ -1112,7 +1109,7 @@ fn cmdBufBindPipeline(
     );
 }
 
-fn cmdBufBindDescSet(
+pub fn cmdBufBindDescSet(
     self: *Ctx,
     cb: Ctx.CmdBuf,
     pipeline: Ctx.Pipeline,
@@ -1130,7 +1127,7 @@ fn cmdBufBindDescSet(
     );
 }
 
-fn cmdBufPrepareSubmit(
+pub fn cmdBufPrepareSubmit(
     self: *Ctx,
     cb: Ctx.CmdBuf,
 ) void {
@@ -1138,7 +1135,7 @@ fn cmdBufPrepareSubmit(
     self.backend.device.endCommandBuffer(cb.asBackendType()) catch |err| @panic(@errorName(err));
 }
 
-fn cmdBufSubmit(
+pub fn cmdBufSubmit(
     self: *Ctx,
     cb: Ctx.CmdBuf,
 ) void {
@@ -1164,11 +1161,11 @@ fn cmdBufSubmit(
     ) catch |err| @panic(@errorName(err));
 }
 
-fn descPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
+pub fn descPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
     self.backend.device.destroyDescriptorPool(pool.asBackendType(), null);
 }
 
-fn descPoolCreate(self: *Ctx, options: Ctx.DescPool.Options) Ctx.DescPool {
+pub fn descPoolCreate(self: *Ctx, options: Ctx.DescPool.Options) Ctx.DescPool {
     // Create the descriptor pool
     const desc_pool = b: {
         // Calculate the size of the pool
@@ -1243,7 +1240,7 @@ fn descPoolCreate(self: *Ctx, options: Ctx.DescPool.Options) Ctx.DescPool {
     return .fromBackendType(desc_pool);
 }
 
-fn descSetsUpdate(self: *Ctx, updates: []const Ctx.DescUpdateCmd) void {
+pub fn descSetsUpdate(self: *Ctx, updates: []const Ctx.DescUpdateCmd) void {
     const buf_len = global_options.update_desc_sets_buf_len;
 
     var buffer_infos: std.BoundedArray(vk.DescriptorBufferInfo, buf_len) = .{};
@@ -1345,7 +1342,7 @@ fn descSetsUpdate(self: *Ctx, updates: []const Ctx.DescUpdateCmd) void {
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.ImageView.Sized2D {
+pub fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.ImageView.Sized2D {
     // Acquire the image
     const acquire_result = b: {
         const acquire_zone = Zone.begin(.{
@@ -1422,7 +1419,7 @@ fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.ImageView.Siz
     };
 }
 
-fn beginFrame(self: *Ctx) void {
+pub fn beginFrame(self: *Ctx) void {
     self.backend.image_index = null;
 
     {
@@ -1542,8 +1539,7 @@ fn beginFrame(self: *Ctx) void {
     }
 }
 
-fn getDevice(self: *const Ctx, out_untyped: anytype) void {
-    const out: *Ctx.Device = out_untyped;
+pub fn getDevice(self: *const Ctx) Ctx.Device {
     const get_queue_zone = tracy.Zone.begin(.{ .name = "get queues", .src = @src() });
     const calibration = timestampCalibrationImpl(self.backend.device, self.backend.timestamp_queries);
     const tracy_queue = TracyQueue.init(.{
@@ -1556,7 +1552,7 @@ fn getDevice(self: *const Ctx, out_untyped: anytype) void {
     });
     get_queue_zone.end();
 
-    out.* = .{
+    return .{
         .kind = self.backend.physical_device.ty,
         .uniform_buf_offset_alignment = self.backend.physical_device.min_uniform_buffer_offset_alignment,
         .storage_buf_offset_alignment = self.backend.physical_device.min_storage_buffer_offset_alignment,
@@ -1566,7 +1562,7 @@ fn getDevice(self: *const Ctx, out_untyped: anytype) void {
     };
 }
 
-fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
+fn imageOptionsToVk(options: btypes.ImageOptions) vk.ImageCreateInfo {
     return .{
         .flags = .{
             .cube_compatible_bit = options.flags.cube_compatible,
@@ -1615,9 +1611,8 @@ fn createImageView(
     self: *Ctx,
     name: Ctx.DebugName,
     image: vk.Image,
-    options_untyped: anytype,
+    options: btypes.ImageOptions,
 ) Ctx.ImageView {
-    const options: Ctx.ImageOptions = options_untyped;
     const view = self.backend.device.createImageView(&.{
         .image = image,
         .view_type = switch (options.dimensions) {
@@ -1653,8 +1648,8 @@ fn allocImage(
     name: Ctx.DebugName,
     image: vk.Image,
     reqs: vk.MemoryRequirements,
-    options: Ctx.ImageOptions,
-) IBackend.ImageCreateResult {
+    options: btypes.ImageOptions,
+) btypes.ImageCreateResult {
     const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
         .mask = reqs.memory_type_bits,
     };
@@ -1702,8 +1697,8 @@ fn placeImage(
     image: vk.Image,
     offset: u64,
     memory: vk.DeviceMemory,
-    options: Ctx.ImageOptions,
-) IBackend.ImageCreateResult {
+    options: btypes.ImageOptions,
+) btypes.ImageCreateResult {
     self.backend.device.bindImageMemory(image, memory, offset) catch |err| @panic(@errorName(err));
     return .{
         .handle = .fromBackendType(image),
@@ -1712,13 +1707,12 @@ fn placeImage(
     };
 }
 
-fn imageCreate(
+pub fn imageCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     alloc_options: Ctx.Image(.any).AllocOptions,
-    image_options_untyped: anytype,
-) IBackend.ImageCreateResult {
-    const image_options: Ctx.ImageOptions = image_options_untyped;
+    image_options: btypes.ImageOptions,
+) btypes.ImageCreateResult {
 
     // Create the image
     const image = self.backend.device.createImage(&imageOptionsToVk(image_options), null) catch |err| @panic(@errorName(err));
@@ -1784,7 +1778,7 @@ fn imageCreate(
     }
 }
 
-fn imageDestroy(self: *Ctx, image: Ctx.Image(.any)) void {
+pub fn imageDestroy(self: *Ctx, image: Ctx.Image(.any)) void {
     self.backend.device.destroyImageView(image.view.asBackendType(), null);
     self.backend.device.destroyImage(image.handle.asBackendType(), null);
     if (image.dedicated_memory) |memory| {
@@ -1792,11 +1786,10 @@ fn imageDestroy(self: *Ctx, image: Ctx.Image(.any)) void {
     }
 }
 
-fn imageMemoryRequirements(
+pub fn imageMemoryRequirements(
     self: *Ctx,
-    options_untyped: anytype,
+    options: btypes.ImageOptions,
 ) Ctx.MemoryRequirements {
-    const options: Ctx.ImageOptions = options_untyped;
     var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
         .prefers_dedicated_allocation = vk.FALSE,
         .requires_dedicated_allocation = vk.FALSE,
@@ -1822,9 +1815,7 @@ fn imageMemoryRequirements(
     };
 }
 
-fn memoryCreate(self: *Ctx, options_untyped: anytype) Ctx.MemoryUnsized {
-    const options: Ctx.MemoryCreateUntypedOptions = options_untyped;
-
+pub fn memoryCreate(self: *Ctx, options: btypes.MemoryCreateOptions) Ctx.MemoryUnsized {
     // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
     // able to do this, but we don't need to actually bind it to any memory it's just a handle.
     const memory_type_bits = switch (options.usage) {
@@ -1933,15 +1924,15 @@ fn memoryCreate(self: *Ctx, options_untyped: anytype) Ctx.MemoryUnsized {
     return .fromBackendType(memory);
 }
 
-fn memoryDestroy(self: *Ctx, memory: Ctx.MemoryUnsized) void {
+pub fn memoryDestroy(self: *Ctx, memory: Ctx.MemoryUnsized) void {
     self.backend.device.freeMemory(memory.asBackendType(), null);
 }
 
-fn pipelineDestroy(self: *Ctx, pipeline: Ctx.Pipeline) void {
+pub fn pipelineDestroy(self: *Ctx, pipeline: Ctx.Pipeline) void {
     self.backend.device.destroyPipeline(pipeline.handle.asBackendType(), null);
 }
 
-fn shaderModuleCreate(self: *Ctx, options: Ctx.ShaderModule.Options) Ctx.ShaderModule {
+pub fn shaderModuleCreate(self: *Ctx, options: Ctx.ShaderModule.Options) Ctx.ShaderModule {
     const module = self.backend.device.createShaderModule(&.{
         .code_size = options.ir.len * @sizeOf(u32),
         .p_code = options.ir.ptr,
@@ -1955,13 +1946,11 @@ fn shaderModuleCreate(self: *Ctx, options: Ctx.ShaderModule.Options) Ctx.ShaderM
     return .fromBackendType(module);
 }
 
-fn shaderModuleDestroy(self: *Ctx, module: Ctx.ShaderModule) void {
+pub fn shaderModuleDestroy(self: *Ctx, module: Ctx.ShaderModule) void {
     self.backend.device.destroyShaderModule(module.asBackendType(), null);
 }
 
-fn pipelinesCreate(self: *Ctx, cmds_untyped: anytype) void {
-    const cmds: []const Ctx.InitPipelineCmd = cmds_untyped;
-
+pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.InitPipelineCmd) void {
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
         .viewport,
@@ -2140,7 +2129,7 @@ fn pipelinesCreate(self: *Ctx, cmds_untyped: anytype) void {
     }
 }
 
-fn transitionImageColorAttachmentToPresent(
+pub fn transitionImageColorAttachmentToPresent(
     self: *Ctx,
     cb: vk.CommandBuffer,
     image: vk.Image,
@@ -2173,7 +2162,7 @@ fn transitionImageColorAttachmentToPresent(
     });
 }
 
-fn transitionImageToColorAttachmentOptimal(
+pub fn transitionImageToColorAttachmentOptimal(
     self: *Ctx,
     cb: vk.CommandBuffer,
     image: vk.Image,
@@ -2206,7 +2195,7 @@ fn transitionImageToColorAttachmentOptimal(
     });
 }
 
-fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
+pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
     if (!options.present) {
         // We aren't presenting, just wrap up this command pool submission by signaling the fence
         // for this frame and then early out.
@@ -2297,7 +2286,7 @@ fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
     }
 }
 
-fn samplerCreate(
+pub fn samplerCreate(
     self: *Ctx,
     name: Ctx.DebugName,
     options: Ctx.Sampler.Options,
@@ -2344,7 +2333,7 @@ fn samplerCreate(
     return .fromBackendType(sampler);
 }
 
-fn samplerDestroy(self: *Ctx, sampler: Ctx.Sampler) void {
+pub fn samplerDestroy(self: *Ctx, sampler: Ctx.Sampler) void {
     self.backend.device.destroySampler(sampler.asBackendType(), null);
 }
 
@@ -2390,11 +2379,10 @@ fn rangeToVk(range: Ctx.ImageTransition.Range) vk.ImageSubresourceRange {
     };
 }
 
-fn imageTransitionUndefinedToTransferDst(
+pub fn imageTransitionUndefinedToTransferDst(
     options: Ctx.ImageTransition.UndefinedToTransferDstOptions,
-    out_transition: anytype,
-) void {
-    @as(*ibackend.ImageTransition, out_transition).* = .{
+) Ctx.ImageTransition {
+    return .{ .backend = .{
         .src_stage_mask = .{ .top_of_pipe_bit = true },
         .src_access_mask = .{},
         .dst_stage_mask = .{ .all_transfer_bit = true },
@@ -2405,14 +2393,13 @@ fn imageTransitionUndefinedToTransferDst(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
-    };
+    } };
 }
 
-fn imageTransitionUndefinedToColorAttachment(
+pub fn imageTransitionUndefinedToColorAttachment(
     options: Ctx.ImageTransition.UndefinedToColorAttachmentOptions,
-    out_transition: anytype,
-) void {
-    @as(*ibackend.ImageTransition, out_transition).* = .{
+) Ctx.ImageTransition {
+    return .{ .backend = .{
         .src_stage_mask = .{ .top_of_pipe_bit = true },
         .src_access_mask = .{},
         .dst_stage_mask = .{ .color_attachment_output_bit = true },
@@ -2423,14 +2410,13 @@ fn imageTransitionUndefinedToColorAttachment(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
-    };
+    } };
 }
 
-fn imageTransitionUndefinedToColorAttachmentAfterRead(
+pub fn imageTransitionUndefinedToColorAttachmentAfterRead(
     options: Ctx.ImageTransition.UndefinedToColorAttachmentOptionsAfterRead,
-    out_transition: anytype,
-) void {
-    @as(*ibackend.ImageTransition, out_transition).* = .{
+) Ctx.ImageTransition {
+    return .{ .backend = .{
         .src_stage_mask = .{
             .vertex_shader_bit = options.src_stage.vertex_shader,
             .fragment_shader_bit = options.src_stage.fragment_shader,
@@ -2445,14 +2431,13 @@ fn imageTransitionUndefinedToColorAttachmentAfterRead(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
-    };
+    } };
 }
 
-fn imageTransitionTransferDstToReadOnly(
+pub fn imageTransitionTransferDstToReadOnly(
     options: Ctx.ImageTransition.TransferDstToReadOnlyOptions,
-    out_transition: anytype,
-) void {
-    @as(*ibackend.ImageTransition, out_transition).* = .{
+) Ctx.ImageTransition {
+    return .{ .backend = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
         .dst_stage_mask = .{
@@ -2467,14 +2452,13 @@ fn imageTransitionTransferDstToReadOnly(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
-    };
+    } };
 }
 
-fn imageTransitionTransferDstToColorAttachment(
+pub fn imageTransitionTransferDstToColorAttachment(
     options: Ctx.ImageTransition.TransferDstToColorAttachmentOptions,
-    out_transition: anytype,
-) void {
-    @as(*ibackend.ImageTransition, out_transition).* = .{
+) Ctx.ImageTransition {
+    return .{ .backend = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
         .dst_stage_mask = .{ .color_attachment_output_bit = true },
@@ -2485,14 +2469,13 @@ fn imageTransitionTransferDstToColorAttachment(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
-    };
+    } };
 }
 
-fn imageTransitionReadOnlyToColorAttachment(
+pub fn imageTransitionReadOnlyToColorAttachment(
     options: Ctx.ImageTransition.ReadOnlyToColorAttachmentOptions,
-    out_transition: anytype,
-) void {
-    @as(*ibackend.ImageTransition, out_transition).* = .{
+) Ctx.ImageTransition {
+    return .{ .backend = .{
         .src_stage_mask = .{
             .vertex_shader_bit = options.src_stage.vertex_shader,
             .fragment_shader_bit = options.src_stage.fragment_shader,
@@ -2507,14 +2490,13 @@ fn imageTransitionReadOnlyToColorAttachment(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
-    };
+    } };
 }
 
-fn imageTransitionColorAttachmentToReadOnly(
+pub fn imageTransitionColorAttachmentToReadOnly(
     options: Ctx.ImageTransition.ColorAttachmentToReadOnlyOptions,
-    out_transition: anytype,
-) void {
-    @as(*ibackend.ImageTransition, out_transition).* = .{
+) Ctx.ImageTransition {
+    return .{ .backend = .{
         .src_stage_mask = .{ .color_attachment_output_bit = true },
         .src_access_mask = .{ .color_attachment_write_bit = true },
         .dst_stage_mask = .{
@@ -2529,13 +2511,13 @@ fn imageTransitionColorAttachmentToReadOnly(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
-    };
+    } };
 }
 
-fn cmdBufTransitionImages(
+pub fn cmdBufTransitionImages(
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    transitions: anytype,
+    transitions: []const Ctx.ImageTransition,
 ) void {
     const barriers = Ctx.ImageTransition.asBackendSlice(transitions);
     self.backend.device.cmdPipelineBarrier2(cb.asBackendType(), &.{
@@ -2549,11 +2531,8 @@ fn cmdBufTransitionImages(
     });
 }
 
-fn imageUploadRegionInit(
-    options: Ctx.ImageUpload.Region.Options,
-    out_region: anytype,
-) void {
-    @as(*ibackend.ImageUploadRegion, out_region).* = .{
+pub fn imageUploadRegionInit(options: Ctx.ImageUpload.Region.Options) Ctx.ImageUpload.Region {
+    return .{ .backend = .{
         .buffer_offset = options.buffer_offset,
         .buffer_row_length = options.buffer_row_length orelse 0,
         .buffer_image_height = options.buffer_image_height orelse 0,
@@ -2573,25 +2552,19 @@ fn imageUploadRegionInit(
             .height = options.image_extent.height,
             .depth = options.image_extent.depth,
         },
-    };
+    } };
 }
 
-fn bufferUploadRegionInit(
-    options: Ctx.BufferUpload.Region.Options,
-    out_region: anytype,
-) void {
-    @as(*ibackend.BufferUploadRegion, out_region).* = .{
+pub fn bufferUploadRegionInit(options: Ctx.BufferUpload.Region.Options) Ctx.BufferUpload.Region {
+    return .{ .backend = .{
         .src_offset = options.src_offset,
         .dst_offset = options.dst_offset,
         .size = options.size,
-    };
+    } };
 }
 
-fn attachmentInit(
-    options: Ctx.Attachment.Options,
-    out_attachment: anytype,
-) void {
-    @as(*ibackend.Attachment, out_attachment).* = .{
+pub fn attachmentInit(options: Ctx.Attachment.Options) Ctx.Attachment {
+    return .{ .backend = .{
         .image_view = options.view.asBackendType(),
         .image_layout = .attachment_optimal,
         .resolve_mode = .{},
@@ -2607,15 +2580,15 @@ fn attachmentInit(
             .clear_color => |color| .{ .color = .{ .float_32 = color } },
             else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
         },
-    };
+    } };
 }
 
-fn cmdBufUploadImage(
+pub fn cmdBufUploadImage(
     self: *Ctx,
     cb: Ctx.CmdBuf,
     dst: Ctx.ImageHandle,
     src: Ctx.Buf(.{}),
-    regions: anytype,
+    regions: []const Ctx.ImageUpload.Region,
 ) void {
     const vk_regions = Ctx.ImageUpload.Region.asBackendSlice(regions);
     self.backend.device.cmdCopyBufferToImage(
@@ -2628,12 +2601,12 @@ fn cmdBufUploadImage(
     );
 }
 
-fn cmdBufUploadBuffer(
+pub fn cmdBufUploadBuffer(
     self: *Ctx,
     cb: Ctx.CmdBuf,
     dst: Ctx.Buf(.{}),
     src: Ctx.Buf(.{}),
-    regions: anytype,
+    regions: []const Ctx.BufferUpload.Region,
 ) void {
     const vk_regions = Ctx.BufferUpload.Region.asBackendSlice(regions);
     self.backend.device.cmdCopyBuffer(
@@ -2645,7 +2618,7 @@ fn cmdBufUploadBuffer(
     );
 }
 
-fn waitIdle(self: *const Ctx) void {
+pub fn waitIdle(self: *const Ctx) void {
     self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
 }
 
@@ -2689,7 +2662,7 @@ fn addressModeToVk(mode: Ctx.Sampler.Options.AddressMode) vk.SamplerAddressMode 
 fn findMemoryType(
     device_memory_properties: vk.PhysicalDeviceMemoryProperties,
     required_type_bits: std.bit_set.IntegerBitSet(32),
-    access: Ctx.MemoryCreateUntypedOptions.Access,
+    access: btypes.MemoryCreateOptions.Access,
 ) ?u32 {
     const host_visible = switch (access) {
         .read, .write => true,
@@ -3180,80 +3153,26 @@ fn setenv(name: OsStr, value: OsStr) void {
     }
 }
 
-pub const ibackend: IBackend = .{
-    .Buf = vk.Buffer,
-    .CmdBuf = vk.CommandBuffer,
-    .DescPool = vk.DescriptorPool,
-    .DescSet = vk.DescriptorSet,
-    .DescSetLayout = vk.DescriptorSetLayout,
-    .Memory = vk.DeviceMemory,
-    .Image = vk.Image,
-    .ImageView = vk.ImageView,
-    .ShaderModule = vk.ShaderModule,
-    .Pipeline = vk.Pipeline,
-    .PipelineLayout = vk.PipelineLayout,
-    .Sampler = vk.Sampler,
-    .ImageTransition = vk.ImageMemoryBarrier2,
-    .ImageUploadRegion = vk.BufferImageCopy,
-    .BufferUploadRegion = vk.BufferCopy,
-    .Attachment = vk.RenderingAttachmentInfo,
-    .Options = Options,
-    .ImageFormat = vk.Format,
-    .init = init,
-    .deinit = deinit,
-    .dedicatedBufCreate = dedicatedBufCreate,
-    .dedicatedUploadBufCreate = dedicatedUploadBufCreate,
-    .dedicatedReadbackBufCreate = dedicatedReadbackBufCreate,
-    .bufDestroy = bufDestroy,
-    .combinedPipelineLayoutCreate = combinedPipelineLayoutCreate,
-    .combinedPipelineLayoutDestroy = combinedPipelineLayoutDestroy,
-    .cmdBufBeginZone = cmdBufBeginZone,
-    .cmdBufEndZone = cmdBufEndZone,
-    .imageTransitionUndefinedToTransferDst = imageTransitionUndefinedToTransferDst,
-    .imageTransitionUndefinedToColorAttachment = imageTransitionUndefinedToColorAttachment,
-    .imageTransitionUndefinedToColorAttachmentAfterRead = imageTransitionUndefinedToColorAttachmentAfterRead,
-    .imageTransitionTransferDstToReadOnly = imageTransitionTransferDstToReadOnly,
-    .imageTransitionReadOnlyToColorAttachment = imageTransitionReadOnlyToColorAttachment,
-    .imageTransitionColorAttachmentToReadOnly = imageTransitionColorAttachmentToReadOnly,
-    .imageTransitionTransferDstToColorAttachment = imageTransitionTransferDstToColorAttachment,
-    .cmdBufDraw = cmdBufDraw,
-    .cmdBufUploadImage = cmdBufUploadImage,
-    .cmdBufUploadBuffer = cmdBufUploadBuffer,
-    .cmdBufTransitionImages = cmdBufTransitionImages,
-    .cmdBufBeginRendering = cmdBufBeginRendering,
-    .cmdBufEndRendering = cmdBufEndRendering,
-    .cmdBufSetViewport = cmdBufSetViewport,
-    .cmdBufSetScissor = cmdBufSetScissor,
-    .cmdBufBindPipeline = cmdBufBindPipeline,
-    .cmdBufBindDescSet = cmdBufBindDescSet,
-    .imageUploadRegionInit = imageUploadRegionInit,
-    .bufferUploadRegionInit = bufferUploadRegionInit,
-    .attachmentInit = attachmentInit,
-    .cmdBufCreate = cmdBufCreate,
-    .cmdBufSubmit = cmdBufSubmit,
-    .descPoolDestroy = descPoolDestroy,
-    .descPoolCreate = descPoolCreate,
-    .descSetsUpdate = descSetsUpdate,
-    .beginFrame = beginFrame,
-    .endFrame = endFrame,
-    .acquireNextImage = acquireNextImage,
-    .getDevice = getDevice,
-    .imageCreate = imageCreate,
-    .imageDestroy = imageDestroy,
-    .imageMemoryRequirements = imageMemoryRequirements,
-    .memoryCreate = memoryCreate,
-    .memoryDestroy = memoryDestroy,
-    .shaderModuleCreate = shaderModuleCreate,
-    .shaderModuleDestroy = shaderModuleDestroy,
-    .pipelineDestroy = pipelineDestroy,
-    .pipelinesCreate = pipelinesCreate,
-    .samplerCreate = samplerCreate,
-    .samplerDestroy = samplerDestroy,
-    .timestampCalibration = timestampCalibration,
-    .waitIdle = waitIdle,
-    .named_image_formats = .{
-        .undefined = @intFromEnum(vk.Format.undefined),
-        .r8g8b8a8_srgb = @intFromEnum(vk.Format.r8g8b8a8_srgb),
-        .d24_unorm_s8_uint = @intFromEnum(vk.Format.d24_unorm_s8_uint),
-    },
+pub const Buf = vk.Buffer;
+pub const CmdBuf = vk.CommandBuffer;
+pub const DescPool = vk.DescriptorPool;
+pub const DescSet = vk.DescriptorSet;
+pub const DescSetLayout = vk.DescriptorSetLayout;
+pub const Memory = vk.DeviceMemory;
+pub const Image = vk.Image;
+pub const ImageView = vk.ImageView;
+pub const ShaderModule = vk.ShaderModule;
+pub const Pipeline = vk.Pipeline;
+pub const PipelineLayout = vk.PipelineLayout;
+pub const Sampler = vk.Sampler;
+pub const ImageTransition = vk.ImageMemoryBarrier2;
+pub const ImageUploadRegion = vk.BufferImageCopy;
+pub const BufferUploadRegion = vk.BufferCopy;
+pub const Attachment = vk.RenderingAttachmentInfo;
+pub const ImageFormat = vk.Format;
+
+pub const named_image_formats: btypes.NamedImageFormats = .{
+    .undefined = @intFromEnum(vk.Format.undefined),
+    .r8g8b8a8_srgb = @intFromEnum(vk.Format.r8g8b8a8_srgb),
+    .d24_unorm_s8_uint = @intFromEnum(vk.Format.d24_unorm_s8_uint),
 };

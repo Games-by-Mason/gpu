@@ -10,7 +10,6 @@ pub const tracy = @import("tracy");
 /// Compile time options for the library. You must declare a constant of this type in your root file
 /// named `gpu_options` to configure the library.
 pub const Options = struct {
-    /// Must implement `IBackend`
     Backend: type,
     max_frames_in_flight: u4 = 2,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
@@ -29,4 +28,4 @@ b: {
 pub const Ctx = @import("Ctx.zig");
 pub const writers = @import("writers.zig");
 
-pub const IBackend = @import("IBackend.zig");
+pub const btypes = @import("btypes.zig");
