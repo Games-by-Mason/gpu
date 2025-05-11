@@ -9,6 +9,12 @@ pub const NamedImageFormats = struct {
     d24_unorm_s8_uint: i32,
 };
 
+pub const ImageCreateResult = struct {
+    handle: Ctx.ImageHandle,
+    view: Ctx.ImageView,
+    dedicated_memory: ?Ctx.Memory(.any),
+};
+
 Buf: type,
 CmdBuf: type,
 DescPool: type,
@@ -117,7 +123,7 @@ cmdBufTransitionImages: fn (
 cmdBufUploadImage: fn (
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    dst: Ctx.Image(null),
+    dst: Ctx.ImageHandle,
     src: Ctx.Buf(.{}),
     regions_untyped: anytype,
 ) void,
@@ -206,30 +212,21 @@ getDevice: fn (self: *const Ctx, out: anytype) void,
 imageCreate: fn (
     self: *Ctx,
     name: Ctx.DebugName,
-    alloc_options: Ctx.Image(null).AllocOptions,
-    image_options: Ctx.ImageOptions,
-) Ctx.ImageResultUntyped,
+    alloc_options: Ctx.Image(.any).AllocOptions,
+    image_options: anytype,
+) ImageCreateResult,
 imageDestroy: fn (
     self: *Ctx,
-    image: Ctx.Image(null),
+    image: Ctx.Image(.any),
 ) void,
 imageMemoryRequirements: fn (
     self: *Ctx,
-    options: Ctx.ImageOptions,
+    options: anytype,
 ) Ctx.MemoryRequirements,
-imageViewCreate: fn (
-    self: *Ctx,
-    name: Ctx.DebugName,
-    options: Ctx.ImageView.Options,
-) Ctx.ImageView,
-imageViewDestroy: fn (
-    self: *Ctx,
-    image_view: Ctx.ImageView,
-) void,
 
 memoryCreate: fn (
     self: *Ctx,
-    options: Ctx.MemoryCreateUntypedOptions,
+    options: anytype,
 ) Ctx.MemoryUnsized,
 memoryDestroy: fn (
     self: *Ctx,

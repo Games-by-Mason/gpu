@@ -1573,11 +1573,11 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
             .@"2d_array_compatible_bit" = options.flags.@"2d_array_compatible",
         },
         .image_type = switch (options.dimensions) {
-            .@"1d" => .@"1d",
-            .@"2d" => .@"2d",
+            .@"1d", .@"1d_array" => .@"1d",
+            .@"2d", .@"2d_array", .cube, .cube_array => .@"2d",
             .@"3d" => .@"3d",
         },
-        .format = createImageOptionsFormatToVk(options.format),
+        .format = options.format.asBackendType(),
         .extent = .{
             .width = options.extent.width,
             .height = options.extent.height,
@@ -1611,12 +1611,50 @@ fn imageOptionsToVk(options: Ctx.ImageOptions) vk.ImageCreateInfo {
     };
 }
 
+fn createImageView(
+    self: *Ctx,
+    name: Ctx.DebugName,
+    image: vk.Image,
+    options_untyped: anytype,
+) Ctx.ImageView {
+    const options: Ctx.ImageOptions = options_untyped;
+    const view = self.backend.device.createImageView(&.{
+        .image = image,
+        .view_type = switch (options.dimensions) {
+            .@"1d" => .@"1d",
+            .@"2d" => .@"2d",
+            .@"3d" => .@"3d",
+            .cube => .cube,
+            .@"1d_array" => .@"1d_array",
+            .@"2d_array" => .@"2d_array",
+            .cube_array => .cube_array,
+        },
+        .format = options.format.asBackendType(),
+        .components = .{
+            .r = swizzleToVk(options.components.r),
+            .g = swizzleToVk(options.components.g),
+            .b = swizzleToVk(options.components.b),
+            .a = swizzleToVk(options.components.a),
+        },
+        .subresource_range = .{
+            .aspect_mask = aspectToVk(options.aspect),
+            .base_mip_level = options.base_mip_level,
+            .level_count = options.mip_level_count,
+            .base_array_layer = options.base_array_layer,
+            .layer_count = options.array_layer_count,
+        },
+    }, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_messenger, self.backend.device, view, name);
+    return .fromBackendType(view);
+}
+
 fn allocImage(
     self: *Ctx,
     name: Ctx.DebugName,
     image: vk.Image,
     reqs: vk.MemoryRequirements,
-) Ctx.ImageResultUntyped {
+    options: Ctx.ImageOptions,
+) IBackend.ImageCreateResult {
     const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
         .mask = reqs.memory_type_bits,
     };
@@ -1649,8 +1687,9 @@ fn allocImage(
 
     // Return the image and dedicated memory
     return .{
-        .image = .fromBackendType(image),
-        .dedicated = .{
+        .handle = .fromBackendType(image),
+        .view = createImageView(self, name, image, options),
+        .dedicated_memory = .{
             .unsized = .fromBackendType(memory),
             .size = reqs.size,
         },
@@ -1659,23 +1698,28 @@ fn allocImage(
 
 fn placeImage(
     self: *Ctx,
+    name: Ctx.DebugName,
     image: vk.Image,
     offset: u64,
     memory: vk.DeviceMemory,
-) Ctx.ImageResultUntyped {
+    options: Ctx.ImageOptions,
+) IBackend.ImageCreateResult {
     self.backend.device.bindImageMemory(image, memory, offset) catch |err| @panic(@errorName(err));
     return .{
-        .image = .fromBackendType(image),
-        .dedicated = null,
+        .handle = .fromBackendType(image),
+        .view = createImageView(self, name, image, options),
+        .dedicated_memory = null,
     };
 }
 
 fn imageCreate(
     self: *Ctx,
     name: Ctx.DebugName,
-    alloc_options: Ctx.Image(null).AllocOptions,
-    image_options: Ctx.ImageOptions,
-) Ctx.ImageResultUntyped {
+    alloc_options: Ctx.Image(.any).AllocOptions,
+    image_options_untyped: anytype,
+) IBackend.ImageCreateResult {
+    const image_options: Ctx.ImageOptions = image_options_untyped;
+
     // Create the image
     const image = self.backend.device.createImage(&imageOptionsToVk(image_options), null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, image, name);
@@ -1698,16 +1742,18 @@ fn imageCreate(
             const dedicated = dedicated_reqs.prefers_dedicated_allocation == vk.TRUE or
                 dedicated_reqs.requires_dedicated_allocation == vk.TRUE;
             if (dedicated) {
-                return allocImage(self, name, image, reqs);
+                return allocImage(self, name, image, reqs, image_options);
             } else {
                 auto.offset.* = std.mem.alignForward(u64, auto.offset.*, reqs.alignment);
                 const new_offset = auto.offset.* + reqs.size;
                 if (new_offset > auto.memory.size) @panic("OOB");
                 const result = placeImage(
                     self,
+                    name,
                     image,
                     auto.offset.*,
                     auto.memory.unsized.asBackendType(),
+                    image_options,
                 );
                 auto.offset.* = new_offset;
                 return result;
@@ -1717,7 +1763,7 @@ fn imageCreate(
             var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
             self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
             const reqs = reqs2.memory_requirements;
-            return allocImage(self, name, image, reqs);
+            return allocImage(self, name, image, reqs, image_options);
         },
         .place => |place| {
             var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
@@ -1726,19 +1772,31 @@ fn imageCreate(
             const offset = std.mem.alignForward(u64, place.offset, reqs.alignment);
             const new_offset = offset + reqs.size;
             if (new_offset > place.memory.size) @panic("OOB");
-            return placeImage(self, image, offset, place.memory.unsized.asBackendType());
+            return placeImage(
+                self,
+                name,
+                image,
+                offset,
+                place.memory.unsized.asBackendType(),
+                image_options,
+            );
         },
     }
 }
 
-fn imageDestroy(self: *Ctx, image: Ctx.Image(null)) void {
-    self.backend.device.destroyImage(image.asBackendType(), null);
+fn imageDestroy(self: *Ctx, image: Ctx.Image(.any)) void {
+    self.backend.device.destroyImageView(image.view.asBackendType(), null);
+    self.backend.device.destroyImage(image.handle.asBackendType(), null);
+    if (image.dedicated_memory) |memory| {
+        self.backend.device.freeMemory(memory.asBackendType(), null);
+    }
 }
 
 fn imageMemoryRequirements(
     self: *Ctx,
-    options: Ctx.ImageOptions,
+    options_untyped: anytype,
 ) Ctx.MemoryRequirements {
+    const options: Ctx.ImageOptions = options_untyped;
     var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
         .prefers_dedicated_allocation = vk.FALSE,
         .requires_dedicated_allocation = vk.FALSE,
@@ -1764,49 +1822,9 @@ fn imageMemoryRequirements(
     };
 }
 
-fn imageViewCreate(
-    self: *Ctx,
-    name: Ctx.DebugName,
-    options: Ctx.ImageView.Options,
-) Ctx.ImageView {
-    const image_view = self.backend.device.createImageView(&.{
-        .image = options.image.asBackendType(),
-        .view_type = switch (options.kind) {
-            .@"1d" => .@"1d",
-            .@"2d" => .@"2d",
-            .@"3d" => .@"3d",
-            .cube => .cube,
-            .@"1d_array" => .@"1d_array",
-            .@"2d_array" => .@"2d_array",
-            .cube_array => .cube_array,
-        },
-        .format = createImageOptionsFormatToVk(options.format),
-        .components = .{
-            .r = swizzleToVk(options.components.r),
-            .g = swizzleToVk(options.components.g),
-            .b = swizzleToVk(options.components.b),
-            .a = swizzleToVk(options.components.a),
-        },
-        .subresource_range = .{
-            .aspect_mask = aspectToVk(options.aspect),
-            .base_mip_level = options.base_mip_level,
-            .level_count = options.mip_level_count,
-            .base_array_layer = options.base_array_layer,
-            .layer_count = options.array_layer_count,
-        },
-    }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_messenger, self.backend.device, image_view, name);
-    return .fromBackendType(image_view);
-}
+fn memoryCreate(self: *Ctx, options_untyped: anytype) Ctx.MemoryUnsized {
+    const options: Ctx.MemoryCreateUntypedOptions = options_untyped;
 
-fn imageViewDestroy(self: *Ctx, image_view: Ctx.ImageView) void {
-    self.backend.device.destroyImageView(image_view.asBackendType(), null);
-}
-
-fn memoryCreate(
-    self: *Ctx,
-    options: Ctx.MemoryCreateUntypedOptions,
-) Ctx.MemoryUnsized {
     // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
     // able to do this, but we don't need to actually bind it to any memory it's just a handle.
     const memory_type_bits = switch (options.usage) {
@@ -1869,9 +1887,7 @@ fn memoryCreate(
                     .p_create_info = &.{
                         .flags = .{},
                         .image_type = .@"2d",
-                        .format = switch (format) {
-                            .d24_unorm_s8_uint => .d24_unorm_s8_uint,
-                        },
+                        .format = format.asBackendType(),
                         .extent = .{
                             .width = 16,
                             .height = 16,
@@ -1944,7 +1960,7 @@ fn shaderModuleDestroy(self: *Ctx, module: Ctx.ShaderModule) void {
 }
 
 fn pipelinesCreate(self: *Ctx, cmds_untyped: anytype) void {
-    const cmds: []const Ctx.InitCombinedPipelineCmd = cmds_untyped;
+    const cmds: []const Ctx.InitPipelineCmd = cmds_untyped;
 
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
@@ -2010,7 +2026,7 @@ fn pipelinesCreate(self: *Ctx, cmds_untyped: anytype) void {
     };
 
     // Pipeline create info
-    const max_shader_stages = Ctx.InitCombinedPipelineCmd.Stages.max_stages;
+    const max_shader_stages = Ctx.InitPipelineCmd.Stages.max_stages;
     var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
@@ -2387,7 +2403,7 @@ fn imageTransitionUndefinedToTransferDst(
         .new_layout = .transfer_dst_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.image.asBackendType(),
+        .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
     };
 }
@@ -2405,7 +2421,7 @@ fn imageTransitionUndefinedToColorAttachment(
         .new_layout = .attachment_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.image.asBackendType(),
+        .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
     };
 }
@@ -2427,7 +2443,7 @@ fn imageTransitionUndefinedToColorAttachmentAfterRead(
         .new_layout = .attachment_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.image.asBackendType(),
+        .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
     };
 }
@@ -2449,7 +2465,7 @@ fn imageTransitionTransferDstToReadOnly(
         .new_layout = .read_only_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.image.asBackendType(),
+        .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
     };
 }
@@ -2467,7 +2483,7 @@ fn imageTransitionTransferDstToColorAttachment(
         .new_layout = .attachment_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.image.asBackendType(),
+        .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
     };
 }
@@ -2489,7 +2505,7 @@ fn imageTransitionReadOnlyToColorAttachment(
         .new_layout = .attachment_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.image.asBackendType(),
+        .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
     };
 }
@@ -2511,7 +2527,7 @@ fn imageTransitionColorAttachmentToReadOnly(
         .new_layout = .read_only_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.image.asBackendType(),
+        .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range),
     };
 }
@@ -2597,7 +2613,7 @@ fn attachmentInit(
 fn cmdBufUploadImage(
     self: *Ctx,
     cb: Ctx.CmdBuf,
-    dst: Ctx.Image(null),
+    dst: Ctx.ImageHandle,
     src: Ctx.Buf(.{}),
     regions: anytype,
 ) void {
@@ -2633,20 +2649,7 @@ fn waitIdle(self: *const Ctx) void {
     self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
 }
 
-fn createImageOptionsFormatToVk(format: Ctx.ImageOptions.Format) vk.Format {
-    return switch (format) {
-        .color => |color| switch (color) {
-            .r8g8b8a8_srgb => .r8g8b8a8_srgb,
-        },
-        .depth_stencil => |depth_stencil_format| switch (depth_stencil_format) {
-            .d24_unorm_s8_uint => .d24_unorm_s8_uint,
-        },
-    };
-}
-
-fn swizzleToVk(
-    swizzle: Ctx.ImageView.Options.ComponentMapping.Swizzle,
-) vk.ComponentSwizzle {
+fn swizzleToVk(swizzle: Ctx.ComponentMapping.Swizzle) vk.ComponentSwizzle {
     return switch (swizzle) {
         .identity => .identity,
         .zero => .zero,
@@ -3238,8 +3241,6 @@ pub const ibackend: IBackend = .{
     .imageCreate = imageCreate,
     .imageDestroy = imageDestroy,
     .imageMemoryRequirements = imageMemoryRequirements,
-    .imageViewCreate = imageViewCreate,
-    .imageViewDestroy = imageViewDestroy,
     .memoryCreate = memoryCreate,
     .memoryDestroy = memoryDestroy,
     .shaderModuleCreate = shaderModuleCreate,
