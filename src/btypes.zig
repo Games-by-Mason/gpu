@@ -1,6 +1,13 @@
 //! Types used by the backend interface.
 
-const Ctx = @import("Ctx.zig");
+const Gx = @import("Gx.zig");
+const gpu = @import("root.zig");
+const Backend = gpu.global_options.Backend;
+
+pub const BackendInitResult = struct {
+    backend: Backend,
+    device: gpu.Device,
+};
 
 pub const NamedImageFormats = struct {
     undefined: i32,
@@ -9,19 +16,19 @@ pub const NamedImageFormats = struct {
 };
 
 pub const ImageCreateResult = struct {
-    handle: Ctx.ImageHandle,
-    view: Ctx.ImageView,
-    dedicated_memory: ?Ctx.Memory(.any),
+    handle: gpu.ImageHandle,
+    view: gpu.ImageView,
+    dedicated_memory: ?gpu.Memory(.any),
 };
 
 pub const ImageOptions = struct {
-    flags: Ctx.ImageFlags,
-    dimensions: Ctx.Dimensions,
-    format: Ctx.ImageFormat,
-    extent: Ctx.ImageExtent,
-    samples: Ctx.Samples,
+    flags: gpu.ImageFlags,
+    dimensions: gpu.Dimensions,
+    format: gpu.ImageFormat,
+    extent: gpu.ImageExtent,
+    samples: gpu.Samples,
     usage: ImageUsage,
-    aspect: Ctx.ImageAspect,
+    aspect: gpu.ImageAspect,
     mip_levels: u32,
     array_layers: u32,
 };
@@ -42,7 +49,7 @@ pub const MemoryCreateOptions = struct {
         write: struct { prefer_device_local: bool },
         read: void,
 
-        fn asAccess(self: @This()) Ctx.MemoryKind.Access {
+        fn asAccess(self: @This()) Gx.MemoryKind.Access {
             return switch (self) {
                 .none => .none,
                 .write => .write,
@@ -53,9 +60,9 @@ pub const MemoryCreateOptions = struct {
 
     pub const Usage = union(enum) {
         color_image: void,
-        depth_stencil_image: Ctx.ImageFormat,
+        depth_stencil_image: gpu.ImageFormat,
 
-        fn asUsage(self: @This()) Ctx.MemoryKind.Usage {
+        fn asUsage(self: @This()) gpu.MemoryKind.Usage {
             return switch (self) {
                 .color_image => .{ .image = .{
                     .format = .color,
@@ -67,8 +74,15 @@ pub const MemoryCreateOptions = struct {
         }
     };
 
-    name: Ctx.DebugName,
+    name: gpu.DebugName,
     usage: Usage,
     access: Access = .none,
     size: u64,
 };
+
+pub fn DedicatedAllocation(Dedicated: type) type {
+    return struct {
+        dedicated: Dedicated,
+        size: u64,
+    };
+}

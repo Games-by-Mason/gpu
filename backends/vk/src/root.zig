@@ -7,11 +7,11 @@ const vk = @import("vulkan");
 const btypes = gpu.btypes;
 const log = std.log.scoped(.gpu);
 const gpu = @import("gpu");
-const Ctx = gpu.Ctx;
+const Gx = gpu.Gx;
 const tracy = gpu.tracy;
 const Zone = tracy.Zone;
 const TracyQueue = tracy.GpuQueue;
-const global_options = gpu.options;
+const global_options = gpu.global_options;
 
 pub const vulkan = @import("vulkan");
 
@@ -46,8 +46,6 @@ image_index: ?u32 = null,
 // Tracy info
 tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
 
-timestamp_queries: bool,
-
 pub const Options = struct {
     pub const GetInstanceProcAddress = *const fn (
         instance: vk.Instance,
@@ -81,7 +79,7 @@ pub const Options = struct {
 
 const graphics_queue_name = "Graphics Queue";
 
-pub fn init(self: *Ctx, options: Ctx.Options) void {
+pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
 
@@ -100,8 +98,6 @@ pub fn init(self: *Ctx, options: Ctx.Options) void {
     if (options.backend.layers_disable.unwrap()) |str| {
         setenv(.fromLit("VK_LOADER_LAYERS_DISABLE"), str);
     }
-
-    const gpa = options.gpa;
 
     // Load the base dispatch function pointers
     const fp_zone = tracy.Zone.begin(.{ .name = "load fps", .src = @src() });
@@ -216,12 +212,12 @@ pub fn init(self: *Ctx, options: Ctx.Options) void {
     const instance_handle = base_wrapper.createInstance(&.{
         .p_application_info = &.{
             .api_version = @bitCast(vk_version),
-            .p_application_name = if (options.application_name) |n| n.ptr else null,
+            .p_application_name = if (options.app_name) |n| n.ptr else null,
             .application_version = @bitCast(vk.makeApiVersion(
                 0,
-                options.application_version.major,
-                options.application_version.minor,
-                options.application_version.patch,
+                options.app_version.major,
+                options.app_version.minor,
+                options.app_version.patch,
             )),
             .p_engine_name = if (options.engine_name) |n| n.ptr else null,
             .engine_version = @bitCast(vk.makeApiVersion(
@@ -612,10 +608,10 @@ pub fn init(self: *Ctx, options: Ctx.Options) void {
         for (&tracy_query_pools, 0..) |*pool, i| {
             pool.* = device.createQueryPool(&.{
                 .query_type = .timestamp,
-                .query_count = Ctx.CmdBuf.TracyQueryId.cap,
+                .query_count = gpu.CmdBuf.TracyQueryId.cap,
             }, null) catch |err| @panic(@errorName(err));
             setName(debug_messenger, device, pool.*, .{ .str = "Tracy", .index = i });
-            device.resetQueryPool(pool.*, 0, Ctx.CmdBuf.TracyQueryId.cap);
+            device.resetQueryPool(pool.*, 0, gpu.CmdBuf.TracyQueryId.cap);
         }
     }
 
@@ -628,28 +624,47 @@ pub fn init(self: *Ctx, options: Ctx.Options) void {
         .p_initial_data = null,
     }, null) catch |err| @panic(@errorName(err));
 
-    self.backend = .{
-        .surface = surface,
-        .base_wrapper = base_wrapper,
-        .debug_messenger = debug_messenger,
-        .pipeline_cache = pipeline_cache,
-        .instance = instance_proxy,
-        .device = device,
-        .swapchain = swapchain,
-        .cmd_pools = cmd_pools,
-        .image_availables = image_availables,
-        .ready_for_present = ready_for_present,
-        .cmd_pool_ready = cmd_pool_ready,
-        .physical_device = best_physical_device,
-        .timestamp_period = timestamp_period,
-        .queue = queue,
-        .queue_family_index = best_physical_device.queue_family_index,
-        .tracy_query_pools = tracy_query_pools,
-        .timestamp_queries = options.timestamp_queries,
+    const calibration: TimestampCalibration = .init(device, options.timestamp_queries);
+    const tracy_queue = TracyQueue.init(.{
+        .gpu_time = calibration.gpu,
+        .period = timestamp_period,
+        .context = 0,
+        .flags = .{},
+        .type = .vulkan,
+        .name = graphics_queue_name,
+    });
+
+    return .{
+        .backend = .{
+            .surface = surface,
+            .base_wrapper = base_wrapper,
+            .debug_messenger = debug_messenger,
+            .pipeline_cache = pipeline_cache,
+            .instance = instance_proxy,
+            .device = device,
+            .swapchain = swapchain,
+            .cmd_pools = cmd_pools,
+            .image_availables = image_availables,
+            .ready_for_present = ready_for_present,
+            .cmd_pool_ready = cmd_pool_ready,
+            .physical_device = best_physical_device,
+            .timestamp_period = timestamp_period,
+            .queue = queue,
+            .queue_family_index = best_physical_device.queue_family_index,
+            .tracy_query_pools = tracy_query_pools,
+        },
+        .device = .{
+            .kind = best_physical_device.ty,
+            .uniform_buf_offset_alignment = best_physical_device.min_uniform_buffer_offset_alignment,
+            .storage_buf_offset_alignment = best_physical_device.min_storage_buffer_offset_alignment,
+            .timestamp_period = timestamp_period,
+            .tracy_queue = tracy_queue,
+            .surface_format = .fromBackendType(best_physical_device.surface_format.format),
+        },
     };
 }
 
-pub fn deinit(self: *Ctx, gpa: Allocator) void {
+pub fn deinit(self: *Gx, gpa: Allocator) void {
     // Destroy the pipeline cache
     self.backend.device.destroyPipelineCache(self.backend.pipeline_cache, null);
 
@@ -697,12 +712,12 @@ pub fn deinit(self: *Ctx, gpa: Allocator) void {
     self.backend = undefined;
 }
 
-pub fn dedicatedBufCreate(
-    self: *Ctx,
-    name: Ctx.DebugName,
-    kind: Ctx.BufKind,
+pub fn bufCreate(
+    self: *Gx,
+    name: gpu.DebugName,
+    kind: Gx.BufKind,
     size: u64,
-) Ctx.DedicatedAllocation(Ctx.DedicatedBuf(.{})) {
+) btypes.DedicatedAllocation(Gx.DedicatedBuf(.{})) {
     // Create the buffer
     const usage_flags = bufUsageFlagsFromKind(kind);
     const buffer = self.backend.device.createBuffer(&.{
@@ -753,13 +768,13 @@ pub fn dedicatedBufCreate(
     };
 }
 
-pub fn dedicatedUploadBufCreate(
-    self: *Ctx,
-    name: Ctx.DebugName,
-    kind: Ctx.BufKind,
+pub fn uploadBufCreate(
+    self: *Gx,
+    name: gpu.DebugName,
+    kind: gpu.BufKind,
     size: u64,
     prefer_device_local: bool,
-) Ctx.DedicatedAllocation(Ctx.DedicatedUploadBuf(.{})) {
+) btypes.DedicatedAllocation(gpu.UploadBuf(.{})) {
     // Create the buffer
     const usage = bufUsageFlagsFromKind(kind);
     const buffer = self.backend.device.createBuffer(&.{
@@ -814,7 +829,7 @@ pub fn dedicatedUploadBufCreate(
     data.len = size;
     return .{
         .dedicated = .{
-            .buf = .fromBackendType(buffer),
+            .handle = .fromBackendType(buffer),
             .memory = .fromBackendType(memory),
             .data = data,
         },
@@ -822,12 +837,12 @@ pub fn dedicatedUploadBufCreate(
     };
 }
 
-pub fn dedicatedReadbackBufCreate(
-    self: *Ctx,
-    name: Ctx.DebugName,
-    kind: Ctx.BufKind,
+pub fn readbackBufCreate(
+    self: *Gx,
+    name: gpu.DebugName,
+    kind: Gx.BufKind,
     size: u64,
-) Ctx.DedicatedAllocation(Ctx.DedicatedReadbackBuf(.{})) {
+) btypes.DedicatedAllocation(Gx.ReadbackBuf(.{})) {
     // Create the buffer
     const buffer = self.backend.device.createBuffer(&.{
         .size = size,
@@ -886,7 +901,7 @@ pub fn dedicatedReadbackBufCreate(
     };
 }
 
-fn bufUsageFlagsFromKind(kind: Ctx.BufKind) vk.BufferUsageFlags {
+fn bufUsageFlagsFromKind(kind: gpu.BufKind) vk.BufferUsageFlags {
     const result: vk.BufferUsageFlags = .{
         .transfer_src_bit = kind.transfer_src,
         .transfer_dst_bit = kind.transfer_dst,
@@ -903,14 +918,14 @@ fn bufUsageFlagsFromKind(kind: Ctx.BufKind) vk.BufferUsageFlags {
     return result;
 }
 
-pub fn bufDestroy(self: *Ctx, buffer: Ctx.Buf(.{})) void {
+pub fn bufDestroy(self: *Gx, buffer: gpu.BufHandle(.{})) void {
     self.backend.device.destroyBuffer(buffer.asBackendType(), null);
 }
 
 pub fn pipelineLayoutCreate(
-    self: *Ctx,
-    options: Ctx.PipelineLayout.Options,
-) Ctx.PipelineLayout {
+    self: *Gx,
+    options: gpu.Pipeline.Layout.Options,
+) gpu.Pipeline.Layout {
     // Create the descriptor set layout
     var descs: std.BoundedArray(vk.DescriptorSetLayoutBinding, global_options.combined_pipeline_layout_create_buf_len) = .{};
     for (options.descs, 0..) |desc, i| {
@@ -949,14 +964,14 @@ pub fn pipelineLayoutCreate(
 }
 
 pub fn pipelineLayoutDestroy(
-    self: *Ctx,
-    layout: Ctx.PipelineLayout,
+    self: *Gx,
+    layout: gpu.Pipeline.Layout,
 ) void {
     self.backend.device.destroyPipelineLayout(layout.handle.asBackendType(), null);
     self.backend.device.destroyDescriptorSetLayout(layout.desc_set.asBackendType(), null);
 }
 
-pub fn cmdBufBeginZone(self: *Ctx, cb: Ctx.CmdBuf, loc: *const tracy.SourceLocation) void {
+pub fn cmdBufBeginZone(self: *Gx, cb: gpu.CmdBuf, loc: *const tracy.SourceLocation) void {
     if (self.backend.debug_messenger != .null_handle) {
         self.backend.device.cmdBeginDebugUtilsLabelEXT(cb.asBackendType(), &.{
             .p_label_name = loc.name orelse loc.function,
@@ -969,7 +984,7 @@ pub fn cmdBufBeginZone(self: *Ctx, cb: Ctx.CmdBuf, loc: *const tracy.SourceLocat
         });
     }
     if (tracy.enabled and self.timestamp_queries) {
-        const query_id: Ctx.CmdBuf.TracyQueryId = .next(self);
+        const query_id: gpu.CmdBuf.TracyQueryId = .next(self);
         self.device.tracy_queue.beginZone(.{
             .query_id = @bitCast(query_id),
             .loc = loc,
@@ -983,13 +998,13 @@ pub fn cmdBufBeginZone(self: *Ctx, cb: Ctx.CmdBuf, loc: *const tracy.SourceLocat
     }
 }
 
-pub fn cmdBufEndZone(self: *Ctx, cb: Ctx.CmdBuf) void {
+pub fn cmdBufEndZone(self: *Gx, cb: gpu.CmdBuf) void {
     if (self.backend.debug_messenger != .null_handle) {
         self.backend.device.cmdEndDebugUtilsLabelEXT(cb.asBackendType());
     }
 
     if (tracy.enabled and self.timestamp_queries) {
-        const query_id: Ctx.CmdBuf.TracyQueryId = .next(self);
+        const query_id: gpu.CmdBuf.TracyQueryId = .next(self);
         self.backend.device.cmdWriteTimestamp(
             cb.asBackendType(),
             .{ .bottom_of_pipe_bit = true },
@@ -1001,9 +1016,9 @@ pub fn cmdBufEndZone(self: *Ctx, cb: Ctx.CmdBuf) void {
 }
 
 pub fn cmdBufCreate(
-    self: *Ctx,
+    self: *Gx,
     loc: *const tracy.SourceLocation,
-) Ctx.CmdBuf {
+) gpu.CmdBuf {
     var cbs = [_]vk.CommandBuffer{.null_handle};
     self.backend.device.allocateCommandBuffers(&.{
         .command_pool = self.backend.cmd_pools[self.frame],
@@ -1024,11 +1039,11 @@ pub fn cmdBufCreate(
 }
 
 pub fn cmdBufBeginRendering(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    options: Ctx.CmdBuf.BeginRenderingOptions,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    options: gpu.CmdBuf.BeginRenderingOptions,
 ) void {
-    const color_attachments = Ctx.Attachment.asBackendSlice(options.color_attachments);
+    const color_attachments = gpu.Attachment.asBackendSlice(options.color_attachments);
     self.backend.device.cmdBeginRendering(cb.asBackendType(), &.{
         .flags = .{},
         .render_area = .{
@@ -1047,14 +1062,14 @@ pub fn cmdBufBeginRendering(
     });
 }
 
-pub fn cmdBufEndRendering(self: *Ctx, cb: Ctx.CmdBuf) void {
+pub fn cmdBufEndRendering(self: *Gx, cb: gpu.CmdBuf) void {
     self.backend.device.cmdEndRendering(cb.asBackendType());
 }
 
 pub fn cmdBufDraw(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    options: Ctx.CmdBuf.DrawOptions,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    options: gpu.CmdBuf.DrawOptions,
 ) void {
     self.backend.device.cmdDraw(
         cb.asBackendType(),
@@ -1066,9 +1081,9 @@ pub fn cmdBufDraw(
 }
 
 pub fn cmdBufSetViewport(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    viewport: Ctx.Viewport,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    viewport: gpu.Viewport,
 ) void {
     self.backend.device.cmdSetViewport(cb.asBackendType(), 0, 1, &.{.{
         .x = viewport.x,
@@ -1081,9 +1096,9 @@ pub fn cmdBufSetViewport(
 }
 
 pub fn cmdBufSetScissor(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    scissor: Ctx.Rect2D,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    scissor: gpu.Rect2D,
 ) void {
     self.backend.device.cmdSetScissor(cb.asBackendType(), 0, 1, &.{.{
         .offset = .{
@@ -1098,9 +1113,9 @@ pub fn cmdBufSetScissor(
 }
 
 pub fn cmdBufBindPipeline(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    pipeline: Ctx.Pipeline,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    pipeline: gpu.Pipeline,
 ) void {
     self.backend.device.cmdBindPipeline(
         cb.asBackendType(),
@@ -1110,10 +1125,10 @@ pub fn cmdBufBindPipeline(
 }
 
 pub fn cmdBufBindDescSet(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    pipeline: Ctx.Pipeline,
-    set: Ctx.DescSet,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    pipeline: gpu.Pipeline,
+    set: gpu.DescSet,
 ) void {
     self.backend.device.cmdBindDescriptorSets(
         cb.asBackendType(),
@@ -1128,16 +1143,16 @@ pub fn cmdBufBindDescSet(
 }
 
 pub fn cmdBufPrepareSubmit(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
+    self: *Gx,
+    cb: gpu.CmdBuf,
 ) void {
     cb.endZone(self);
     self.backend.device.endCommandBuffer(cb.asBackendType()) catch |err| @panic(@errorName(err));
 }
 
 pub fn cmdBufSubmit(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
+    self: *Gx,
+    cb: gpu.CmdBuf,
 ) void {
     cmdBufPrepareSubmit(self, cb);
     const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
@@ -1161,11 +1176,11 @@ pub fn cmdBufSubmit(
     ) catch |err| @panic(@errorName(err));
 }
 
-pub fn descPoolDestroy(self: *Ctx, pool: Ctx.DescPool) void {
+pub fn descPoolDestroy(self: *Gx, pool: gpu.DescPool) void {
     self.backend.device.destroyDescriptorPool(pool.asBackendType(), null);
 }
 
-pub fn descPoolCreate(self: *Ctx, options: Ctx.DescPool.Options) Ctx.DescPool {
+pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
     // Create the descriptor pool
     const desc_pool = b: {
         // Calculate the size of the pool
@@ -1240,7 +1255,7 @@ pub fn descPoolCreate(self: *Ctx, options: Ctx.DescPool.Options) Ctx.DescPool {
     return .fromBackendType(desc_pool);
 }
 
-pub fn descSetsUpdate(self: *Ctx, updates: []const Ctx.DescUpdateCmd) void {
+pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     const buf_len = global_options.update_desc_sets_buf_len;
 
     var buffer_infos: std.BoundedArray(vk.DescriptorBufferInfo, buf_len) = .{};
@@ -1254,7 +1269,7 @@ pub fn descSetsUpdate(self: *Ctx, updates: []const Ctx.DescUpdateCmd) void {
         const batch_first_update = updates[i];
         const batch_set = batch_first_update.set;
         const batch_binding = batch_first_update.binding;
-        const batch_kind: Ctx.DescUpdateCmd.Value.Tag = batch_first_update.value;
+        const batch_kind: gpu.DescSet.Update.Value.Tag = batch_first_update.value;
         const batch_index_start: u32 = batch_first_update.index;
         var batch_size: u32 = 0;
         while (true) {
@@ -1262,12 +1277,12 @@ pub fn descSetsUpdate(self: *Ctx, updates: []const Ctx.DescUpdateCmd) void {
 
             switch (update_curr.value) {
                 .uniform_buf => |view| buffer_infos.appendAssumeCapacity(.{
-                    .buffer = view.buf.asBackendType(),
+                    .buffer = view.handle.asBackendType(),
                     .offset = view.offset,
                     .range = view.size,
                 }),
                 .storage_buf => |view| buffer_infos.appendAssumeCapacity(.{
-                    .buffer = view.buf.asBackendType(),
+                    .buffer = view.handle.asBackendType(),
                     .offset = view.offset,
                     .range = view.size,
                 }),
@@ -1342,7 +1357,7 @@ pub fn descSetsUpdate(self: *Ctx, updates: []const Ctx.DescUpdateCmd) void {
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.ImageView.Sized2D {
+pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) gpu.ImageView.Sized2D {
     // Acquire the image
     const acquire_result = b: {
         const acquire_zone = Zone.begin(.{
@@ -1381,7 +1396,7 @@ pub fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.ImageView
         const transition_zone = Zone.begin(.{ .name = "prepare swapchain image", .src = @src() });
         defer transition_zone.end();
 
-        const cb: Ctx.CmdBuf = .init(self, .{
+        const cb: gpu.CmdBuf = .init(self, .{
             .name = "Prepare Swapchain Image",
             .src = @src(),
         });
@@ -1419,7 +1434,7 @@ pub fn acquireNextImage(self: *Ctx, framebuf_extent: Ctx.Extent2D) Ctx.ImageView
     };
 }
 
-pub fn beginFrame(self: *Ctx) void {
+pub fn beginFrame(self: *Gx) void {
     self.backend.image_index = null;
 
     {
@@ -1463,7 +1478,7 @@ pub fn beginFrame(self: *Ctx) void {
 
         const queries = self.tracy_queries[self.frame];
         if (queries > 0) {
-            var results: [Ctx.CmdBuf.TracyQueryId.cap * 2]u64 = undefined;
+            var results: [gpu.CmdBuf.TracyQueryId.cap * 2]u64 = undefined;
             const result = self.backend.device.getQueryPoolResults(
                 self.backend.tracy_query_pools[self.frame],
                 0,
@@ -1489,7 +1504,7 @@ pub fn beginFrame(self: *Ctx) void {
                 if (available) {
                     const time = results[i * 2];
                     self.device.tracy_queue.emitTime(.{
-                        .query_id = @bitCast(Ctx.CmdBuf.TracyQueryId{
+                        .query_id = @bitCast(gpu.CmdBuf.TracyQueryId{
                             .index = @intCast(i),
                             .frame = self.frame,
                         }),
@@ -1517,7 +1532,7 @@ pub fn beginFrame(self: *Ctx) void {
                 cb,
                 self.backend.tracy_query_pools[self.frame],
                 0,
-                Ctx.CmdBuf.TracyQueryId.cap,
+                gpu.CmdBuf.TracyQueryId.cap,
             );
             self.backend.device.endCommandBuffer(cb) catch |err| @panic(@errorName(err));
             self.backend.device.queueSubmit(
@@ -1537,29 +1552,6 @@ pub fn beginFrame(self: *Ctx) void {
             ) catch |err| @panic(@errorName(err));
         }
     }
-}
-
-pub fn getDevice(self: *const Ctx) Ctx.Device {
-    const get_queue_zone = tracy.Zone.begin(.{ .name = "get queues", .src = @src() });
-    const calibration = timestampCalibrationImpl(self.backend.device, self.backend.timestamp_queries);
-    const tracy_queue = TracyQueue.init(.{
-        .gpu_time = calibration.gpu,
-        .period = self.backend.timestamp_period,
-        .context = 0,
-        .flags = .{},
-        .type = .vulkan,
-        .name = graphics_queue_name,
-    });
-    get_queue_zone.end();
-
-    return .{
-        .kind = self.backend.physical_device.ty,
-        .uniform_buf_offset_alignment = self.backend.physical_device.min_uniform_buffer_offset_alignment,
-        .storage_buf_offset_alignment = self.backend.physical_device.min_storage_buffer_offset_alignment,
-        .timestamp_period = self.backend.timestamp_period,
-        .tracy_queue = tracy_queue,
-        .surface_format = .fromBackendType(self.backend.physical_device.surface_format.format),
-    };
 }
 
 fn imageOptionsToVk(options: btypes.ImageOptions) vk.ImageCreateInfo {
@@ -1608,11 +1600,11 @@ fn imageOptionsToVk(options: btypes.ImageOptions) vk.ImageCreateInfo {
 }
 
 fn createImageView(
-    self: *Ctx,
-    name: Ctx.DebugName,
+    self: *Gx,
+    name: gpu.DebugName,
     image: vk.Image,
     options: btypes.ImageOptions,
-) Ctx.ImageView {
+) gpu.ImageView {
     const view = self.backend.device.createImageView(&.{
         .image = image,
         .view_type = switch (options.dimensions) {
@@ -1644,8 +1636,8 @@ fn createImageView(
 }
 
 fn allocImage(
-    self: *Ctx,
-    name: Ctx.DebugName,
+    self: *Gx,
+    name: gpu.DebugName,
     image: vk.Image,
     reqs: vk.MemoryRequirements,
     options: btypes.ImageOptions,
@@ -1692,8 +1684,8 @@ fn allocImage(
 }
 
 fn placeImage(
-    self: *Ctx,
-    name: Ctx.DebugName,
+    self: *Gx,
+    name: gpu.DebugName,
     image: vk.Image,
     offset: u64,
     memory: vk.DeviceMemory,
@@ -1708,9 +1700,9 @@ fn placeImage(
 }
 
 pub fn imageCreate(
-    self: *Ctx,
-    name: Ctx.DebugName,
-    alloc_options: Ctx.Image(.any).AllocOptions,
+    self: *Gx,
+    name: gpu.DebugName,
+    alloc_options: gpu.Image(.any).AllocOptions,
     image_options: btypes.ImageOptions,
 ) btypes.ImageCreateResult {
 
@@ -1778,16 +1770,16 @@ pub fn imageCreate(
     }
 }
 
-pub fn imageDestroy(self: *Ctx, image: Ctx.Image(.any)) void {
+pub fn imageDestroy(self: *Gx, image: gpu.Image(.any)) void {
     self.backend.device.destroyImageView(image.view.asBackendType(), null);
     self.backend.device.destroyImage(image.handle.asBackendType(), null);
     image.dedicated_memory.deinit(self);
 }
 
 pub fn imageMemoryRequirements(
-    self: *Ctx,
+    self: *Gx,
     options: btypes.ImageOptions,
-) Ctx.MemoryRequirements {
+) gpu.MemoryRequirements {
     var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
         .prefers_dedicated_allocation = vk.FALSE,
         .requires_dedicated_allocation = vk.FALSE,
@@ -1813,7 +1805,7 @@ pub fn imageMemoryRequirements(
     };
 }
 
-pub fn memoryCreate(self: *Ctx, options: btypes.MemoryCreateOptions) Ctx.MemoryUnsized {
+pub fn memoryCreate(self: *Gx, options: btypes.MemoryCreateOptions) gpu.MemoryUnsized {
     // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
     // able to do this, but we don't need to actually bind it to any memory it's just a handle.
     const memory_type_bits = switch (options.usage) {
@@ -1922,15 +1914,15 @@ pub fn memoryCreate(self: *Ctx, options: btypes.MemoryCreateOptions) Ctx.MemoryU
     return .fromBackendType(memory);
 }
 
-pub fn memoryDestroy(self: *Ctx, memory: Ctx.MemoryUnsized) void {
+pub fn memoryDestroy(self: *Gx, memory: gpu.MemoryUnsized) void {
     self.backend.device.freeMemory(memory.asBackendType(), null);
 }
 
-pub fn pipelineDestroy(self: *Ctx, pipeline: Ctx.Pipeline) void {
+pub fn pipelineDestroy(self: *Gx, pipeline: gpu.Pipeline) void {
     self.backend.device.destroyPipeline(pipeline.handle.asBackendType(), null);
 }
 
-pub fn shaderModuleCreate(self: *Ctx, options: Ctx.ShaderModule.Options) Ctx.ShaderModule {
+pub fn shaderModuleCreate(self: *Gx, options: gpu.ShaderModule.Options) gpu.ShaderModule {
     const module = self.backend.device.createShaderModule(&.{
         .code_size = options.ir.len * @sizeOf(u32),
         .p_code = options.ir.ptr,
@@ -1944,11 +1936,11 @@ pub fn shaderModuleCreate(self: *Ctx, options: Ctx.ShaderModule.Options) Ctx.Sha
     return .fromBackendType(module);
 }
 
-pub fn shaderModuleDestroy(self: *Ctx, module: Ctx.ShaderModule) void {
+pub fn shaderModuleDestroy(self: *Gx, module: gpu.ShaderModule) void {
     self.backend.device.destroyShaderModule(module.asBackendType(), null);
 }
 
-pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.Pipeline.InitCmd) void {
+pub fn pipelinesCreate(self: *Gx, cmds: []const gpu.Pipeline.InitCmd) void {
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
         .viewport,
@@ -2013,7 +2005,7 @@ pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.Pipeline.InitCmd) void {
     };
 
     // Pipeline create info
-    const max_shader_stages = Ctx.Pipeline.InitCmd.Stages.max_stages;
+    const max_shader_stages = gpu.Pipeline.InitCmd.Stages.max_stages;
     var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
@@ -2076,7 +2068,7 @@ pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.Pipeline.InitCmd) void {
         const shader_stages_slice = shader_stages.constSlice()[shader_stages.len - 2 ..];
 
         const rendering_info = rendering_infos.addOneAssumeCapacity();
-        const color_attachment_formats = Ctx.ImageFormat.asBackendSlice(cmd.color_attachment_formats);
+        const color_attachment_formats = gpu.ImageFormat.asBackendSlice(cmd.color_attachment_formats);
         rendering_info.* = .{
             .view_mask = 0,
             .color_attachment_count = @intCast(color_attachment_formats.len),
@@ -2128,7 +2120,7 @@ pub fn pipelinesCreate(self: *Ctx, cmds: []const Ctx.Pipeline.InitCmd) void {
 }
 
 pub fn transitionImageColorAttachmentToPresent(
-    self: *Ctx,
+    self: *Gx,
     cb: vk.CommandBuffer,
     image: vk.Image,
 ) void {
@@ -2161,7 +2153,7 @@ pub fn transitionImageColorAttachmentToPresent(
 }
 
 pub fn transitionImageToColorAttachmentOptimal(
-    self: *Ctx,
+    self: *Gx,
     cb: vk.CommandBuffer,
     image: vk.Image,
 ) void {
@@ -2193,7 +2185,7 @@ pub fn transitionImageToColorAttachmentOptimal(
     });
 }
 
-pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
+pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
     if (!options.present) {
         // We aren't presenting, just wrap up this command pool submission by signaling the fence
         // for this frame and then early out.
@@ -2219,7 +2211,7 @@ pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
         const transition_zone = Zone.begin(.{ .name = "finalize swapchain image", .src = @src() });
         defer transition_zone.end();
 
-        const cb: Ctx.CmdBuf = .init(self, .{
+        const cb: gpu.CmdBuf = .init(self, .{
             .name = "Finalize Swapchain Image",
             .src = @src(),
         });
@@ -2285,10 +2277,10 @@ pub fn endFrame(self: *Ctx, options: Ctx.EndFrameOptions) void {
 }
 
 pub fn samplerCreate(
-    self: *Ctx,
-    name: Ctx.DebugName,
-    options: Ctx.Sampler.Options,
-) Ctx.Sampler {
+    self: *Gx,
+    name: gpu.DebugName,
+    options: gpu.Sampler.Options,
+) gpu.Sampler {
     const sampler = self.backend.device.createSampler(&.{
         .mag_filter = filterToVk(options.mag_filter),
         .min_filter = filterToVk(options.min_filter),
@@ -2331,43 +2323,42 @@ pub fn samplerCreate(
     return .fromBackendType(sampler);
 }
 
-pub fn samplerDestroy(self: *Ctx, sampler: Ctx.Sampler) void {
+pub fn samplerDestroy(self: *Gx, sampler: gpu.Sampler) void {
     self.backend.device.destroySampler(sampler.asBackendType(), null);
 }
 
-fn timestampCalibration(self: *Ctx) Ctx.TimestampCalibration {
-    return timestampCalibrationImpl(self.backend.device, self.backend.timestamp_queries);
-}
+pub const TimestampCalibration = struct {
+    cpu: u64,
+    gpu: u64,
+    max_deviation: u64,
 
-fn timestampCalibrationImpl(
-    device: vk.DeviceProxy,
-    timestamp_queries: bool,
-) Ctx.TimestampCalibration {
-    if (!timestamp_queries) return .{
-        .cpu = 0,
-        .gpu = 0,
-        .max_deviation = 0,
-    };
-    var calibration_results: [2]u64 = undefined;
-    const max_deviation = device.getCalibratedTimestampsKHR(
-        2,
-        &.{
-            .{ .time_domain = switch (builtin.os.tag) {
-                .windows => .query_performance_counter_ext,
-                else => .clock_monotonic_raw_khr,
-            } },
-            .{ .time_domain = .device_khr },
-        },
-        &calibration_results,
-    ) catch |err| @panic(@errorName(err));
-    return .{
-        .cpu = calibration_results[0],
-        .gpu = calibration_results[1],
-        .max_deviation = max_deviation,
-    };
-}
+    fn init(device: vk.DeviceProxy, timestamp_queries: bool) TimestampCalibration {
+        if (!timestamp_queries) return .{
+            .cpu = 0,
+            .gpu = 0,
+            .max_deviation = 0,
+        };
+        var calibration_results: [2]u64 = undefined;
+        const max_deviation = device.getCalibratedTimestampsKHR(
+            2,
+            &.{
+                .{ .time_domain = switch (builtin.os.tag) {
+                    .windows => .query_performance_counter_ext,
+                    else => .clock_monotonic_raw_khr,
+                } },
+                .{ .time_domain = .device_khr },
+            },
+            &calibration_results,
+        ) catch |err| @panic(@errorName(err));
+        return .{
+            .cpu = calibration_results[0],
+            .gpu = calibration_results[1],
+            .max_deviation = max_deviation,
+        };
+    }
+};
 
-fn rangeToVk(range: Ctx.ImageTransition.Range) vk.ImageSubresourceRange {
+fn rangeToVk(range: gpu.ImageTransition.Range) vk.ImageSubresourceRange {
     return .{
         .aspect_mask = aspectToVk(range.aspect),
         .base_mip_level = range.base_mip_level,
@@ -2378,8 +2369,8 @@ fn rangeToVk(range: Ctx.ImageTransition.Range) vk.ImageSubresourceRange {
 }
 
 pub fn imageTransitionUndefinedToTransferDst(
-    options: Ctx.ImageTransition.UndefinedToTransferDstOptions,
-) Ctx.ImageTransition {
+    options: gpu.ImageTransition.UndefinedToTransferDstOptions,
+) gpu.ImageTransition {
     return .{ .backend = .{
         .src_stage_mask = .{ .top_of_pipe_bit = true },
         .src_access_mask = .{},
@@ -2395,8 +2386,8 @@ pub fn imageTransitionUndefinedToTransferDst(
 }
 
 pub fn imageTransitionUndefinedToColorAttachment(
-    options: Ctx.ImageTransition.UndefinedToColorAttachmentOptions,
-) Ctx.ImageTransition {
+    options: gpu.ImageTransition.UndefinedToColorAttachmentOptions,
+) gpu.ImageTransition {
     return .{ .backend = .{
         .src_stage_mask = .{ .top_of_pipe_bit = true },
         .src_access_mask = .{},
@@ -2412,13 +2403,12 @@ pub fn imageTransitionUndefinedToColorAttachment(
 }
 
 pub fn imageTransitionUndefinedToColorAttachmentAfterRead(
-    options: Ctx.ImageTransition.UndefinedToColorAttachmentOptionsAfterRead,
-) Ctx.ImageTransition {
+    options: gpu.ImageTransition.UndefinedToColorAttachmentOptionsAfterRead,
+) gpu.ImageTransition {
     return .{ .backend = .{
         .src_stage_mask = .{
             .vertex_shader_bit = options.src_stage.vertex_shader,
             .fragment_shader_bit = options.src_stage.fragment_shader,
-            .compute_shader_bit = options.src_stage.compute_shader,
         },
         .src_access_mask = .{ .shader_read_bit = true },
         .dst_stage_mask = .{ .color_attachment_output_bit = true },
@@ -2433,15 +2423,14 @@ pub fn imageTransitionUndefinedToColorAttachmentAfterRead(
 }
 
 pub fn imageTransitionTransferDstToReadOnly(
-    options: Ctx.ImageTransition.TransferDstToReadOnlyOptions,
-) Ctx.ImageTransition {
+    options: gpu.ImageTransition.TransferDstToReadOnlyOptions,
+) gpu.ImageTransition {
     return .{ .backend = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
         .dst_stage_mask = .{
             .vertex_shader_bit = options.dst_stage.vertex_shader,
             .fragment_shader_bit = options.dst_stage.fragment_shader,
-            .compute_shader_bit = options.dst_stage.compute_shader,
         },
         .dst_access_mask = .{ .shader_read_bit = true },
         .old_layout = .transfer_dst_optimal,
@@ -2454,8 +2443,8 @@ pub fn imageTransitionTransferDstToReadOnly(
 }
 
 pub fn imageTransitionTransferDstToColorAttachment(
-    options: Ctx.ImageTransition.TransferDstToColorAttachmentOptions,
-) Ctx.ImageTransition {
+    options: gpu.ImageTransition.TransferDstToColorAttachmentOptions,
+) gpu.ImageTransition {
     return .{ .backend = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
@@ -2471,13 +2460,12 @@ pub fn imageTransitionTransferDstToColorAttachment(
 }
 
 pub fn imageTransitionReadOnlyToColorAttachment(
-    options: Ctx.ImageTransition.ReadOnlyToColorAttachmentOptions,
-) Ctx.ImageTransition {
+    options: gpu.ImageTransition.ReadOnlyToColorAttachmentOptions,
+) gpu.ImageTransition {
     return .{ .backend = .{
         .src_stage_mask = .{
             .vertex_shader_bit = options.src_stage.vertex_shader,
             .fragment_shader_bit = options.src_stage.fragment_shader,
-            .compute_shader_bit = options.src_stage.compute_shader,
         },
         .src_access_mask = .{ .shader_read_bit = true },
         .dst_stage_mask = .{ .color_attachment_output_bit = true },
@@ -2492,15 +2480,14 @@ pub fn imageTransitionReadOnlyToColorAttachment(
 }
 
 pub fn imageTransitionColorAttachmentToReadOnly(
-    options: Ctx.ImageTransition.ColorAttachmentToReadOnlyOptions,
-) Ctx.ImageTransition {
+    options: gpu.ImageTransition.ColorAttachmentToReadOnlyOptions,
+) gpu.ImageTransition {
     return .{ .backend = .{
         .src_stage_mask = .{ .color_attachment_output_bit = true },
         .src_access_mask = .{ .color_attachment_write_bit = true },
         .dst_stage_mask = .{
             .vertex_shader_bit = options.dst_stage.vertex_shader,
             .fragment_shader_bit = options.dst_stage.fragment_shader,
-            .compute_shader_bit = options.dst_stage.compute_shader,
         },
         .dst_access_mask = .{ .shader_read_bit = true },
         .old_layout = .attachment_optimal,
@@ -2513,11 +2500,11 @@ pub fn imageTransitionColorAttachmentToReadOnly(
 }
 
 pub fn cmdBufTransitionImages(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    transitions: []const Ctx.ImageTransition,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    transitions: []const gpu.ImageTransition,
 ) void {
-    const barriers = Ctx.ImageTransition.asBackendSlice(transitions);
+    const barriers = gpu.ImageTransition.asBackendSlice(transitions);
     self.backend.device.cmdPipelineBarrier2(cb.asBackendType(), &.{
         .dependency_flags = .{},
         .memory_barrier_count = 0,
@@ -2529,7 +2516,7 @@ pub fn cmdBufTransitionImages(
     });
 }
 
-pub fn imageUploadRegionInit(options: Ctx.ImageUpload.Region.Options) Ctx.ImageUpload.Region {
+pub fn imageUploadRegionInit(options: gpu.ImageUpload.Region.Options) gpu.ImageUpload.Region {
     return .{ .backend = .{
         .buffer_offset = options.buffer_offset,
         .buffer_row_length = options.buffer_row_length orelse 0,
@@ -2553,7 +2540,7 @@ pub fn imageUploadRegionInit(options: Ctx.ImageUpload.Region.Options) Ctx.ImageU
     } };
 }
 
-pub fn bufferUploadRegionInit(options: Ctx.BufferUpload.Region.Options) Ctx.BufferUpload.Region {
+pub fn bufferUploadRegionInit(options: Gx.BufferUpload.Region.Options) Gx.BufferUpload.Region {
     return .{ .backend = .{
         .src_offset = options.src_offset,
         .dst_offset = options.dst_offset,
@@ -2561,7 +2548,7 @@ pub fn bufferUploadRegionInit(options: Ctx.BufferUpload.Region.Options) Ctx.Buff
     } };
 }
 
-pub fn attachmentInit(options: Ctx.Attachment.Options) Ctx.Attachment {
+pub fn attachmentInit(options: gpu.Attachment.Options) gpu.Attachment {
     return .{ .backend = .{
         .image_view = options.view.asBackendType(),
         .image_layout = .attachment_optimal,
@@ -2582,13 +2569,13 @@ pub fn attachmentInit(options: Ctx.Attachment.Options) Ctx.Attachment {
 }
 
 pub fn cmdBufUploadImage(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    dst: Ctx.ImageHandle,
-    src: Ctx.Buf(.{}),
-    regions: []const Ctx.ImageUpload.Region,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    dst: gpu.ImageHandle,
+    src: gpu.BufHandle(.{}),
+    regions: []const gpu.ImageUpload.Region,
 ) void {
-    const vk_regions = Ctx.ImageUpload.Region.asBackendSlice(regions);
+    const vk_regions = gpu.ImageUpload.Region.asBackendSlice(regions);
     self.backend.device.cmdCopyBufferToImage(
         cb.asBackendType(),
         src.asBackendType(),
@@ -2600,13 +2587,13 @@ pub fn cmdBufUploadImage(
 }
 
 pub fn cmdBufUploadBuffer(
-    self: *Ctx,
-    cb: Ctx.CmdBuf,
-    dst: Ctx.Buf(.{}),
-    src: Ctx.Buf(.{}),
-    regions: []const Ctx.BufferUpload.Region,
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    dst: Gx.Buf(.{}),
+    src: Gx.Buf(.{}),
+    regions: []const Gx.BufferUpload.Region,
 ) void {
-    const vk_regions = Ctx.BufferUpload.Region.asBackendSlice(regions);
+    const vk_regions = Gx.BufferUpload.Region.asBackendSlice(regions);
     self.backend.device.cmdCopyBuffer(
         cb.asBackendType(),
         src.asBackendType(),
@@ -2616,11 +2603,11 @@ pub fn cmdBufUploadBuffer(
     );
 }
 
-pub fn waitIdle(self: *const Ctx) void {
+pub fn waitIdle(self: *const Gx) void {
     self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
 }
 
-fn aspectToVk(self: Ctx.ImageAspect) vk.ImageAspectFlags {
+fn aspectToVk(self: gpu.ImageAspect) vk.ImageAspectFlags {
     return .{
         .color_bit = self.color,
         .depth_bit = self.depth,
@@ -2628,14 +2615,14 @@ fn aspectToVk(self: Ctx.ImageAspect) vk.ImageAspectFlags {
     };
 }
 
-fn filterToVk(filter: Ctx.Sampler.Options.Filter) vk.Filter {
+fn filterToVk(filter: gpu.Sampler.Options.Filter) vk.Filter {
     return switch (filter) {
         .nearest => .nearest,
         .linear => .linear,
     };
 }
 
-fn addressModeToVk(mode: Ctx.Sampler.Options.AddressMode) vk.SamplerAddressMode {
+fn addressModeToVk(mode: gpu.Sampler.Options.AddressMode) vk.SamplerAddressMode {
     return switch (mode) {
         .repeat => .repeat,
         .mirrored_repeat => .mirrored_repeat,
@@ -2701,12 +2688,12 @@ const Swapchain = struct {
     images: std.BoundedArray(vk.Image, max_swapchain_depth),
     views: std.BoundedArray(vk.ImageView, max_swapchain_depth),
     swap_extent: vk.Extent2D,
-    external_framebuf_size: Ctx.Extent2D,
+    external_framebuf_size: gpu.Extent2D,
     out_of_date: bool = false,
 
     fn init(
         instance: vk.InstanceProxy,
-        framebuf_extent: Ctx.Extent2D,
+        framebuf_extent: gpu.Extent2D,
         device: vk.DeviceProxy,
         physical_device: PhysicalDevice,
         surface: vk.SurfaceKHR,
@@ -2815,7 +2802,7 @@ const Swapchain = struct {
         self.* = undefined;
     }
 
-    fn recreate(self: *@This(), gx: *Ctx, framebuf_extent: Ctx.Extent2D) void {
+    fn recreate(self: *@This(), gx: *Gx, framebuf_extent: gpu.Extent2D) void {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
 
@@ -2853,7 +2840,7 @@ const PhysicalDevice = struct {
     swap_extent: vk.Extent2D = undefined,
     surface_capabilities: vk.SurfaceCapabilitiesKHR = undefined,
     composite_alpha: vk.CompositeAlphaFlagsKHR = undefined,
-    ty: Ctx.Device.Kind = undefined,
+    ty: gpu.Device.Kind = undefined,
     min_uniform_buffer_offset_alignment: u16 = undefined,
     min_storage_buffer_offset_alignment: u16 = undefined,
     max_draw_indirect_count: u32 = undefined,
@@ -3023,7 +3010,7 @@ inline fn setName(
     debug_messenger: vk.DebugUtilsMessengerEXT,
     device: vk.DeviceProxy,
     object: anytype,
-    debug_name: Ctx.DebugName,
+    debug_name: gpu.DebugName,
 ) void {
     if (debug_messenger == .null_handle) return;
 
