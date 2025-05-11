@@ -1712,7 +1712,7 @@ pub const ShaderModule = enum(u64) {
 
     pub const Options = struct {
         name: DebugName,
-        spv: []const u32,
+        ir: []const u32,
     };
 
     pub fn init(gx: *Ctx, options: @This().Options) @This() {

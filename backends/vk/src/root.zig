@@ -1927,8 +1927,8 @@ fn pipelineDestroy(self: *Ctx, pipeline: Ctx.Pipeline) void {
 
 fn shaderModuleCreate(self: *Ctx, options: Ctx.ShaderModule.Options) Ctx.ShaderModule {
     const module = self.backend.device.createShaderModule(&.{
-        .code_size = options.spv.len * @sizeOf(u32),
-        .p_code = options.spv.ptr,
+        .code_size = options.ir.len * @sizeOf(u32),
+        .p_code = options.ir.ptr,
     }, null) catch |err| @panic(@errorName(err));
     setName(
         self.backend.debug_messenger,
