@@ -715,9 +715,9 @@ pub fn deinit(self: *Gx, gpa: Allocator) void {
 pub fn bufCreate(
     self: *Gx,
     name: gpu.DebugName,
-    kind: Gx.BufKind,
+    kind: gpu.BufKind,
     size: u64,
-) btypes.DedicatedAllocation(Gx.DedicatedBuf(.{})) {
+) btypes.DedicatedAllocation(gpu.Buf(.{})) {
     // Create the buffer
     const usage_flags = bufUsageFlagsFromKind(kind);
     const buffer = self.backend.device.createBuffer(&.{
@@ -761,7 +761,7 @@ pub fn bufCreate(
     // Return the dedicated buffer
     return .{
         .dedicated = .{
-            .buf = .fromBackendType(buffer),
+            .handle = .fromBackendType(buffer),
             .memory = .fromBackendType(memory),
         },
         .size = reqs.size,
@@ -940,6 +940,7 @@ pub fn pipelineLayoutCreate(
             .stage_flags = .{
                 .vertex_bit = desc.stages.vertex,
                 .fragment_bit = desc.stages.fragment,
+                .compute_bit = desc.stages.compute,
             },
             .p_immutable_samplers = null,
         }) catch @panic("OOB");
@@ -1080,6 +1081,14 @@ pub fn cmdBufDraw(
     );
 }
 
+pub fn cmdBufDispatch(
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    options: gpu.CmdBuf.DispatchOptions,
+) void {
+    self.backend.device.cmdDispatch(cb.asBackendType(), options.x, options.y, options.z);
+}
+
 pub fn cmdBufSetViewport(
     self: *Gx,
     cb: gpu.CmdBuf,
@@ -1112,6 +1121,13 @@ pub fn cmdBufSetScissor(
     }});
 }
 
+fn pipelineKindToVk(self: gpu.Pipeline.Kind) vk.PipelineBindPoint {
+    return switch (self) {
+        .graphics => .graphics,
+        .compute => .compute,
+    };
+}
+
 pub fn cmdBufBindPipeline(
     self: *Gx,
     cb: gpu.CmdBuf,
@@ -1119,7 +1135,7 @@ pub fn cmdBufBindPipeline(
 ) void {
     self.backend.device.cmdBindPipeline(
         cb.asBackendType(),
-        .graphics,
+        pipelineKindToVk(pipeline.kind),
         pipeline.handle.asBackendType(),
     );
 }
@@ -1132,7 +1148,7 @@ pub fn cmdBufBindDescSet(
 ) void {
     self.backend.device.cmdBindDescriptorSets(
         cb.asBackendType(),
-        .graphics,
+        pipelineKindToVk(pipeline.kind),
         pipeline.layout.asBackendType(),
         0,
         1,
@@ -1940,7 +1956,7 @@ pub fn shaderModuleDestroy(self: *Gx, module: gpu.ShaderModule) void {
     self.backend.device.destroyShaderModule(module.asBackendType(), null);
 }
 
-pub fn pipelinesCreate(self: *Gx, cmds: []const gpu.Pipeline.InitCmd) void {
+pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphicsCmd) void {
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
         .viewport,
@@ -2005,7 +2021,7 @@ pub fn pipelinesCreate(self: *Gx, cmds: []const gpu.Pipeline.InitCmd) void {
     };
 
     // Pipeline create info
-    const max_shader_stages = gpu.Pipeline.InitCmd.Stages.max_stages;
+    const max_shader_stages = gpu.Pipeline.InitGraphicsCmd.Stages.max_stages;
     var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
@@ -2115,11 +2131,51 @@ pub fn pipelinesCreate(self: *Gx, cmds: []const gpu.Pipeline.InitCmd) void {
         cmd.result.* = .{
             .layout = cmd.layout.handle,
             .handle = .fromBackendType(pipeline),
+            .kind = .graphics,
         };
     }
 }
 
-pub fn transitionImageColorAttachmentToPresent(
+pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeCmd) void {
+    var pipeline_infos: std.BoundedArray(vk.ComputePipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
+    for (cmds) |cmd| {
+        pipeline_infos.appendAssumeCapacity(.{
+            .flags = .{},
+            .stage = .{
+                .stage = .{ .compute_bit = true },
+                .module = cmd.shader_module.asBackendType(),
+                .p_name = "main",
+            },
+            .layout = cmd.layout.handle.asBackendType(),
+            .base_pipeline_handle = .null_handle,
+            .base_pipeline_index = -1,
+        });
+    }
+
+    // Create the pipelines
+    var pipelines: [global_options.init_pipelines_buf_len]vk.Pipeline = undefined;
+    const create_result = self.backend.device.createComputePipelines(
+        self.backend.pipeline_cache,
+        @intCast(pipeline_infos.len),
+        &pipeline_infos.buffer,
+        null,
+        &pipelines,
+    ) catch |err| @panic(@errorName(err));
+    switch (create_result) {
+        .success => {},
+        else => |err| @panic(@tagName(err)),
+    }
+    for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
+        setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.name);
+        cmd.result.* = .{
+            .layout = cmd.layout.handle,
+            .handle = .fromBackendType(pipeline),
+            .kind = .compute,
+        };
+    }
+}
+
+fn transitionImageColorAttachmentToPresent(
     self: *Gx,
     cb: vk.CommandBuffer,
     image: vk.Image,
@@ -2152,7 +2208,7 @@ pub fn transitionImageColorAttachmentToPresent(
     });
 }
 
-pub fn transitionImageToColorAttachmentOptimal(
+fn transitionImageToColorAttachmentOptimal(
     self: *Gx,
     cb: vk.CommandBuffer,
     image: vk.Image,
@@ -2358,7 +2414,7 @@ pub const TimestampCalibration = struct {
     }
 };
 
-fn rangeToVk(range: gpu.ImageTransition.Range) vk.ImageSubresourceRange {
+fn rangeToVk(range: gpu.ImageBarrier.Range) vk.ImageSubresourceRange {
     return .{
         .aspect_mask = aspectToVk(range.aspect),
         .base_mip_level = range.base_mip_level,
@@ -2368,9 +2424,9 @@ fn rangeToVk(range: gpu.ImageTransition.Range) vk.ImageSubresourceRange {
     };
 }
 
-pub fn imageTransitionUndefinedToTransferDst(
-    options: gpu.ImageTransition.UndefinedToTransferDstOptions,
-) gpu.ImageTransition {
+pub fn imageBarrierUndefinedToTransferDst(
+    options: gpu.ImageBarrier.UndefinedToTransferDstOptions,
+) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = .{ .top_of_pipe_bit = true },
         .src_access_mask = .{},
@@ -2385,9 +2441,9 @@ pub fn imageTransitionUndefinedToTransferDst(
     } };
 }
 
-pub fn imageTransitionUndefinedToColorAttachment(
-    options: gpu.ImageTransition.UndefinedToColorAttachmentOptions,
-) gpu.ImageTransition {
+pub fn imageBarrierUndefinedToColorAttachment(
+    options: gpu.ImageBarrier.UndefinedToColorAttachmentOptions,
+) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = .{ .top_of_pipe_bit = true },
         .src_access_mask = .{},
@@ -2402,9 +2458,9 @@ pub fn imageTransitionUndefinedToColorAttachment(
     } };
 }
 
-pub fn imageTransitionUndefinedToColorAttachmentAfterRead(
-    options: gpu.ImageTransition.UndefinedToColorAttachmentOptionsAfterRead,
-) gpu.ImageTransition {
+pub fn imageBarrierUndefinedToColorAttachmentAfterRead(
+    options: gpu.ImageBarrier.UndefinedToColorAttachmentOptionsAfterRead,
+) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = .{
             .vertex_shader_bit = options.src_stage.vertex_shader,
@@ -2422,9 +2478,9 @@ pub fn imageTransitionUndefinedToColorAttachmentAfterRead(
     } };
 }
 
-pub fn imageTransitionTransferDstToReadOnly(
-    options: gpu.ImageTransition.TransferDstToReadOnlyOptions,
-) gpu.ImageTransition {
+pub fn imageBarrierTransferDstToReadOnly(
+    options: gpu.ImageBarrier.TransferDstToReadOnlyOptions,
+) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
@@ -2442,9 +2498,9 @@ pub fn imageTransitionTransferDstToReadOnly(
     } };
 }
 
-pub fn imageTransitionTransferDstToColorAttachment(
-    options: gpu.ImageTransition.TransferDstToColorAttachmentOptions,
-) gpu.ImageTransition {
+pub fn imageBarrierTransferDstToColorAttachment(
+    options: gpu.ImageBarrier.TransferDstToColorAttachmentOptions,
+) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
@@ -2459,9 +2515,9 @@ pub fn imageTransitionTransferDstToColorAttachment(
     } };
 }
 
-pub fn imageTransitionReadOnlyToColorAttachment(
-    options: gpu.ImageTransition.ReadOnlyToColorAttachmentOptions,
-) gpu.ImageTransition {
+pub fn imageBarrierReadOnlyToColorAttachment(
+    options: gpu.ImageBarrier.ReadOnlyToColorAttachmentOptions,
+) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = .{
             .vertex_shader_bit = options.src_stage.vertex_shader,
@@ -2479,9 +2535,9 @@ pub fn imageTransitionReadOnlyToColorAttachment(
     } };
 }
 
-pub fn imageTransitionColorAttachmentToReadOnly(
-    options: gpu.ImageTransition.ColorAttachmentToReadOnlyOptions,
-) gpu.ImageTransition {
+pub fn imageBarrierColorAttachmentToReadOnly(
+    options: gpu.ImageBarrier.ColorAttachmentToReadOnlyOptions,
+) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = .{ .color_attachment_output_bit = true },
         .src_access_mask = .{ .color_attachment_write_bit = true },
@@ -2499,20 +2555,112 @@ pub fn imageTransitionColorAttachmentToReadOnly(
     } };
 }
 
-pub fn cmdBufTransitionImages(
+pub fn bufBarrierComputeWriteToGraphicsRead(
+    options: gpu.BufBarrier.ComputeWriteToGraphicsReadOptions,
+) gpu.BufBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .compute_shader_bit = true },
+            .src_access_mask = .{ .shader_write_bit = true },
+            .dst_stage_mask = .{
+                .vertex_shader_bit = options.dst_stage.vertex_shader,
+                .fragment_shader_bit = options.dst_stage.fragment_shader,
+            },
+            .dst_access_mask = .{ .shader_read_bit = true },
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .buffer = options.handle.asBackendType(),
+            .offset = 0,
+            // I'm under the impression that in practice GPUs aren't using this value, so we're not
+            // going to complicate the API by asking for it. If this turns out to be incorrect we can
+            // always add it later, but this is further implied by the fact that AFAICT DX12 doesn't
+            // have a way to pass this value in.
+            .size = vk.WHOLE_SIZE,
+        },
+    };
+}
+
+pub fn bufBarrierComputeReadToGraphicsWrite(
+    options: gpu.BufBarrier.ComputeReadToGraphicsWriteOptions,
+) gpu.BufBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .compute_shader_bit = true },
+            .src_access_mask = .{ .shader_read_bit = true },
+            .dst_stage_mask = .{
+                .vertex_shader_bit = options.dst_stage.vertex_shader,
+                .fragment_shader_bit = options.dst_stage.fragment_shader,
+            },
+            .dst_access_mask = .{ .shader_write_bit = true },
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .buffer = options.handle.asBackendType(),
+            .offset = 0,
+            // See `bufBarrierComputeWriteToGraphicsRead`.
+            .size = vk.WHOLE_SIZE,
+        },
+    };
+}
+
+pub fn bufBarrierGraphicsReadToComputeWrite(
+    options: gpu.BufBarrier.GraphicsReadToComputeWriteOptions,
+) gpu.BufBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{
+                .vertex_shader_bit = options.src_stage.vertex_shader,
+                .fragment_shader_bit = options.src_stage.fragment_shader,
+            },
+            .src_access_mask = .{ .shader_read_bit = true },
+            .dst_stage_mask = .{ .compute_shader_bit = true },
+            .dst_access_mask = .{ .shader_write_bit = true },
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .buffer = options.handle.asBackendType(),
+            .offset = 0,
+            // See `bufBarrierComputeWriteToGraphicsRead`.
+            .size = vk.WHOLE_SIZE,
+        },
+    };
+}
+
+pub fn bufBarrierGraphicsWriteToComputeRead(
+    options: gpu.BufBarrier.GraphicsWriteToComputeReadOptions,
+) gpu.BufBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{
+                .vertex_shader_bit = options.src_stage.vertex_shader,
+                .fragment_shader_bit = options.src_stage.fragment_shader,
+            },
+            .src_access_mask = .{ .shader_write_bit = true },
+            .dst_stage_mask = .{ .compute_shader_bit = true },
+            .dst_access_mask = .{ .shader_read_bit = true },
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .buffer = options.handle.asBackendType(),
+            .offset = 0,
+            // See `bufBarrierComputeWriteToGraphicsRead`.
+            .size = vk.WHOLE_SIZE,
+        },
+    };
+}
+
+pub fn cmdBufBarriers(
     self: *Gx,
     cb: gpu.CmdBuf,
-    transitions: []const gpu.ImageTransition,
+    options: gpu.CmdBuf.BarriersOptions,
 ) void {
-    const barriers = gpu.ImageTransition.asBackendSlice(transitions);
+    const image_barriers = gpu.ImageBarrier.asBackendSlice(options.image);
+    const buffer_barriers = gpu.BufBarrier.asBackendSlice(options.buffer);
     self.backend.device.cmdPipelineBarrier2(cb.asBackendType(), &.{
         .dependency_flags = .{},
         .memory_barrier_count = 0,
         .p_memory_barriers = &.{},
-        .buffer_memory_barrier_count = 0,
-        .p_buffer_memory_barriers = &.{},
-        .image_memory_barrier_count = @intCast(barriers.len),
-        .p_image_memory_barriers = barriers.ptr,
+        .buffer_memory_barrier_count = @intCast(buffer_barriers.len),
+        .p_buffer_memory_barriers = buffer_barriers.ptr,
+        .image_memory_barrier_count = @intCast(image_barriers.len),
+        .p_image_memory_barriers = image_barriers.ptr,
     });
 }
 
@@ -3138,7 +3286,8 @@ pub const ShaderModule = vk.ShaderModule;
 pub const Pipeline = vk.Pipeline;
 pub const PipelineLayout = vk.PipelineLayout;
 pub const Sampler = vk.Sampler;
-pub const ImageTransition = vk.ImageMemoryBarrier2;
+pub const ImageBarrier = vk.ImageMemoryBarrier2;
+pub const BufBarrier = vk.BufferMemoryBarrier2;
 pub const ImageUploadRegion = vk.BufferImageCopy;
 pub const BufferUploadRegion = vk.BufferCopy;
 pub const Attachment = vk.RenderingAttachmentInfo;

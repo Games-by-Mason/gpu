@@ -21,11 +21,10 @@ pub const Options = struct {
     blocking_zone_color: tracy.Color = .dark_sea_green4,
     init_pipelines_buf_len: u32 = 16,
     init_desc_pool_buf_len: u32 = 16,
-    update_desc_sets_buf_len: u32 = 16,
+    update_desc_sets_buf_len: u32 = 32,
     combined_pipeline_layout_create_buf_len: u32 = 16,
 };
 
-// XXX: wish I could name options, could if I moved stuff
 pub const global_options: Options = root.gpu_options;
 
 pub const Gx = @import("Gx.zig");
@@ -107,7 +106,7 @@ pub fn Buf(kind: BufKind) type {
             });
             return .{
                 .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
-                .buf = @enumFromInt(@intFromEnum(result.dedicated.buf)),
+                .handle = @enumFromInt(@intFromEnum(result.dedicated.handle)),
             };
         }
 
@@ -118,8 +117,8 @@ pub fn Buf(kind: BufKind) type {
 
         pub inline fn as(self: @This(), comptime result_kind: BufKind) Buf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .usage = .{ .buf = result_kind } }),
-                .buf = self.buf.as(result_kind),
+                .memory = self.memory,
+                .handle = self.handle.as(result_kind),
             };
         }
     };
@@ -902,6 +901,12 @@ pub const ShaderModule = enum(u64) {
 pub const Pipeline = struct {
     handle: Handle,
     layout: Layout.Handle,
+    kind: Kind,
+
+    pub const Kind = enum {
+        graphics,
+        compute,
+    };
 
     pub const Handle = enum(u64) {
         _,
@@ -917,7 +922,7 @@ pub const Pipeline = struct {
         }
     };
 
-    pub const InitCmd = struct {
+    pub const InitGraphicsCmd = struct {
         pub const Stages = struct {
             pub const max_stages = std.meta.fields(@This()).len;
             vertex: ShaderModule,
@@ -947,9 +952,9 @@ pub const Pipeline = struct {
         stencil_attachment_format: ImageFormat,
     };
 
-    pub fn init(
+    pub fn initGraphics(
         gx: *Gx,
-        cmds: []const InitCmd,
+        cmds: []const InitGraphicsCmd,
     ) void {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
@@ -961,7 +966,23 @@ pub const Pipeline = struct {
                 assert(cmd.color_attachment_formats.len <= 4);
             }
         }
-        Backend.pipelinesCreate(gx, cmds);
+        Backend.pipelinesCreateGraphics(gx, cmds);
+    }
+
+    pub const InitComputeCmd = struct {
+        name: DebugName,
+        layout: Layout,
+        result: *Pipeline,
+        shader_module: ShaderModule,
+    };
+
+    pub fn initCompute(
+        gx: *Gx,
+        cmds: []const InitComputeCmd,
+    ) void {
+        const zone = tracy.Zone.begin(.{ .src = @src() });
+        defer zone.end();
+        Backend.pipelinesCreateCompute(gx, cmds);
     }
 
     pub fn deinit(self: @This(), gx: *Gx) void {
@@ -1002,13 +1023,14 @@ pub const Pipeline = struct {
                     storage_buffer: void,
                     combined_image_sampler: void,
                 };
-                pub const Stages = packed struct(u2) {
+                pub const Stages = packed struct {
                     vertex: bool = false,
                     fragment: bool = false,
+                    compute: bool = false,
                 };
 
                 name: []const u8,
-                kind: Kind,
+                kind: Desc.Kind,
                 count: u32 = 1,
                 stages: Stages,
             };
@@ -1253,8 +1275,8 @@ pub const Device = struct {
     surface_format: ImageFormat,
 };
 
-pub const ImageTransition = extern struct {
-    backend: Backend.ImageTransition,
+pub const ImageBarrier = extern struct {
+    backend: Backend.ImageBarrier,
 
     pub const Range = struct {
         aspect: ImageAspect,
@@ -1270,7 +1292,7 @@ pub const ImageTransition = extern struct {
     };
 
     pub fn undefinedToTransferDst(options: UndefinedToTransferDstOptions) @This() {
-        return Backend.imageTransitionUndefinedToTransferDst(options);
+        return Backend.imageBarrierUndefinedToTransferDst(options);
     }
 
     pub const UndefinedToColorAttachmentOptions = struct {
@@ -1279,7 +1301,7 @@ pub const ImageTransition = extern struct {
     };
 
     pub fn undefinedToColorAttachment(options: UndefinedToColorAttachmentOptions) @This() {
-        return Backend.imageTransitionUndefinedToColorAttachment(options);
+        return Backend.imageBarrierUndefinedToColorAttachment(options);
     }
 
     pub const UndefinedToColorAttachmentOptionsAfterRead = struct {
@@ -1294,7 +1316,7 @@ pub const ImageTransition = extern struct {
     };
 
     pub fn undefinedToColorAttachmentAfterRead(options: UndefinedToColorAttachmentOptionsAfterRead) @This() {
-        return Backend.imageTransitionUndefinedToColorAttachmentAfterRead(options);
+        return Backend.imageBarrierUndefinedToColorAttachmentAfterRead(options);
     }
 
     pub const TransferDstToReadOnlyOptions = struct {
@@ -1309,7 +1331,7 @@ pub const ImageTransition = extern struct {
     };
 
     pub fn transferDstToReadOnly(options: TransferDstToReadOnlyOptions) @This() {
-        return Backend.imageTransitionTransferDstToReadOnly(options);
+        return Backend.imageBarrierTransferDstToReadOnly(options);
     }
 
     pub const TransferDstToColorAttachmentOptions = struct {
@@ -1318,7 +1340,7 @@ pub const ImageTransition = extern struct {
     };
 
     pub fn transferDstToColorAttachment(options: TransferDstToColorAttachmentOptions) @This() {
-        return Backend.imageTransitionTransferDstToColorAttachment(options);
+        return Backend.imageBarrierTransferDstToColorAttachment(options);
     }
 
     pub const ReadOnlyToColorAttachmentOptions = struct {
@@ -1333,7 +1355,7 @@ pub const ImageTransition = extern struct {
     };
 
     pub fn readOnlyToColorAttachment(options: ReadOnlyToColorAttachmentOptions) @This() {
-        return Backend.imageTransitionReadOnlyToColorAttachment(options);
+        return Backend.imageBarrierReadOnlyToColorAttachment(options);
     }
 
     pub const ColorAttachmentToReadOnlyOptions = struct {
@@ -1348,7 +1370,70 @@ pub const ImageTransition = extern struct {
     };
 
     pub fn colorAttachmentToReadOnly(options: ColorAttachmentToReadOnlyOptions) @This() {
-        return Backend.imageTransitionColorAttachmentToReadOnly(options);
+        return Backend.imageBarrierColorAttachmentToReadOnly(options);
+    }
+
+    pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+};
+
+pub const BufBarrier = extern struct {
+    backend: Backend.BufBarrier,
+
+    pub const Access = union(enum) {
+        compute_write: void,
+        compute_read: void,
+    };
+
+    pub const ComputeWriteToGraphicsReadOptions = struct {
+        const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+        };
+        dst_stage: Stage,
+        handle: BufHandle(.{}),
+    };
+
+    pub fn computeWriteToGraphicsRead(options: ComputeWriteToGraphicsReadOptions) @This() {
+        return Backend.bufBarrierComputeWriteToGraphicsRead(options);
+    }
+
+    pub const ComputeReadToGraphicsWriteOptions = struct {
+        const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+        };
+        dst_stage: Stage,
+        handle: BufHandle(.{}),
+    };
+
+    pub fn computeReadToGraphicsWrite(options: ComputeReadToGraphicsWriteOptions) @This() {
+        return Backend.bufBarrierComputeReadToGraphicsWrite(options);
+    }
+
+    pub const GraphicsWriteToComputeReadOptions = struct {
+        const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+        };
+        src_stage: Stage,
+        handle: BufHandle(.{}),
+    };
+
+    pub fn graphicsWriteToComputeRead(options: GraphicsWriteToComputeReadOptions) @This() {
+        return Backend.bufBarrierGraphicsWriteToComputeRead(options);
+    }
+
+    pub const GraphicsReadToComputeWriteOptions = struct {
+        const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+        };
+        src_stage: Stage,
+        handle: BufHandle(.{}),
+    };
+
+    pub fn graphicsReadToComputeWrite(options: GraphicsReadToComputeWriteOptions) @This() {
+        return Backend.bufBarrierGraphicsReadToComputeWrite(options);
     }
 
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;
@@ -1486,7 +1571,11 @@ pub const CmdBuf = enum(u64) {
         Backend.cmdBufSubmit(gx, self);
     }
 
-    pub fn bindPipeline(self: @This(), gx: *Gx, pipeline: Pipeline) void {
+    pub fn bindPipeline(
+        self: @This(),
+        gx: *Gx,
+        pipeline: Pipeline,
+    ) void {
         const zone = Zone.begin(.{ .src = @src() });
         defer zone.end();
         Backend.cmdBufBindPipeline(gx, self, pipeline);
@@ -1516,8 +1605,25 @@ pub const CmdBuf = enum(u64) {
         Backend.cmdBufDraw(gx, self, options);
     }
 
-    pub fn transitionImages(self: @This(), gx: *Gx, transitions: []const ImageTransition) void {
-        Backend.cmdBufTransitionImages(gx, self, transitions);
+    pub const DispatchOptions = struct {
+        x: u32,
+        y: u32,
+        z: u32,
+    };
+
+    pub fn dispatch(self: @This(), gx: *Gx, options: DispatchOptions) void {
+        const zone = Zone.begin(.{ .src = @src() });
+        defer zone.end();
+        Backend.cmdBufDispatch(gx, self, options);
+    }
+
+    pub const BarriersOptions = struct {
+        image: []const ImageBarrier = &.{},
+        buffer: []const BufBarrier = &.{},
+    };
+
+    pub fn barriers(self: @This(), gx: *Gx, options: BarriersOptions) void {
+        Backend.cmdBufBarriers(gx, self, options);
     }
 
     pub fn uploadImage(self: @This(), gx: *Gx, options: ImageUpload) void {
