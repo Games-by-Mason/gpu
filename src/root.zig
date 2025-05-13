@@ -1292,16 +1292,22 @@ pub const ImageBarrier = extern struct {
     backend: Backend.ImageBarrier,
 
     pub const Range = struct {
-        aspect: ImageAspect,
-        base_mip_level: u32 = 0,
-        mip_level_count: u32 = 1,
-        base_array_layer: u32 = 0,
-        array_layer_count: u32 = 1,
+        pub const first: @This() = .{
+            .base_mip_level = 0,
+            .mip_levels = 1,
+            .base_array_layer = 0,
+            .array_layers = 1,
+        };
+        base_mip_level: u32,
+        mip_levels: u32,
+        base_array_layer: u32,
+        array_layers: u32,
     };
 
     pub const UndefinedToTransferDstOptions = struct {
         handle: ImageHandle,
         range: Range,
+        aspect: ImageAspect,
     };
 
     pub fn undefinedToTransferDst(options: UndefinedToTransferDstOptions) @This() {
@@ -1341,6 +1347,7 @@ pub const ImageBarrier = extern struct {
         handle: ImageHandle,
         range: Range,
         dst_stage: Stage,
+        aspect: ImageAspect,
     };
 
     pub fn transferDstToReadOnly(options: TransferDstToReadOnlyOptions) @This() {
@@ -1427,6 +1434,7 @@ pub const ImageBarrier = extern struct {
         range: Range,
         src_access: Access,
         dst_stage: Stage,
+        aspect: ImageAspect,
     };
 
     pub fn computeToReadOnly(options: ComputeToReadOnlyOptions) @This() {
@@ -1508,7 +1516,7 @@ pub const ImageUpload = struct {
             buffer_image_height: ?u32 = null,
             mip_level: u32 = 0,
             base_array_layer: u32 = 0,
-            array_layer_count: u32 = 1,
+            array_layers: u32 = 1,
             image_offset: Offset = .{ .x = 0, .y = 0, .z = 0 },
             image_extent: ImageExtent,
         };
@@ -1526,8 +1534,8 @@ pub const ImageUpload = struct {
 
     dst: ImageHandle,
     src: BufHandle(.{ .transfer_src = true }),
-    base_mip_level: u32 = 0,
-    mip_level_count: u32 = 1,
+    base_mip_level: u32,
+    mip_levels: u32,
     regions: []const Region,
 };
 

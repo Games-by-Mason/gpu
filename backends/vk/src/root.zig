@@ -2443,13 +2443,13 @@ pub const TimestampCalibration = struct {
     }
 };
 
-fn rangeToVk(range: gpu.ImageBarrier.Range) vk.ImageSubresourceRange {
+fn rangeToVk(range: gpu.ImageBarrier.Range, aspect: gpu.ImageAspect) vk.ImageSubresourceRange {
     return .{
-        .aspect_mask = aspectToVk(range.aspect),
+        .aspect_mask = aspectToVk(aspect),
         .base_mip_level = range.base_mip_level,
-        .level_count = range.mip_level_count,
+        .level_count = range.mip_levels,
         .base_array_layer = range.base_array_layer,
-        .layer_count = range.array_layer_count,
+        .layer_count = range.array_layers,
     };
 }
 
@@ -2466,7 +2466,7 @@ pub fn imageBarrierUndefinedToTransferDst(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, options.aspect),
     } };
 }
 
@@ -2483,7 +2483,7 @@ pub fn imageBarrierUndefinedToColorAttachment(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
     } };
 }
 
@@ -2503,7 +2503,7 @@ pub fn imageBarrierUndefinedToColorAttachmentAfterRead(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
     } };
 }
 
@@ -2523,7 +2523,7 @@ pub fn imageBarrierTransferDstToReadOnly(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, options.aspect),
     } };
 }
 
@@ -2540,7 +2540,7 @@ pub fn imageBarrierTransferDstToColorAttachment(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
     } };
 }
 
@@ -2560,7 +2560,7 @@ pub fn imageBarrierReadOnlyToColorAttachment(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
     } };
 }
 
@@ -2580,7 +2580,7 @@ pub fn imageBarrierColorAttachmentToReadOnly(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, options.aspect),
     } };
 }
 
@@ -2600,7 +2600,7 @@ pub fn imageBarrierColorAttachmentToCompute(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
     } };
 }
 
@@ -2620,7 +2620,7 @@ pub fn imageBarrierComputeToColorAttachment(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
     } };
 }
 
@@ -2643,7 +2643,7 @@ pub fn imageBarrierComputeToReadOnly(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range),
+        .subresource_range = rangeToVk(options.range, options.aspect),
     } };
 }
 
@@ -2765,7 +2765,7 @@ pub fn imageUploadRegionInit(options: gpu.ImageUpload.Region.Options) gpu.ImageU
             .aspect_mask = aspectToVk(options.aspect),
             .mip_level = options.mip_level,
             .base_array_layer = options.base_array_layer,
-            .layer_count = options.array_layer_count,
+            .layer_count = options.array_layers,
         },
         .image_offset = .{
             .x = options.image_offset.x,
