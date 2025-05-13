@@ -556,9 +556,20 @@ fn containsBits(self: anytype, other: @TypeOf(self)) bool {
     return self_bits & other_bits == other_bits;
 }
 
+// Good reference for support on DX12 level hardware:
+// - https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/hardware-support-for-direct3d-12-1-formats
 pub const ImageFormat = enum(i32) {
     undefined = Backend.named_image_formats.undefined,
+
+    r8g8b8a8_unorm = Backend.named_image_formats.r8g8b8a8_unorm,
+    r8g8b8a8_snorm = Backend.named_image_formats.r8g8b8a8_snorm,
+    r8g8b8a8_uscaled = Backend.named_image_formats.r8g8b8a8_uscaled,
+    r8g8b8a8_sscaled = Backend.named_image_formats.r8g8b8a8_sscaled,
+    r8g8b8a8_uint = Backend.named_image_formats.r8g8b8a8_uint,
+    r8g8b8a8_sint = Backend.named_image_formats.r8g8b8a8_sint,
+
     r8g8b8a8_srgb = Backend.named_image_formats.r8g8b8a8_srgb,
+
     d24_unorm_s8_uint = Backend.named_image_formats.d24_unorm_s8_uint,
 
     _,
@@ -1373,6 +1384,53 @@ pub const ImageBarrier = extern struct {
 
     pub fn colorAttachmentToReadOnly(options: ColorAttachmentToReadOnlyOptions) @This() {
         return Backend.imageBarrierColorAttachmentToReadOnly(options);
+    }
+
+    pub const ColorAttachmentToComputeOptions = struct {
+        pub const Access = struct {
+            read: bool,
+            write: bool,
+        };
+        handle: ImageHandle,
+        range: Range,
+        dst_access: Access,
+    };
+
+    pub fn colorAttachmentToCompute(options: ColorAttachmentToComputeOptions) @This() {
+        return Backend.imageBarrierColorAttachmentToCompute(options);
+    }
+
+    pub const ComputeToColorAttachmentOptions = struct {
+        pub const Access = struct {
+            read: bool,
+            write: bool,
+        };
+        handle: ImageHandle,
+        range: Range,
+        src_access: Access,
+    };
+
+    pub fn computeToColorAttachment(options: ComputeToColorAttachmentOptions) @This() {
+        return Backend.imageBarrierComputeToColorAttachment(options);
+    }
+
+    pub const ComputeToReadOnlyOptions = struct {
+        pub const Stage = packed struct {
+            vertex_shader: bool = false,
+            fragment_shader: bool = false,
+        };
+        pub const Access = struct {
+            read: bool,
+            write: bool,
+        };
+        handle: ImageHandle,
+        range: Range,
+        src_access: Access,
+        dst_stage: Stage,
+    };
+
+    pub fn computeToReadOnly(options: ComputeToReadOnlyOptions) @This() {
+        return Backend.imageBarrierComputeToReadOnly(options);
     }
 
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;

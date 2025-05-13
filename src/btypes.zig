@@ -11,7 +11,16 @@ pub const BackendInitResult = struct {
 
 pub const NamedImageFormats = struct {
     undefined: i32,
+
+    r8g8b8a8_unorm: i32,
+    r8g8b8a8_snorm: i32,
+    r8g8b8a8_uscaled: i32,
+    r8g8b8a8_sscaled: i32,
+    r8g8b8a8_uint: i32,
+    r8g8b8a8_sint: i32,
+
     r8g8b8a8_srgb: i32,
+
     d24_unorm_s8_uint: i32,
 };
 

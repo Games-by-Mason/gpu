@@ -935,7 +935,7 @@ pub fn pipelineLayoutCreate(
                 .uniform_buffer => .uniform_buffer,
                 .storage_buffer => .storage_buffer,
                 .combined_image_sampler => .combined_image_sampler,
-                .storage_image => .combined_image_sampler,
+                .storage_image => .storage_image,
             },
             .descriptor_count = desc.count,
             .stage_flags = .{
@@ -1221,7 +1221,7 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
 
         // Descriptor count must be greater than zero, so skip any that are zero
         // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkDescriptorPoolSize.html
-        var sizes: std.BoundedArray(vk.DescriptorPoolSize, 3) = .{};
+        var sizes: std.BoundedArray(vk.DescriptorPoolSize, 4) = .{};
         if (uniform_buffers > 0) sizes.appendAssumeCapacity(.{
             .type = .uniform_buffer,
             .descriptor_count = uniform_buffers,
@@ -1870,7 +1870,7 @@ pub fn memoryCreate(self: *Gx, options: btypes.MemoryCreateOptions) gpu.MemoryUn
                     .p_create_info = &.{
                         .flags = .{},
                         .image_type = .@"2d",
-                        .format = .r8g8b8a8_uint, // Supported by all DX12 hardware
+                        .format = .r8g8b8a8_srgb, // Supported by all DX12 hardware
                         .extent = .{
                             .width = 16,
                             .height = 16,
@@ -2576,6 +2576,69 @@ pub fn imageBarrierColorAttachmentToReadOnly(
         },
         .dst_access_mask = .{ .shader_read_bit = true },
         .old_layout = .attachment_optimal,
+        .new_layout = .read_only_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range),
+    } };
+}
+
+pub fn imageBarrierColorAttachmentToCompute(
+    options: gpu.ImageBarrier.ColorAttachmentToComputeOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = .{ .color_attachment_output_bit = true },
+        .src_access_mask = .{ .color_attachment_write_bit = true },
+        .dst_stage_mask = .{ .compute_shader_bit = true },
+        .dst_access_mask = .{
+            .shader_read_bit = options.dst_access.read,
+            .shader_write_bit = options.dst_access.write,
+        },
+        .old_layout = .attachment_optimal,
+        .new_layout = .general,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range),
+    } };
+}
+
+pub fn imageBarrierComputeToColorAttachment(
+    options: gpu.ImageBarrier.ComputeToColorAttachmentOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = .{ .compute_shader_bit = true },
+        .src_access_mask = .{
+            .shader_read_bit = options.src_access.read,
+            .shader_write_bit = options.src_access.write,
+        },
+        .dst_stage_mask = .{ .color_attachment_output_bit = true },
+        .dst_access_mask = .{ .color_attachment_write_bit = true },
+        .old_layout = .general,
+        .new_layout = .attachment_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range),
+    } };
+}
+
+pub fn imageBarrierComputeToReadOnly(
+    options: gpu.ImageBarrier.ComputeToReadOnlyOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = .{ .compute_shader_bit = true },
+        .src_access_mask = .{
+            .shader_read_bit = options.src_access.read,
+            .shader_write_bit = options.src_access.write,
+        },
+        .dst_stage_mask = .{
+            .vertex_shader_bit = options.dst_stage.vertex_shader,
+            .fragment_shader_bit = options.dst_stage.fragment_shader,
+        },
+        .dst_access_mask = .{ .shader_read_bit = true },
+        .old_layout = .general,
         .new_layout = .read_only_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
@@ -3326,6 +3389,15 @@ pub const memory_none: Memory = .null_handle;
 
 pub const named_image_formats: btypes.NamedImageFormats = .{
     .undefined = @intFromEnum(vk.Format.undefined),
+
+    .r8g8b8a8_unorm = @intFromEnum(vk.Format.r8g8b8a8_unorm),
+    .r8g8b8a8_snorm = @intFromEnum(vk.Format.r8g8b8a8_snorm),
+    .r8g8b8a8_uscaled = @intFromEnum(vk.Format.r8g8b8a8_uscaled),
+    .r8g8b8a8_sscaled = @intFromEnum(vk.Format.r8g8b8a8_sscaled),
+    .r8g8b8a8_uint = @intFromEnum(vk.Format.r8g8b8a8_uint),
+    .r8g8b8a8_sint = @intFromEnum(vk.Format.r8g8b8a8_sint),
+
     .r8g8b8a8_srgb = @intFromEnum(vk.Format.r8g8b8a8_srgb),
+
     .d24_unorm_s8_uint = @intFromEnum(vk.Format.d24_unorm_s8_uint),
 };
