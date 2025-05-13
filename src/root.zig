@@ -1022,6 +1022,7 @@ pub const Pipeline = struct {
                     },
                     storage_buffer: void,
                     combined_image_sampler: void,
+                    storage_image: void,
                 };
                 pub const Stages = packed struct {
                     vertex: bool = false,
@@ -1211,6 +1212,7 @@ pub const DescSet = enum(u64) {
             storage_buf: BufHandle(.{ .storage = true }).View,
             uniform_buf: BufHandle(.{ .uniform = true }).View,
             combined_image_sampler: CombinedImageSampler,
+            storage_image: ImageView,
         };
 
         set: DescSet,
