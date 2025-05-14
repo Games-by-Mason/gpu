@@ -2,6 +2,10 @@
 
 A light graphics API abstraction designed for bindless rendering on desktop and eventually console.
 
+# Status
+
+Work in progress, not yet usable. Check back soon.
+
 ## Goals
 
 * Support the writing of renderers that can easily be ported to multiple desktop/console platforms
@@ -16,10 +20,6 @@ A light graphics API abstraction designed for bindless rendering on desktop and 
 	* These approaches to rendering are typically inefficient, and supporting them requires a much larger API surface that is beyond the scope of this library.
 * Mobile/web support are not a priority.
 	* There's nothing stopping you from writing a mobile or web backend, but these platforms are not factored into the API design. As such, you may have to emulate features that these platforms are late to adopt.
-
-# Status
-
-Work in progress, not yet usable. Check back soon.
 
 # Backends
 
