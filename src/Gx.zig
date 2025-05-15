@@ -91,8 +91,6 @@ pub const Options = struct {
     },
     /// The number of frames in flight.
     frames_in_flight: u4,
-    /// The initial framebuffer extent.
-    framebuf_extent: Extent2D,
     /// The device type rankings.
     device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
     /// Whether or not to enable timestamp queries.

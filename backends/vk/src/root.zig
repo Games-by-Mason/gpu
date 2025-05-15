@@ -548,16 +548,6 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
 
     timestamp_zone.end();
 
-    const swapchain = Swapchain.init(
-        instance_proxy,
-        options.framebuf_extent,
-        device,
-        best_physical_device,
-        surface,
-        .null_handle,
-        debug_messenger,
-    );
-
     const command_pools_zone = tracy.Zone.begin(.{ .name = "create command pools", .src = @src() });
     var cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool = undefined;
     for (&cmd_pools, 0..) |*pool, i| {
@@ -640,7 +630,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .pipeline_cache = pipeline_cache,
             .instance = instance_proxy,
             .device = device,
-            .swapchain = swapchain,
+            .swapchain = .empty,
             .cmd_pools = cmd_pools,
             .image_availables = image_availables,
             .ready_for_present = ready_for_present,
@@ -2919,6 +2909,21 @@ fn findMemoryType(
 }
 
 const Swapchain = struct {
+    pub const empty: @This() = .{
+        .swapchain = .null_handle,
+        .images = .{},
+        .views = .{},
+        .swap_extent = .{
+            .width = 0,
+            .height = 0,
+        },
+        .external_framebuf_size = .{
+            .width = 0,
+            .height = 0,
+        },
+        .out_of_date = true,
+    };
+
     // In practice, there should typically be only two or three.
     const max_swapchain_depth = 8;
 
@@ -3052,7 +3057,9 @@ const Swapchain = struct {
         //
         // If this causes us issues, and the extension still isn't widely supported, we can queue up
         // retired swapchains and wait a few seconds before deleting them or something.
-        gx.backend.device.deviceWaitIdle() catch |err| std.debug.panic("vkDeviceWaitIdle failed: {}", .{err});
+        if (self.swapchain != .null_handle) {
+            gx.backend.device.deviceWaitIdle() catch |err| std.debug.panic("vkDeviceWaitIdle failed: {}", .{err});
+        }
         const retired = self.swapchain;
         self.destroyEverythingExceptSwapchain(gx.backend.device);
         self.* = .init(
@@ -3064,7 +3071,9 @@ const Swapchain = struct {
             retired,
             gx.backend.debug_messenger,
         );
-        gx.backend.device.destroySwapchainKHR(retired, null);
+        if (self.swapchain != .null_handle) {
+            gx.backend.device.destroySwapchainKHR(retired, null);
+        }
     }
 };
 
