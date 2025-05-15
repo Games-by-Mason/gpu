@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const math = std.math;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const vk = @import("vulkan");
 const btypes = gpu.btypes;
 const log = std.log.scoped(.gpu);
 const gpu = @import("gpu");
@@ -13,7 +12,7 @@ const Zone = tracy.Zone;
 const TracyQueue = tracy.GpuQueue;
 const global_options = gpu.global_options;
 
-pub const vulkan = @import("vulkan");
+pub const vk = @import("vulkan");
 
 const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
@@ -47,10 +46,6 @@ image_index: ?u32 = null,
 tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
 
 pub const Options = struct {
-    pub const GetInstanceProcAddress = *const fn (
-        instance: vk.Instance,
-        name: [*:0]const u8,
-    ) ?*const fn () callconv(.C) void;
     const CreateSurfaceError = error{
         OutOfHostMemory,
         OutOfDeviceMemory,
@@ -59,7 +54,7 @@ pub const Options = struct {
     };
 
     instance_extensions: [][*:0]const u8,
-    getInstanceProcAddress: GetInstanceProcAddress,
+    getInstanceProcAddress: vk.PfnGetInstanceProcAddr,
     surface_context: ?*anyopaque,
     createSurface: *const fn (
         instance: vk.Instance,
@@ -3181,7 +3176,7 @@ fn vkDebugCallback(
     message_type: vk.DebugUtilsMessageTypeFlagsEXT,
     data: [*c]const vk.DebugUtilsMessengerCallbackDataEXT,
     user_data: ?*anyopaque,
-) callconv(.C) vk.Bool32 {
+) callconv(vk.vulkan_call_conv) vk.Bool32 {
     var level: std.log.Level = if (severity.error_bit_ext)
         .err
     else if (severity.warning_bit_ext)
