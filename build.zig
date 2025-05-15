@@ -55,4 +55,40 @@ pub fn build(b: *std.Build) void {
     });
     const docs_step = b.step("docs", "Build the docs");
     docs_step.dependOn(&install_docs.step);
+
+    buildVulkanBackend(b, target, optimize, gpu);
+}
+
+fn buildVulkanBackend(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    gpu: *std.Build.Module,
+) void {
+    const native_target = b.resolveTargetQuery(.{});
+
+    const vk_backend = b.addModule("VkBackend", .{
+        .root_source_file = b.path("backends/vk/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Needed for `setenv`
+    if (target.result.os.tag != .windows) {
+        vk_backend.link_libc = true;
+    }
+
+    vk_backend.addImport("gpu", gpu);
+
+    const vulkan_headers = b.dependency("vulkan_headers", .{});
+    const vulkan_zig = b.dependency("vulkan_zig", .{
+        .target = native_target,
+        .optimize = optimize,
+    });
+    const generator = vulkan_zig.artifact("vulkan-zig-generator");
+    var run_generator = b.addRunArtifact(generator);
+    run_generator.addFileArg(vulkan_headers.path("registry/vk.xml"));
+    const vk_zig = run_generator.addOutputFileArg("vk.zig");
+    const vulkan = b.addModule("vulkan", .{ .root_source_file = vk_zig });
+    vk_backend.addImport("vulkan", vulkan);
 }
