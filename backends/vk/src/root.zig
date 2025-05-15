@@ -60,7 +60,7 @@ pub const Options = struct {
         instance: vk.Instance,
         context: ?*anyopaque,
         allocation_callbacks: ?*const vk.AllocationCallbacks,
-    ) CreateSurfaceError!vk.SurfaceKHR,
+    ) vk.SurfaceKHR,
     /// Allows you to blacklist problematic layers by setting the `VK_LAYERS_DISABLE` environment
     /// variable at runtime.
     ///
@@ -251,7 +251,10 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         instance_proxy.handle,
         options.backend.surface_context,
         null,
-    ) catch |err| @panic(@errorName(err));
+    );
+    if (surface == .null_handle) {
+        @panic("create surface failed");
+    }
     surface_zone.end();
 
     const devices_zone = tracy.Zone.begin(.{ .name = "pick device", .src = @src() });
