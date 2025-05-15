@@ -21,6 +21,7 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "backends",
         "LICENSE",
     },
 }
