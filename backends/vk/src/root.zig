@@ -3215,6 +3215,9 @@ fn vkDebugCallback(
             // Don't warn us that validation is on every time validation is on, but do log it as
             // debug
             615892639, 2132353751, 1734198062 => level = .debug,
+            // Don't warn us that the swapchain is out of date, we handle this it's not an
+            // exceptional situation!
+            1762589289 => level = .debug,
             // Don't warn us about skipping unsupported drivers, but do log it as debug
             0 => if (d.*.p_message_id_name) |name| {
                 if (std.mem.eql(u8, std.mem.span(name), "Loader Message")) {

@@ -1511,7 +1511,7 @@ pub const ImageUpload = struct {
     pub const Region = extern struct {
         pub const Options = struct {
             aspect: ImageAspect,
-            buffer_offset: u64 = 0,
+            buffer_offset: u64,
             buffer_row_length: ?u32 = null,
             buffer_image_height: ?u32 = null,
             mip_level: u32 = 0,
