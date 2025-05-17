@@ -1530,6 +1530,30 @@ pub const Attachment = struct {
 pub const CmdBuf = enum(u64) {
     _,
 
+    pub const Optional = enum(u64) {
+        none = @intFromEnum(Backend.cmd_buf_none),
+        _,
+
+        pub fn unwrap(self: @This()) ?CmdBuf {
+            if (self == .none) return null;
+            return @enumFromInt(@intFromEnum(self));
+        }
+
+        pub inline fn fromBackendType(value: Backend.CmdBuf) @This() {
+            comptime assert(@sizeOf(Backend.CmdBuf) == @sizeOf(@This()));
+            return @enumFromInt(@intFromEnum(value));
+        }
+
+        pub inline fn asBackendType(self: @This()) Backend.CmdBuf {
+            comptime assert(@sizeOf(Backend.CmdBuf) == @sizeOf(@This()));
+            return @enumFromInt(@intFromEnum(self));
+        }
+
+        pub fn deinit(self: @This(), gx: *Gx) void {
+            if (self.unwrap()) |some| some.deinit(gx);
+        }
+    };
+
     /// A unique ID used for Tracy queries.
     pub const TracyQueryId = packed struct(u16) {
         pub const cap = std.math.maxInt(@FieldType(@This(), "index"));
@@ -1565,6 +1589,12 @@ pub const CmdBuf = enum(u64) {
         const cb = Backend.cmdBufCreate(gx, loc);
         cb.beginZoneFromPtr(gx, loc);
         return cb;
+    }
+
+    pub fn asOptional(self: @This()) Optional {
+        const result: Optional = @enumFromInt(@intFromEnum(self));
+        assert(result != .none);
+        return result;
     }
 
     pub const BeginRenderingOptions = struct {

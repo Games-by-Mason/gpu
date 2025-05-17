@@ -3396,6 +3396,7 @@ pub const Attachment = vk.RenderingAttachmentInfo;
 pub const ImageFormat = vk.Format;
 
 pub const memory_none: Memory = .null_handle;
+pub const cmd_buf_none: CmdBuf = .null_handle;
 
 pub const named_image_formats: btypes.NamedImageFormats = .{
     .undefined = @intFromEnum(vk.Format.undefined),
