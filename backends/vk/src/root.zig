@@ -1710,7 +1710,7 @@ fn allocImage(
         .handle = .fromBackendType(image),
         .view = createImageView(self, name, image, options),
         .dedicated_memory = .{
-            .unsized = .fromBackendType(memory),
+            .handle = .fromBackendType(memory),
             .size = reqs.size,
         },
     };
@@ -1771,7 +1771,7 @@ pub fn imageCreate(
                     name,
                     image,
                     auto.offset.*,
-                    auto.memory.unsized.asBackendType(),
+                    auto.memory.handle.asBackendType(),
                     image_options,
                 );
                 auto.offset.* = new_offset;
@@ -1796,7 +1796,7 @@ pub fn imageCreate(
                 name,
                 image,
                 offset,
-                place.memory.unsized.asBackendType(),
+                place.memory.handle.asBackendType(),
                 image_options,
             );
         },
@@ -1838,7 +1838,7 @@ pub fn imageMemoryRequirements(
     };
 }
 
-pub fn memoryCreate(self: *Gx, options: btypes.MemoryCreateOptions) gpu.MemoryUnsized {
+pub fn memoryCreate(self: *Gx, options: btypes.MemoryCreateOptions) gpu.MemoryHandle {
     // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
     // able to do this, but we don't need to actually bind it to any memory it's just a handle.
     const memory_type_bits = switch (options.usage) {
@@ -1947,7 +1947,7 @@ pub fn memoryCreate(self: *Gx, options: btypes.MemoryCreateOptions) gpu.MemoryUn
     return .fromBackendType(memory);
 }
 
-pub fn memoryDestroy(self: *Gx, memory: gpu.MemoryUnsized) void {
+pub fn memoryDestroy(self: *Gx, memory: gpu.MemoryHandle) void {
     self.backend.device.freeMemory(memory.asBackendType(), null);
 }
 

@@ -82,7 +82,7 @@ pub const DebugName = struct {
 
 pub fn Buf(kind: BufKind) type {
     return struct {
-        memory: MemoryUnsized,
+        memory: MemoryHandle,
         handle: BufHandle(kind),
 
         pub const Options = struct {
@@ -126,7 +126,7 @@ pub fn Buf(kind: BufKind) type {
 
 pub fn ReadbackBuf(kind: BufKind) type {
     return struct {
-        memory: MemoryUnsized,
+        memory: MemoryHandle,
         handle: BufHandle(kind),
         data: []const u8,
 
@@ -180,7 +180,7 @@ pub fn ReadbackBuf(kind: BufKind) type {
 
 pub fn UploadBuf(kind: BufKind) type {
     return struct {
-        memory: MemoryUnsized,
+        memory: MemoryHandle,
         handle: BufHandle(kind),
         data: []volatile anyopaque,
 
@@ -357,14 +357,14 @@ pub fn BufHandle(kind: BufKind) type {
     };
 }
 
-pub const MemoryUnsized = enum(u64) {
+pub const MemoryHandle = enum(u64) {
     _,
 
     pub const Optional = enum(u64) {
         none = @intFromEnum(Backend.memory_none),
         _,
 
-        pub fn unwrap(self: @This()) ?MemoryUnsized {
+        pub fn unwrap(self: @This()) ?MemoryHandle {
             if (self == .none) return null;
             return @enumFromInt(@intFromEnum(self));
         }
@@ -412,7 +412,7 @@ pub const MemoryUnsized = enum(u64) {
 
 pub fn Memory(k: MemoryKind) type {
     return struct {
-        unsized: MemoryUnsized,
+        handle: MemoryHandle,
         size: u64,
 
         pub const kind = k;
@@ -466,13 +466,13 @@ pub fn Memory(k: MemoryKind) type {
                 .pool_name = tracy_gpu_pool,
             });
             return .{
-                .unsized = @enumFromInt(@intFromEnum(any)),
+                .handle = @enumFromInt(@intFromEnum(any)),
                 .size = options.size,
             };
         }
 
         pub fn deinit(self: @This(), gx: *Gx) void {
-            self.unsized.deinit(gx);
+            self.handle.deinit(gx);
         }
 
         pub inline fn as(
@@ -481,7 +481,7 @@ pub fn Memory(k: MemoryKind) type {
         ) Memory(result_kind) {
             MemoryKind.checkCast(kind, result_kind);
             return .{
-                .unsized = self.unsized,
+                .handle = self.handle,
                 .size = self.size,
             };
         }
@@ -510,44 +510,6 @@ pub const MemoryKind = union(enum) {
         }
     }
 };
-
-pub fn MemoryView(kind: MemoryKind) type {
-    return struct {
-        memory: MemoryUnsized(kind),
-        offset: u64,
-        size: u64,
-
-        pub inline fn as(
-            self: @This(),
-            comptime result_kind: MemoryKind,
-        ) MemoryView(result_kind) {
-            kind.checkCast(result_kind);
-            return .{
-                .memory = @enumFromInt(@intFromEnum(self.memory)),
-                .offset = self.offset,
-                .size = self.size,
-            };
-        }
-    };
-}
-
-pub fn MemoryViewUnsized(kind: MemoryKind) type {
-    return struct {
-        memory: MemoryUnsized(kind),
-        offset: u64,
-
-        pub inline fn as(
-            self: @This(),
-            comptime result_kind: MemoryKind,
-        ) MemoryViewUnsized(result_kind) {
-            MemoryKind.checkCast(kind, result_kind);
-            return .{
-                .memory = self.memory.as(result_kind),
-                .offset = self.offset,
-            };
-        }
-    };
-}
 
 fn containsBits(self: anytype, other: @TypeOf(self)) bool {
     const Int = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(self)));
@@ -659,7 +621,7 @@ pub fn Image(kind: ImageKind) type {
         /// just a duplicate of the image handle.
         view: ImageView,
         /// The memory for this image if it has a dedicated allocation.
-        dedicated_memory: MemoryUnsized.Optional,
+        dedicated_memory: MemoryHandle.Optional,
 
         pub const AllocOptions = union(enum) {
             /// Let the driver decide whether to bump allocate the image into the given buffer,
@@ -814,14 +776,14 @@ pub fn Image(kind: ImageKind) type {
             );
             if (result.dedicated_memory) |dedicated_memory| {
                 tracy.alloc(.{
-                    .ptr = @ptrFromInt(@intFromEnum(dedicated_memory.unsized)),
+                    .ptr = @ptrFromInt(@intFromEnum(dedicated_memory.handle)),
                     .size = dedicated_memory.size,
                     .pool_name = tracy_gpu_pool,
                 });
                 return .{
                     .handle = result.handle,
                     .view = result.view,
-                    .dedicated_memory = dedicated_memory.unsized.asOptional(),
+                    .dedicated_memory = dedicated_memory.handle.asOptional(),
                 };
             } else {
                 return .{
