@@ -28,7 +28,7 @@ pub const Options = struct {
 pub const global_options: Options = root.gpu_options;
 
 pub const Gx = @import("Gx.zig");
-pub const VolatileWriter = @import("VolatileWriter.zig");
+pub const Writer = @import("Writer.zig");
 
 pub const btypes = @import("btypes.zig");
 
@@ -241,8 +241,8 @@ pub fn UploadBuf(kind: BufKind) type {
             size: ?u64 = null,
         };
 
-        pub fn writer(self: @This(), options: WriterOptions) VolatileWriter {
-            return (VolatileWriter{
+        pub fn writer(self: @This(), options: WriterOptions) Writer {
+            return (Writer{
                 .write_only_memory = self.data.ptr,
                 .pos = 0,
                 .size = self.data.len,
