@@ -2803,6 +2803,9 @@ pub fn cmdBufUploadImage(
     src: gpu.BufHandle(.{}),
     regions: []const gpu.ImageUpload.Region,
 ) void {
+    // `cmdCopyImage` has been superseded by `cmdCopyImage2`, however there's no benefit to the
+    // new API unless you need a `pNext` chain, and as such we're opting to just save the extra
+    // bytes.
     const vk_regions = gpu.ImageUpload.Region.asBackendSlice(regions);
     self.backend.device.cmdCopyBufferToImage(
         cb.asBackendType(),
@@ -2821,6 +2824,9 @@ pub fn cmdBufUploadBuffer(
     src: Gx.Buf(.{}),
     regions: []const Gx.BufferUpload.Region,
 ) void {
+    // `cmdCopyBuffer` has been superseded by `cmdCopyBuffer2`, however there's no benefit to the
+    // new API unless you need a `pNext` chain, and as such we're opting to just save the extra
+    // bytes.
     const vk_regions = Gx.BufferUpload.Region.asBackendSlice(regions);
     self.backend.device.cmdCopyBuffer(
         cb.asBackendType(),
