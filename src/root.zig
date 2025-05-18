@@ -1190,7 +1190,16 @@ pub const DescSet = enum(u64) {
 
         set: DescSet,
         binding: u32,
-        index: u8 = 0,
+        // The size of this integer is conservative, the backend APIs typically accept `u32`s here.
+        // However, while they accept `u32`s, hardware places additional limits on how many
+        // resources of various types can be passed in. Notably, Vulkan's Roadmap to 2022 only
+        // guarantees `maxDescriptorSetSampledImages` to be 1800. Setting this index to a smaller
+        // type is just a quick smoke test against going too far past these limits, it's still
+        // possible to violate them by creating multiple descriptor sets.
+        //
+        // If you need 32 bit indices here, you can replace the `u10` with a `u32`. Feel free to
+        // open a PR if you do and I'll reconsider this limit.
+        index: u10 = 0,
         value: Value,
     };
 
