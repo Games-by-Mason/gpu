@@ -1234,10 +1234,10 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
         for (options.cmds) |cmd| {
             for (cmd.layout_options.descs) |desc| {
                 switch (desc.kind) {
-                    .uniform_buffer => uniform_buffers += 1,
-                    .storage_buffer => storage_buffers += 1,
-                    .combined_image_sampler => combined_image_samplers += 1,
-                    .storage_image => storage_images += 1,
+                    .uniform_buffer => uniform_buffers += desc.count,
+                    .storage_buffer => storage_buffers += desc.count,
+                    .combined_image_sampler => combined_image_samplers += desc.count,
+                    .storage_image => storage_images += desc.count,
                 }
             }
             descriptors += @intCast(cmd.layout_options.descs.len);
