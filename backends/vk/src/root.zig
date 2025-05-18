@@ -104,8 +104,16 @@ const DeviceFeatures = struct {
         self.vk13.pipeline_creation_cache_control = vk.TRUE;
 
         // Roadmap 2022
-        self.vk12.scalar_block_layout = vk.TRUE;
         self.vk10.features.sampler_anisotropy = @intFromBool(options.sampler_anisotropy);
+        self.vk12.scalar_block_layout = vk.TRUE;
+        self.vk12.runtime_descriptor_array = vk.TRUE;
+        self.vk12.descriptor_binding_partially_bound = vk.TRUE;
+        self.vk12.shader_uniform_buffer_array_non_uniform_indexing = vk.TRUE;
+        self.vk12.shader_sampled_image_array_non_uniform_indexing = vk.TRUE;
+        self.vk12.shader_storage_buffer_array_non_uniform_indexing = vk.TRUE;
+        self.vk12.shader_storage_image_array_non_uniform_indexing = vk.TRUE;
+        self.vk12.shader_uniform_texel_buffer_array_non_uniform_indexing = vk.TRUE;
+        self.vk12.shader_storage_texel_buffer_array_non_uniform_indexing = vk.TRUE;
 
         // Roadmap 2024
         self.vk11.shader_draw_parameters = vk.TRUE;
@@ -120,6 +128,7 @@ const DeviceFeatures = struct {
     }
 
     fn featuresSupersetOf(superset: anytype, subset: @TypeOf(superset)) bool {
+        var result = true;
         inline for (std.meta.fields(@TypeOf(superset))) |field| {
             if (field.type != vk.Bool32) {
                 comptime assert(std.mem.eql(u8, field.name, "p_next") or
@@ -130,10 +139,10 @@ const DeviceFeatures = struct {
             const sub_enabled = @field(subset, field.name) == vk.TRUE;
             if (sub_enabled and !super_enabled) {
                 log.debug("\t* missing feature: {s}", .{field.name});
-                return false;
+                result = false;
             }
         }
-        return true;
+        return result;
     }
 
     fn root(self: *@This()) *vk.PhysicalDeviceFeatures2 {
@@ -952,6 +961,7 @@ pub fn pipelineLayoutCreate(
 ) gpu.Pipeline.Layout {
     // Create the descriptor set layout
     var descs: std.BoundedArray(vk.DescriptorSetLayoutBinding, global_options.combined_pipeline_layout_create_buf_len) = .{};
+    var flags: std.BoundedArray(vk.DescriptorBindingFlags, global_options.combined_pipeline_layout_create_buf_len) = .{};
     for (options.descs, 0..) |desc, i| {
         descs.append(.{
             .binding = @intCast(i),
@@ -969,10 +979,24 @@ pub fn pipelineLayoutCreate(
             },
             .p_immutable_samplers = null,
         }) catch @panic("OOB");
+        flags.appendAssumeCapacity(.{
+            // Most descriptors don't need this, however, some do and the validation layers don't
+            // catch if it's missing, so we're opting to always enable it rather than risk subtle
+            // bugs. I suspect that this has no impact on performance in practice but we can revisit
+            // this decision if that turns out to be incorrect.
+            .partially_bound_bit = true,
+        });
     }
+
+    var binding_flags: vk.DescriptorSetLayoutBindingFlagsCreateInfo = .{
+        .binding_count = @intCast(flags.len),
+        .p_binding_flags = flags.constSlice().ptr,
+    };
+
     const descriptor_set_layout = self.backend.device.createDescriptorSetLayout(&.{
         .binding_count = @intCast(descs.len),
         .p_bindings = &descs.buffer,
+        .p_next = &binding_flags,
     }, null) catch @panic("OOM");
     setName(self.backend.debug_messenger, self.backend.device, descriptor_set_layout, options.name);
 
