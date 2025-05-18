@@ -74,6 +74,73 @@ pub const Options = struct {
 
 const graphics_queue_name = "Graphics Queue";
 
+const DeviceFeatures = struct {
+    // Keep in sync with `supersetOf`
+    vk11: vk.PhysicalDeviceVulkan11Features = .{},
+    vk12: vk.PhysicalDeviceVulkan12Features = .{},
+    vk13: vk.PhysicalDeviceVulkan13Features = .{},
+    vk10: vk.PhysicalDeviceFeatures2 = .{ .features = .{} },
+
+    fn initEmpty(self: *@This()) void {
+        self.vk10 = .{ .p_next = &self.vk11, .features = .{} };
+        self.vk11 = .{ .p_next = &self.vk12 };
+        self.vk12 = .{ .p_next = &self.vk13 };
+        self.vk13 = .{};
+    }
+
+    const InitRequiredOptions = struct {
+        host_query_reset: bool,
+        sampler_anisotropy: bool,
+    };
+
+    fn initRequired(self: *@This(), options: InitRequiredOptions) void {
+        self.initEmpty();
+
+        // 100% of Windows and Linux devices in `vulkan.gpuinfo.org` support these features at the
+        // time of writing.
+        self.vk12.host_query_reset = @intFromBool(options.host_query_reset);
+        self.vk13.synchronization_2 = vk.TRUE;
+        self.vk13.dynamic_rendering = vk.TRUE;
+        self.vk13.pipeline_creation_cache_control = vk.TRUE;
+
+        // Roadmap 2022
+        self.vk12.scalar_block_layout = vk.TRUE;
+        self.vk10.features.sampler_anisotropy = @intFromBool(options.sampler_anisotropy);
+
+        // Roadmap 2024
+        self.vk11.shader_draw_parameters = vk.TRUE;
+    }
+
+    fn supersetOf(superset: *@This(), subset: *@This()) bool {
+        if (!featuresSupersetOf(superset.vk10.features, subset.vk10.features)) return false;
+        if (!featuresSupersetOf(superset.vk11, subset.vk11)) return false;
+        if (!featuresSupersetOf(superset.vk12, subset.vk12)) return false;
+        if (!featuresSupersetOf(superset.vk13, subset.vk13)) return false;
+        return true;
+    }
+
+    fn featuresSupersetOf(superset: anytype, subset: @TypeOf(superset)) bool {
+        inline for (std.meta.fields(@TypeOf(superset))) |field| {
+            if (field.type != vk.Bool32) {
+                comptime assert(std.mem.eql(u8, field.name, "p_next") or
+                    std.mem.eql(u8, field.name, "s_type"));
+                continue;
+            }
+            const super_enabled = @field(superset, field.name) == vk.TRUE;
+            const sub_enabled = @field(subset, field.name) == vk.TRUE;
+            if (sub_enabled and !super_enabled) {
+                log.debug("\t* missing feature: {s}", .{field.name});
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn root(self: *@This()) *vk.PhysicalDeviceFeatures2 {
+        return &self.vk10;
+    }
+};
+
 pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
@@ -275,30 +342,22 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     log.info("All Devices:", .{});
     for (physical_devices, 0..) |device, i| {
         const properties = instance_proxy.getPhysicalDeviceProperties(device);
+        log.info("  {}. {s}", .{ i, bufToStr(&properties.device_name) });
+        log.debug("\t* device api version: {}", .{@as(vk.Version, @bitCast(properties.api_version))});
+        log.debug("\t* device type: {}", .{properties.device_type});
+        log.debug("\t* min uniform buffer offset alignment: {}", .{properties.limits.min_uniform_buffer_offset_alignment});
+        log.debug("\t* min storage buffer offset alignment: {}", .{properties.limits.min_storage_buffer_offset_alignment});
 
-        var host_query_reset_features: vk.PhysicalDeviceHostQueryResetFeatures = .{};
-        var shader_draw_parameters_features: vk.PhysicalDeviceShaderDrawParametersFeatures = .{
-            .p_next = &host_query_reset_features,
-        };
-        var features: vk.PhysicalDeviceFeatures2 = .{
-            .features = .{},
-            .p_next = &shader_draw_parameters_features,
-        };
-        instance_proxy.getPhysicalDeviceFeatures2(device, &features);
-        const supports_required_features =
-            // Roadmap 2022
-            shader_draw_parameters_features.shader_draw_parameters == vk.TRUE and
-            // Only required when using device timers
-            (!options.timestamp_queries or host_query_reset_features.host_query_reset == vk.TRUE) and
-            // Roadmap 2024
-            features.features.multi_draw_indirect == vk.TRUE and
-            // Roadmap 2022
-            features.features.draw_indirect_first_instance == vk.TRUE;
-        const all_features = .{
-            shader_draw_parameters_features,
-            host_query_reset_features,
-            features,
-        };
+        var features: DeviceFeatures = .{};
+        features.initEmpty();
+        instance_proxy.getPhysicalDeviceFeatures2(device, features.root());
+        var required_features: DeviceFeatures = .{};
+        required_features.initRequired(.{
+            .host_query_reset = options.timestamp_queries,
+            .sampler_anisotropy = false,
+        });
+
+        const supports_required_features = features.supersetOf(&required_features);
 
         const rank: u8 = options.device_type_ranks.get(switch (properties.device_type) {
             .discrete_gpu => .discrete,
@@ -323,6 +382,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             // Break with the first compatible queue
             break @intCast(qfi);
         } else null;
+        log.debug("\t* queue family index: {?}", .{queue_family_index});
 
         var missing_device_extensions: std.StringHashMapUnmanaged(void) = .{};
         defer missing_device_extensions.deinit(gpa);
@@ -383,28 +443,20 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             break :b .{ surface_capabilities, best_surface_format, best_present_mode };
         } else .{ null, null, null };
 
-        log.info("  {}. {s}", .{ i, bufToStr(&properties.device_name) });
-        log.debug("    * device api version: {}", .{@as(vk.Version, @bitCast(properties.api_version))});
-        log.debug("    * device type: {}", .{properties.device_type});
-        log.debug("    * queue family index: {?}", .{queue_family_index});
-        log.debug("    * present mode: {?}", .{present_mode});
-        log.debug("    * surface format: {?}", .{surface_format});
-        log.debug("    * features: {}", .{all_features});
-        log.debug("    * max indirect draw count: {}", .{properties.limits.max_draw_indirect_count});
-        log.debug("    * min uniform buffer offset alignment: {}", .{properties.limits.min_uniform_buffer_offset_alignment});
-        log.debug("    * min storage buffer offset alignment: {}", .{properties.limits.min_storage_buffer_offset_alignment});
+        log.debug("\t* present mode: {?}", .{present_mode});
+        log.debug("\t* surface format: {?}", .{surface_format});
         if (!extensions_supported) {
-            log.debug("    * missing extensions:", .{});
+            log.debug("\t* missing extensions:", .{});
             var key_iterator = missing_device_extensions.keyIterator();
             while (key_iterator.next()) |key| {
-                log.debug("      * {s}", .{key.*});
+                log.debug("  \t* {s}", .{key.*});
             }
         }
 
         const composite_alpha: ?vk.CompositeAlphaFlagsKHR = b: {
             if (surface_capabilities) |sc| {
                 const supported = sc.supported_composite_alpha;
-                log.debug("    * supported composite alpha: {}", .{supported});
+                log.debug("\t* supported composite alpha: {}", .{supported});
                 if (supported.opaque_bit_khr) {
                     break :b .{ .opaque_bit_khr = true };
                 } else if (supported.inherit_bit_khr) {
@@ -426,9 +478,9 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         const compatible = version_compatible and queue_family_index != null and extensions_supported and composite_alpha != null and supports_required_features;
 
         if (compatible) {
-            log.debug("    * rank: {}", .{rank});
+            log.debug("\t* rank: {}", .{rank});
         } else {
-            log.debug("    * rank: incompatible", .{});
+            log.debug("\t* rank: incompatible", .{});
         }
 
         if (compatible and rank > best_physical_device.rank) {
@@ -453,8 +505,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                 // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
                 .min_uniform_buffer_offset_alignment = @intCast(properties.limits.min_uniform_buffer_offset_alignment),
                 .min_storage_buffer_offset_alignment = @intCast(properties.limits.min_storage_buffer_offset_alignment),
-                .max_draw_indirect_count = properties.limits.max_draw_indirect_count,
-                .sampler_anisotropy = features.features.sampler_anisotropy == vk.TRUE,
+                .sampler_anisotropy = features.vk10.features.sampler_anisotropy == vk.TRUE,
                 .max_sampler_anisotropy = properties.limits.max_sampler_anisotropy,
                 .queue_family_index = queue_family_index.?,
             };
@@ -462,7 +513,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     }
 
     if (best_physical_device.device == .null_handle) {
-        @panic("NoSupportedDevices");
+        @panic("no supported devices");
     }
 
     log.info("Best Device: {s} ({})", .{ bufToStr(&best_physical_device.name), best_physical_device.index });
@@ -485,33 +536,18 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     queue_zone.end();
 
     const device_proxy_zone = tracy.Zone.begin(.{ .name = "create device proxy", .src = @src() });
-    var device_features_11: vk.PhysicalDeviceVulkan11Features = .{
-        .shader_draw_parameters = vk.TRUE,
-    };
-    var device_features_12: vk.PhysicalDeviceVulkan12Features = .{
-        .host_query_reset = @intFromBool(options.timestamp_queries),
-        .p_next = &device_features_11,
-    };
-    const device_features_13: vk.PhysicalDeviceVulkan13Features = .{
-        // 100% of Windows and Linux devices in `vulkan.gpuinfo.org` support these features at the
-        // time of writing.
-        .synchronization_2 = vk.TRUE,
-        .dynamic_rendering = vk.TRUE,
-        .pipeline_creation_cache_control = vk.TRUE,
-        .p_next = &device_features_12,
-    };
-    const device_features: vk.PhysicalDeviceFeatures = .{
-        .draw_indirect_first_instance = vk.TRUE,
-        .multi_draw_indirect = vk.TRUE,
-        .sampler_anisotropy = @intFromBool(best_physical_device.sampler_anisotropy),
-    };
+    var features: DeviceFeatures = .{};
+    features.initRequired(.{
+        .host_query_reset = options.timestamp_queries,
+        .sampler_anisotropy = best_physical_device.sampler_anisotropy,
+    });
     const device_create_info: vk.DeviceCreateInfo = .{
         .p_queue_create_infos = &queue_create_infos,
         .queue_create_info_count = @intCast(queue_create_infos.len),
-        .p_enabled_features = &device_features,
+        .p_enabled_features = null,
         .enabled_extension_count = @intCast(required_device_extensions.items.len),
         .pp_enabled_extension_names = required_device_extensions.items.ptr,
-        .p_next = &device_features_13,
+        .p_next = features.root(),
     };
     const device_handle = instance_proxy.createDevice(
         best_physical_device.device,
@@ -3096,7 +3132,6 @@ const PhysicalDevice = struct {
     ty: gpu.Device.Kind = undefined,
     min_uniform_buffer_offset_alignment: u16 = undefined,
     min_storage_buffer_offset_alignment: u16 = undefined,
-    max_draw_indirect_count: u32 = undefined,
     sampler_anisotropy: bool = undefined,
     max_sampler_anisotropy: f32 = undefined,
     queue_family_index: u32 = undefined,
@@ -3130,10 +3165,10 @@ fn formatDebugMessage(
     writer: anytype,
 ) !void {
     try writer.writeAll("vulkan debug message:\n");
-    try writer.print("  * type: {}\n", .{data.message_type});
+    try writer.print("\t* type: {}\n", .{data.message_type});
 
     if (data.data) |d| {
-        try writer.writeAll("  * id: ");
+        try writer.writeAll("\t* id: ");
         if (d.*.p_message_id_name) |name| {
             try writer.print("{s}", .{name});
         } else {
@@ -3142,14 +3177,14 @@ fn formatDebugMessage(
         try writer.print(" ({})\n", .{d.*.message_id_number});
 
         if (d.*.p_message) |message| {
-            try writer.print("  * message: {s}", .{message});
+            try writer.print("\t* message: {s}", .{message});
         }
 
         if (d.*.queue_label_count > 0) {
             try writer.writeByte('\n');
             if (d.*.p_queue_labels) |queue_labels| {
                 for (queue_labels[0..d.*.queue_label_count]) |label| {
-                    try writer.print("    * queue: {s}\n", .{label.p_label_name});
+                    try writer.print("\t* queue: {s}\n", .{label.p_label_name});
                 }
             }
         }
@@ -3158,7 +3193,7 @@ fn formatDebugMessage(
             try writer.writeByte('\n');
             if (d.*.p_cmd_buf_labels) |cmd_buf_labels| {
                 for (cmd_buf_labels[0..d.*.cmd_buf_label_count]) |label| {
-                    try writer.print("    * command buffer: {s}\n", .{label.p_label_name});
+                    try writer.print("\t* command buffer: {s}\n", .{label.p_label_name});
                 }
             }
         }
@@ -3167,9 +3202,9 @@ fn formatDebugMessage(
             try writer.writeByte('\n');
             if (d.*.p_objects) |objects| {
                 for (objects[0..d.*.object_count], 0..) |object, object_i| {
-                    try writer.print("  * object {}:\n", .{object_i});
+                    try writer.print("\t* object {}:\n", .{object_i});
 
-                    try writer.writeAll("    * name: ");
+                    try writer.writeAll("\t\t* name: ");
                     if (object.p_object_name) |name| {
                         try writer.print("{s}", .{name});
                     } else {
@@ -3177,8 +3212,8 @@ fn formatDebugMessage(
                     }
                     try writer.writeByte('\n');
 
-                    try writer.print("    * type: {}\n", .{object.object_type});
-                    try writer.print("    * handle: 0x{x}", .{object.object_handle});
+                    try writer.print("\t\t* type: {}\n", .{object.object_type});
+                    try writer.print("\t\t* handle: 0x{x}", .{object.object_handle});
                 }
             }
         }
