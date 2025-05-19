@@ -750,7 +750,7 @@ pub fn bufCreate(
     name: gpu.DebugName,
     kind: gpu.BufKind,
     size: u64,
-) btypes.DedicatedAllocation(gpu.Buf(.{})) {
+) gpu.Buf(.{}) {
     // Create the buffer
     const usage_flags = bufUsageFlagsFromKind(kind);
     const buffer = self.backend.device.createBuffer(&.{
@@ -793,10 +793,8 @@ pub fn bufCreate(
 
     // Return the dedicated buffer
     return .{
-        .dedicated = .{
-            .handle = .fromBackendType(buffer),
-            .memory = .fromBackendType(memory),
-        },
+        .handle = .fromBackendType(buffer),
+        .memory = .fromBackendType(memory),
         .size = reqs.size,
     };
 }
@@ -807,7 +805,7 @@ pub fn uploadBufCreate(
     kind: gpu.BufKind,
     size: u64,
     prefer_device_local: bool,
-) btypes.DedicatedAllocation(gpu.UploadBuf(.{})) {
+) gpu.UploadBuf(.{}) {
     // Create the buffer
     const usage = bufUsageFlagsFromKind(kind);
     const buffer = self.backend.device.createBuffer(&.{
@@ -861,21 +859,18 @@ pub fn uploadBufCreate(
     data.ptr = @ptrCast(mapping);
     data.len = size;
     return .{
-        .dedicated = .{
-            .handle = .fromBackendType(buffer),
-            .memory = .fromBackendType(memory),
-            .data = data,
-        },
-        .size = reqs.size,
+        .handle = .fromBackendType(buffer),
+        .memory = .fromBackendType(memory),
+        .data = data,
     };
 }
 
 pub fn readbackBufCreate(
     self: *Gx,
     name: gpu.DebugName,
-    kind: Gx.BufKind,
+    kind: gpu.BufKind,
     size: u64,
-) btypes.DedicatedAllocation(Gx.ReadbackBuf(.{})) {
+) gpu.ReadbackBuf(.{}) {
     // Create the buffer
     const buffer = self.backend.device.createBuffer(&.{
         .size = size,
@@ -923,14 +918,11 @@ pub fn readbackBufCreate(
         .{},
     ) catch |err| @panic(@errorName(err)).?);
 
-    // Return the dedicated buffer
+    // Return the buffer
     return .{
-        .dedicated = .{
-            .buf = .fromBackendType(buffer),
-            .memory = .fromBackendType(memory),
-            .data = mapping[0..size],
-        },
-        .size = reqs.size,
+        .handle = .fromBackendType(buffer),
+        .memory = .fromBackendType(memory),
+        .data = mapping[0..size],
     };
 }
 

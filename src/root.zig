@@ -84,6 +84,7 @@ pub fn Buf(kind: BufKind) type {
     return struct {
         memory: MemoryHandle,
         handle: BufHandle(kind),
+        size: u64,
 
         pub const Options = struct {
             name: DebugName,
@@ -98,15 +99,16 @@ pub fn Buf(kind: BufKind) type {
             defer zone.end();
             comptime kind.assertNonZero();
             assert(options.size > 0); // Vulkan doesn't support zero sized buffers
-            const result = Backend.bufCreate(gx, options.name, kind, options.size);
+            const untyped = Backend.bufCreate(gx, options.name, kind, options.size);
             tracy.alloc(.{
-                .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
-                .size = result.size,
+                .ptr = @ptrFromInt(@intFromEnum(untyped.memory)),
+                .size = untyped.size,
                 .pool_name = tracy_gpu_pool,
             });
             return .{
-                .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
-                .handle = @enumFromInt(@intFromEnum(result.dedicated.handle)),
+                .memory = @enumFromInt(@intFromEnum(untyped.memory)),
+                .handle = @enumFromInt(@intFromEnum(untyped.handle)),
+                .size = untyped.size,
             };
         }
 
@@ -119,6 +121,7 @@ pub fn Buf(kind: BufKind) type {
             return .{
                 .memory = self.memory,
                 .handle = self.handle.as(result_kind),
+                .size = self.size,
             };
         }
     };
@@ -142,21 +145,21 @@ pub fn ReadbackBuf(kind: BufKind) type {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
             comptime kind.assertNonZero();
-            const result = Backend.readbackBufCreate(gx, options.name, kind, options.size);
+            const untyped = Backend.readbackBufCreate(gx, options.name, kind, options.size);
             tracy.alloc(.{
-                .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
-                .size = result.size,
+                .ptr = @ptrFromInt(@intFromEnum(untyped.memory)),
+                .size = untyped.data.len,
                 .pool_name = tracy_gpu_pool,
             });
             return .{
-                .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
-                .buf = @enumFromInt(@intFromEnum(result.dedicated.buf)),
-                .data = result.dedicated.data,
+                .memory = @enumFromInt(@intFromEnum(untyped.memory)),
+                .handle = @enumFromInt(@intFromEnum(untyped.handle)),
+                .data = untyped.data,
             };
         }
 
         pub fn deinit(self: @This(), gx: *Gx) void {
-            Backend.bufDestroy(gx, self.buf.as(.{}));
+            Backend.bufDestroy(gx, self.handle.as(.{}));
             self.memory.deinit(gx);
         }
 
@@ -169,10 +172,11 @@ pub fn ReadbackBuf(kind: BufKind) type {
             };
         }
 
-        pub inline fn asDedicated(self: @This(), comptime result_kind: BufKind) Buf(result_kind) {
+        pub inline fn asBuf(self: @This(), comptime result_kind: BufKind) Buf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .usage = .{ .buf = result_kind } }),
-                .buf = self.buf.as(result_kind),
+                .memory = self.memory,
+                .handle = self.handle.as(result_kind),
+                .size = self.data.len,
             };
         }
     };
@@ -197,7 +201,7 @@ pub fn UploadBuf(kind: BufKind) type {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
             comptime kind.assertNonZero();
-            const result = Backend.uploadBufCreate(
+            const untyped = Backend.uploadBufCreate(
                 gx,
                 options.name,
                 kind,
@@ -205,14 +209,14 @@ pub fn UploadBuf(kind: BufKind) type {
                 options.prefer_device_local,
             );
             tracy.alloc(.{
-                .ptr = @ptrFromInt(@intFromEnum(result.dedicated.memory)),
-                .size = result.size,
+                .ptr = @ptrFromInt(@intFromEnum(untyped.memory)),
+                .size = untyped.data.len,
                 .pool_name = tracy_gpu_pool,
             });
             return .{
-                .memory = @enumFromInt(@intFromEnum(result.dedicated.memory)),
-                .handle = @enumFromInt(@intFromEnum(result.dedicated.handle)),
-                .data = result.dedicated.data,
+                .memory = @enumFromInt(@intFromEnum(untyped.memory)),
+                .handle = @enumFromInt(@intFromEnum(untyped.handle)),
+                .data = untyped.data,
             };
         }
 
@@ -229,10 +233,11 @@ pub fn UploadBuf(kind: BufKind) type {
             };
         }
 
-        pub inline fn asDedicated(self: @This(), comptime result_kind: BufKind) Buf(result_kind) {
+        pub inline fn asBuf(self: @This(), comptime result_kind: BufKind) Buf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .usage = .{ .buf = result_kind } }),
-                .buf = self.buf.as(result_kind),
+                .memory = self.memory,
+                .handle = self.handle.as(result_kind),
+                .size = self.data.len,
             };
         }
 

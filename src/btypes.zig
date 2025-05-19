@@ -88,10 +88,3 @@ pub const MemoryCreateOptions = struct {
     access: Access = .none,
     size: u64,
 };
-
-pub fn DedicatedAllocation(Dedicated: type) type {
-    return struct {
-        dedicated: Dedicated,
-        size: u64,
-    };
-}
