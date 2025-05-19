@@ -1337,12 +1337,12 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
                 .uniform_buf => |view| buffer_infos.appendAssumeCapacity(.{
                     .buffer = view.handle.asBackendType(),
                     .offset = view.offset,
-                    .range = view.size,
+                    .range = view.len(),
                 }),
                 .storage_buf => |view| buffer_infos.appendAssumeCapacity(.{
                     .buffer = view.handle.asBackendType(),
                     .offset = view.offset,
-                    .range = view.size,
+                    .range = view.len(),
                 }),
                 .combined_image_sampler => {
                     const combined_image_sampler = update_curr.value.combined_image_sampler;

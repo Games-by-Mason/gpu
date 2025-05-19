@@ -5,6 +5,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const root = @import("root");
+const View = @import("view.zig").View;
 const Backend = global_options.Backend;
 const TracyQueue = tracy.GpuQueue;
 const Zone = tracy.Zone;
@@ -31,6 +32,8 @@ pub const Gx = @import("Gx.zig");
 pub const Writer = @import("Writer.zig");
 
 pub const btypes = @import("btypes.zig");
+
+const gpu = @This();
 
 pub const Extent2D = struct {
     width: u32,
@@ -86,6 +89,11 @@ pub fn Buf(kind: BufKind) type {
         handle: BufHandle(kind),
         size: u64,
 
+        pub const View = gpu.View(.{
+            .Handle = BufHandle(kind),
+            .Ptr = void,
+        });
+
         pub const Options = struct {
             name: DebugName,
             size: u64,
@@ -124,6 +132,15 @@ pub fn Buf(kind: BufKind) type {
                 .size = self.size,
             };
         }
+
+        pub fn view(self: @This()) @This().View {
+            return .{
+                .handle = self.handle,
+                .ptr = {},
+                .buf_size = self.size,
+                .offset = 0,
+            };
+        }
     };
 }
 
@@ -132,6 +149,11 @@ pub fn ReadbackBuf(kind: BufKind) type {
         memory: MemoryHandle,
         handle: BufHandle(kind),
         data: []const u8,
+
+        pub const View = gpu.View(.{
+            .Handle = BufHandle(kind),
+            .Ptr = [*]const u8,
+        });
 
         pub const Options = struct {
             name: DebugName,
@@ -179,6 +201,15 @@ pub fn ReadbackBuf(kind: BufKind) type {
                 .size = self.data.len,
             };
         }
+
+        pub fn view(self: @This()) @This().View {
+            return .{
+                .handle = self.handle,
+                .ptr = self.data.ptr,
+                .buf_size = self.data.len,
+                .offset = 0,
+            };
+        }
     };
 }
 
@@ -187,6 +218,11 @@ pub fn UploadBuf(kind: BufKind) type {
         memory: MemoryHandle,
         handle: BufHandle(kind),
         data: []volatile anyopaque,
+
+        pub const View = gpu.View(.{
+            .Handle = BufHandle(kind),
+            .Ptr = *volatile anyopaque,
+        });
 
         pub const Options = struct {
             name: DebugName,
@@ -248,10 +284,19 @@ pub fn UploadBuf(kind: BufKind) type {
 
         pub fn writer(self: @This(), options: WriterOptions) Writer {
             return (Writer{
-                .write_only_memory = self.data.ptr,
+                .ptr = self.data.ptr,
                 .pos = 0,
                 .size = self.data.len,
             }).spliced(options.offset, options.size);
+        }
+
+        pub fn view(self: @This()) @This().View {
+            return .{
+                .handle = self.handle,
+                .ptr = self.data.ptr,
+                .buf_size = self.data.len,
+                .offset = 0,
+            };
         }
     };
 }
@@ -290,53 +335,6 @@ pub const BufKind = packed struct {
 pub fn BufHandle(kind: BufKind) type {
     return enum(u64) {
         const Self = @This();
-
-        pub const View = struct {
-            handle: BufHandle(kind),
-            offset: u64,
-            size: u64,
-
-            pub inline fn as(
-                self: @This(),
-                comptime result_kind: BufKind,
-            ) BufHandle(result_kind).View {
-                return .{
-                    .buf = self.buf.as(result_kind),
-                    .offset = self.offset,
-                    .size = self.size,
-                };
-            }
-
-            pub fn unsized(self: @This()) UnsizedView {
-                return .{
-                    .buf = self.buf,
-                    .offset = self.offset,
-                };
-            }
-        };
-
-        pub const UnsizedView = struct {
-            buf: BufHandle(kind),
-            offset: u64,
-
-            pub fn as(
-                self: @This(),
-                comptime result_kind: BufKind,
-            ) UnsizedView(result_kind) {
-                return .{
-                    .buf = self.buf,
-                    .offset = self.offset,
-                };
-            }
-
-            pub fn sized(self: @This(), size: u64) View {
-                return .{
-                    .buf = self.buf,
-                    .offset = self.offset,
-                    .size = size,
-                };
-            }
-        };
 
         pub const Options = struct {
             name: DebugName,
@@ -1196,8 +1194,8 @@ pub const DescSet = enum(u64) {
                 layout: @This().Layout,
             };
 
-            storage_buf: BufHandle(.{ .storage = true }).View,
-            uniform_buf: BufHandle(.{ .uniform = true }).View,
+            storage_buf: Buf(.{ .storage = true }).View,
+            uniform_buf: Buf(.{ .uniform = true }).View,
             combined_image_sampler: CombinedImageSampler,
             storage_image: ImageView,
         };

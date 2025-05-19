@@ -7,7 +7,7 @@ pub const Error = error{Overflow};
 const Self = @This();
 const Dest = [*]volatile u8;
 
-write_only_memory: *volatile anyopaque,
+ptr: *volatile anyopaque,
 pos: u64 = 0,
 size: u64 = 0,
 
@@ -15,7 +15,7 @@ pub fn initSlice(from: anytype) Self {
     comptime assert(@typeInfo(@TypeOf(from)).Pointer.size == .Slice);
     const bytes = std.mem.sliceAsBytes(from);
     return .{
-        .write_only_memory = bytes.ptr,
+        .ptr = bytes.ptr,
         .size = bytes.len,
         .pos = 0,
     };
@@ -29,7 +29,7 @@ pub inline fn write(self: *Self, bytes: []const u8) Error!usize {
 pub inline fn writeAll(self: *Self, bytes: []const u8) Error!void {
     // Copy memory
     const src = bytes[0..@min(bytes.len, self.remainingBytes())];
-    const dest: Dest = @ptrFromInt(@intFromPtr(self.write_only_memory) + self.pos);
+    const dest: Dest = @ptrFromInt(@intFromPtr(self.ptr) + self.pos);
     @memcpy(dest, src);
 
     // Update pos
@@ -91,7 +91,7 @@ fn typeErasedWriteFn(context: *const anyopaque, bytes: []const u8) anyerror!usiz
 /// position.
 pub fn trim(self: *Self) void {
     self.size -= self.pos;
-    self.write_only_memory = @ptrFromInt(@intFromPtr(self.write_only_memory) + self.pos);
+    self.ptr = @ptrFromInt(@intFromPtr(self.ptr) + self.pos);
     self.pos = 0;
 }
 
@@ -144,69 +144,4 @@ pub fn alignForward(self: *Self, comptime alignment: u16) Error!void {
 
 pub fn remainingBytes(self: *const Self) usize {
     return self.size - self.pos;
-}
-
-pub const SplitIterator = struct {
-    pub const Options = struct {
-        /// The iterator will try to generate this many segments, but will fall short if doing
-        /// so would violate min segment bytes.
-        max_segments: usize,
-        /// Enforced unless the entire buffer is under this limit, in which case it's returned
-        /// as a single segment.
-        min_segment_bytes: usize,
-    };
-
-    writer: *Self,
-    target_segment_bytes: usize,
-    min_segment_bytes: usize,
-
-    pub fn next(self: *@This()) ?Self {
-        // Check if there's any space remaining
-        const remaining = self.writer.remainingBytes();
-        if (remaining == 0) return null;
-
-        // Calculate the segment size
-        const segment_size = if (remaining >= self.target_segment_bytes + self.min_segment_bytes) b: {
-            // We have enough space to return a fully sized segment
-            break :b self.target_segment_bytes;
-        } else b: {
-            // We don't have enough space to return a fully sized segment, or doing so would
-            // leave us with a remainder that's under out limit. Just return all remaining
-            // bytes.
-            break :b remaining;
-        };
-
-        // Create the segment writer
-        const result: Self = .{
-            .write_only_memory = self.writer.write_only_memory,
-            .pos = self.writer.pos,
-            .size = self.writer.pos + segment_size,
-        };
-
-        // Update our pos, and return the result
-        self.writer.pos += segment_size;
-        return result;
-    }
-};
-
-/// Splits this writer into writers for contiguous segments starting at the current pos.
-///
-/// This writer's position will be incremented for the size of each split returned.
-///
-/// Returned splits will be equivalent to the original writer with the pos and size adjusted.
-pub fn splitIter(self: *Self, options: SplitIterator.Options) SplitIterator {
-    assert(options.min_segment_bytes > 0);
-    assert(options.max_segments > 0);
-
-    const target_segment_bytes = std.math.divCeil(
-        usize,
-        self.size - self.pos,
-        options.max_segments,
-    ) catch |err| @panic(@errorName(err));
-
-    return .{
-        .writer = self,
-        .target_segment_bytes = target_segment_bytes,
-        .min_segment_bytes = options.min_segment_bytes,
-    };
 }
