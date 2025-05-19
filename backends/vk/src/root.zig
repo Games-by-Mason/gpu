@@ -979,13 +979,7 @@ pub fn pipelineLayoutCreate(
             },
             .p_immutable_samplers = null,
         }) catch @panic("OOB");
-        flags.appendAssumeCapacity(.{
-            // Most descriptors don't need this, however, some do and the validation layers don't
-            // catch if it's missing, so we're opting to always enable it rather than risk subtle
-            // bugs. I suspect that this has no impact on performance in practice but we can revisit
-            // this decision if that turns out to be incorrect.
-            .partially_bound_bit = true,
-        });
+        flags.appendAssumeCapacity(.{ .partially_bound_bit = desc.partially_bound });
     }
 
     var binding_flags: vk.DescriptorSetLayoutBindingFlagsCreateInfo = .{

@@ -1007,6 +1007,15 @@ pub const Pipeline = struct {
                 kind: Desc.Kind,
                 count: u32 = 1,
                 stages: Stages,
+                /// Careful. If false, all descriptors must be bound, but at the time of writing the
+                /// Vulkan validation layers will not catch if you fail to set this flag.
+                ///
+                /// Also note that if indexing the descriptor very often (e.g. once per pixel), this
+                /// can affect GPU assisted validation performance. Some drivers have buggy caching
+                /// which can make this performance degradation "sticky", i.e. you may need to edit
+                /// your shaders to invalidate the cache to get expected perf back while GPU
+                /// assisted validation is still enabled.
+                partially_bound: bool,
             };
 
             name: DebugName,
