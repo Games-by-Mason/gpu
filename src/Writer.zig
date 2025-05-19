@@ -90,6 +90,7 @@ fn typeErasedWriteFn(context: *const anyopaque, bytes: []const u8) anyerror!usiz
 /// Trims off the range before the current position. When reset, the writer will return to this
 /// position.
 pub fn trim(self: *Self) void {
+    self.size -= self.pos;
     self.write_only_memory = @ptrFromInt(@intFromPtr(self.write_only_memory) + self.pos);
     self.pos = 0;
 }
