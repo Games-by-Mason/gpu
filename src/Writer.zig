@@ -87,25 +87,6 @@ fn typeErasedWriteFn(context: *const anyopaque, bytes: []const u8) anyerror!usiz
     return write(ptr.*, bytes);
 }
 
-/// Trims off the range before the current position. When reset, the writer will return to this
-/// position.
-pub fn trim(self: *Self) void {
-    self.size -= self.pos;
-    self.ptr = @ptrFromInt(@intFromPtr(self.ptr) + self.pos);
-    self.pos = 0;
-}
-
-/// See `trim`.
-pub fn trimmed(self: Self) Self {
-    var result = self;
-    result.trim();
-    return result;
-}
-
-pub fn reset(self: *Self) void {
-    self.pos = 0;
-}
-
 pub fn seekTo(self: *Self, pos: u64) void {
     // Check bounds
     if (pos > self.size - self.pos) @panic("OOB");

@@ -5,7 +5,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const root = @import("root");
-const View = @import("view.zig").View;
+const BufView = @import("buf_view.zig").BufView;
 const Backend = global_options.Backend;
 const TracyQueue = tracy.GpuQueue;
 const Zone = tracy.Zone;
@@ -83,16 +83,15 @@ pub const DebugName = struct {
     index: ?usize = null,
 };
 
-pub fn Buf(kind: BufKind) type {
+pub fn Buf(k: BufKind) type {
     return struct {
+        pub const kind = k;
+
         memory: MemoryHandle,
         handle: BufHandle(kind),
         size: u64,
 
-        pub const View = gpu.View(.{
-            .Handle = BufHandle(kind),
-            .Ptr = void,
-        });
+        pub const View = BufView(@This());
 
         pub const Options = struct {
             name: DebugName,
@@ -133,27 +132,26 @@ pub fn Buf(kind: BufKind) type {
             };
         }
 
-        pub fn view(self: @This()) @This().View {
+        pub fn view(self: @This()) View {
             return .{
                 .handle = self.handle,
                 .ptr = {},
-                .buf_size = self.size,
+                .len = self.size,
                 .offset = 0,
             };
         }
     };
 }
 
-pub fn ReadbackBuf(kind: BufKind) type {
+pub fn ReadbackBuf(k: BufKind) type {
     return struct {
+        pub const kind = k;
+
         memory: MemoryHandle,
         handle: BufHandle(kind),
         data: []const u8,
 
-        pub const View = gpu.View(.{
-            .Handle = BufHandle(kind),
-            .Ptr = [*]const u8,
-        });
+        pub const View = BufView(@This());
 
         pub const Options = struct {
             name: DebugName,
@@ -202,27 +200,26 @@ pub fn ReadbackBuf(kind: BufKind) type {
             };
         }
 
-        pub fn view(self: @This()) @This().View {
+        pub fn view(self: @This()) View {
             return .{
                 .handle = self.handle,
                 .ptr = self.data.ptr,
-                .buf_size = self.data.len,
+                .len = self.data.len,
                 .offset = 0,
             };
         }
     };
 }
 
-pub fn UploadBuf(kind: BufKind) type {
+pub fn UploadBuf(k: BufKind) type {
     return struct {
+        pub const kind = k;
+
         memory: MemoryHandle,
         handle: BufHandle(kind),
         data: []volatile anyopaque,
 
-        pub const View = gpu.View(.{
-            .Handle = BufHandle(kind),
-            .Ptr = *volatile anyopaque,
-        });
+        pub const View = BufView(@This());
 
         pub const Options = struct {
             name: DebugName,
@@ -263,8 +260,8 @@ pub fn UploadBuf(kind: BufKind) type {
 
         pub inline fn as(self: @This(), comptime result_kind: BufKind) UploadBuf(result_kind) {
             return .{
-                .memory = self.memory.as(.{ .access = .write, .kind = .{ .buf = result_kind } }),
-                .buf = self.buf.as(result_kind),
+                .memory = self.memory,
+                .handle = self.handle.as(result_kind),
                 .data = self.data,
             };
         }
@@ -277,24 +274,11 @@ pub fn UploadBuf(kind: BufKind) type {
             };
         }
 
-        pub const WriterOptions = struct {
-            offset: u64 = 0,
-            size: ?u64 = null,
-        };
-
-        pub fn writer(self: @This(), options: WriterOptions) Writer {
-            return (Writer{
-                .ptr = self.data.ptr,
-                .pos = 0,
-                .size = self.data.len,
-            }).spliced(options.offset, options.size);
-        }
-
-        pub fn view(self: @This()) @This().View {
+        pub fn view(self: @This()) View {
             return .{
                 .handle = self.handle,
                 .ptr = self.data.ptr,
-                .buf_size = self.data.len,
+                .len = self.data.len,
                 .offset = 0,
             };
         }

@@ -3,28 +3,55 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-pub const Options = struct {
-    Handle: type,
-    Ptr: type,
-};
+const Writer = @import("Writer.zig");
 
 /// A view into a buffer.
-pub fn View(opt: Options) type {
+pub fn BufView(Buf: type) type {
     return struct {
         const Self = @This();
 
         /// A handle to the buffer.
-        handle: opt.Handle,
+        handle: @FieldType(Buf, "handle"),
         /// A memory mapped pointer to the buffer, or void if not mapped.
-        ptr: opt.Ptr,
+        ptr: if (@hasField(Buf, "data"))
+            @TypeOf(@as(@FieldType(Buf, "data"), undefined).ptr)
+        else
+            void,
         /// An offset into the buffer.
         offset: u64 = 0,
-        /// The total size of the buffer, not factoring in the offset.
-        buf_size: u64 = 0,
+        /// The length of the view, starting at the offset.
+        len: u64 = 0,
 
-        /// Returns the length of this view.
-        pub fn len(self: *const @This()) u64 {
-            return self.buf_size - self.offset;
+        pub inline fn as(
+            self: @This(),
+            comptime result_kind: @TypeOf(Buf.kind),
+        ) BufView(@TypeOf(@as(Buf, undefined).as(result_kind))) {
+            return .{
+                .handle = self.handle.as(result_kind),
+                .ptr = self.ptr,
+                .offset = self.offset,
+                .len = self.len,
+            };
+        }
+
+        pub inline fn asBuf(
+            self: @This(),
+            comptime result_kind: @TypeOf(Buf.kind),
+        ) BufView(@TypeOf(@as(Buf, undefined).asBuf(result_kind))) {
+            return .{
+                .handle = self.handle.as(result_kind),
+                .ptr = {},
+                .offset = self.offset,
+                .len = self.len,
+            };
+        }
+
+        pub fn writer(self: @This()) Writer {
+            return .{
+                .ptr = @ptrFromInt(@intFromPtr(self.ptr) + self.offset),
+                .pos = 0,
+                .size = self.len,
+            };
         }
 
         pub fn spliced(self: Self, start: u64, maybe_len: ?u64) @This() {
@@ -34,15 +61,13 @@ pub fn View(opt: Options) type {
         }
 
         pub fn splice(self: *Self, start: u64, maybe_len: ?u64) void {
-            if (self.offset > self.buf_size) @panic("OOB");
-            const remaining = self.buf_size - self.offset;
-            if (start > remaining) @panic("OOB");
+            if (start > self.len) @panic("OOB");
             self.offset += start;
             if (maybe_len) |l| {
-                if (l > remaining - start) @panic("OOB");
-                self.buf_size = self.offset + l;
+                if (l > self.len - start) @panic("OOB");
+                self.len = self.offset + l;
             } else {
-                self.buf_size = self.buf_size - start;
+                self.len = self.len - start;
             }
         }
 
@@ -62,18 +87,17 @@ pub fn View(opt: Options) type {
 
             pub fn next(self: *@This()) ?Self {
                 // Check if there's any space remaining
-                const remaining = self.view.len();
-                if (remaining == 0) return null;
+                if (self.view.len == 0) return null;
 
                 // Calculate the segment size
-                const segment_size = if (remaining >= self.target_segment_bytes + self.min_segment_bytes) b: {
+                const segment_size = if (self.view.len >= self.target_segment_bytes + self.min_segment_bytes) b: {
                     // We have enough space to return a fully sized segment
                     break :b self.target_segment_bytes;
                 } else b: {
                     // We don't have enough space to return a fully sized segment, or doing so would
                     // leave us with a remainder that's under out limit. Just return all remaining
                     // bytes.
-                    break :b remaining;
+                    break :b self.view.len;
                 };
 
                 // Create the segment writer
@@ -81,10 +105,11 @@ pub fn View(opt: Options) type {
                     .handle = self.view.handle,
                     .ptr = self.view.ptr,
                     .offset = self.view.offset,
-                    .buf_size = self.view.offset + segment_size,
+                    .len = segment_size,
                 };
 
                 // Update our offset, and return the result
+                self.view.len -= segment_size;
                 self.view.offset += segment_size;
                 return result;
             }
@@ -100,7 +125,7 @@ pub fn View(opt: Options) type {
 
             const target_segment_bytes = std.math.divCeil(
                 usize,
-                self.buf_size - self.offset,
+                self.len,
                 options.max_segments,
             ) catch |err| @panic(@errorName(err));
 
