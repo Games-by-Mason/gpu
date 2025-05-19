@@ -55,10 +55,6 @@ pub inline fn writeBytesNTimes(self: *Self, bytes: []const u8, n: usize) Error!v
     return @errorCast(self.any().writeBytesNTimes(bytes, n));
 }
 
-pub inline fn writeInt(self: *Self, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
-    return @errorCast(self.any().writeInt(T, value, endian));
-}
-
 pub inline fn writeStructAligned(self: *Self, value: anytype) Error!void {
     try self.alignForward(@alignOf(@TypeOf(value)));
     try self.writeStruct(value);
@@ -69,14 +65,14 @@ pub inline fn writeStructAssumeAligned(self: *Self, value: anytype) Error!void {
     try self.writeStruct(value);
 }
 
+/// Always writes native endian. In practice, this is what you want when writing data for the GPU
+/// to read.
+///
+/// https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-host-environment
 pub inline fn writeStruct(self: *Self, value: anytype) Error!void {
     // Implementation manually inlined to improve debug mode performance
     comptime assert(@typeInfo(@TypeOf(value)).@"struct".layout != .auto);
     return self.writeAll(std.mem.asBytes(&value));
-}
-
-pub inline fn writeStructEndian(self: *Self, value: anytype, endian: std.builtin.Endian) Error!void {
-    return @errorCast(self.any().writeStructEndian(value, endian));
 }
 
 pub inline fn any(self: *Self) std.io.AnyWriter {
@@ -89,6 +85,24 @@ pub inline fn any(self: *Self) std.io.AnyWriter {
 fn typeErasedWriteFn(context: *const anyopaque, bytes: []const u8) anyerror!usize {
     const ptr: *const *Self = @alignCast(@ptrCast(context));
     return write(ptr.*, bytes);
+}
+
+/// Trims off the range before the current position. When reset, the writer will return to this
+/// position.
+pub fn trim(self: *Self) void {
+    self.write_only_memory = @ptrFromInt(@intFromPtr(self.write_only_memory) + self.pos);
+    self.pos = 0;
+}
+
+/// See `trim`.
+pub fn trimmed(self: Self) Self {
+    var result = self;
+    result.trim();
+    return result;
+}
+
+pub fn reset(self: *Self) void {
+    self.pos = 0;
 }
 
 pub fn seekTo(self: *Self, pos: u64) void {
