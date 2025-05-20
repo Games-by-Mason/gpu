@@ -3,7 +3,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-pub const Error = error{Overflow};
 const Self = @This();
 const Dest = [*]volatile u8;
 
@@ -11,70 +10,46 @@ ptr: *volatile anyopaque,
 pos: u64 = 0,
 size: u64 = 0,
 
-pub fn initSlice(from: anytype) Self {
-    comptime assert(@typeInfo(@TypeOf(from)).Pointer.size == .Slice);
-    const bytes = std.mem.sliceAsBytes(from);
-    return .{
-        .ptr = bytes.ptr,
-        .size = bytes.len,
-        .pos = 0,
-    };
-}
-
-pub inline fn write(self: *Self, bytes: []const u8) Error!usize {
-    try self.writeAll(bytes);
-    return bytes.len;
-}
-
-pub inline fn writeAll(self: *Self, bytes: []const u8) Error!void {
-    // Copy memory
+/// Writes the given bytes to the writer, panicking if it goes out of bounds.
+pub inline fn writeAll(self: *Self, bytes: []const u8) void {
+    const new_pos = std.math.add(u64, self.pos, bytes.len) catch @panic("OOB");
+    if (new_pos > self.size) @panic("OOB");
     const src = bytes[0..@min(bytes.len, self.remainingBytes())];
     const dest: Dest = @ptrFromInt(@intFromPtr(self.ptr) + self.pos);
     @memcpy(dest, src);
-
-    // Update pos
-    self.pos += bytes.len;
-
-    // Return an error if we overflowed the buffer
-    if (src.len < bytes.len) return Error.Overflow;
+    self.pos = new_pos;
 }
 
-pub inline fn print(self: *Self, comptime format: []const u8, args: anytype) Error!void {
-    return @errorCast(self.any().print(format, args));
-}
-
-pub inline fn writeByte(self: *Self, byte: u8) Error!void {
-    return @errorCast(self.any().writeByte(byte));
-}
-
-pub inline fn writeByteNTimes(self: *Self, byte: u8, n: usize) Error!void {
-    return @errorCast(self.any().writeByteNTimes(byte, n));
-}
-
-pub inline fn writeBytesNTimes(self: *Self, bytes: []const u8, n: usize) Error!void {
-    return @errorCast(self.any().writeBytesNTimes(bytes, n));
-}
-
-pub inline fn writeStructAligned(self: *Self, value: anytype) Error!void {
-    try self.alignForward(@alignOf(@TypeOf(value)));
-    try self.writeStruct(value);
-}
-
-pub inline fn writeStructAssumeAligned(self: *Self, value: anytype) Error!void {
+/// Like `writeStructUnaligned`, but asserts that the writer is aligned to the alignment of the
+/// struct.
+pub inline fn writeStruct(self: *Self, value: anytype) void {
     assert(self.pos % @alignOf(@TypeOf(value)) == 0);
-    try self.writeStruct(value);
+    self.writeStructUnaligned(value);
 }
 
-/// Always writes native endian. In practice, this is what you want when writing data for the GPU
-/// to read.
+/// Like `writeStructUnaligned`, but aligns the writer before writing.
+pub inline fn writeStructAligned(self: *Self, value: anytype) void {
+    self.alignForward(@alignOf(@TypeOf(value)));
+    self.writeStructUnaligned(value);
+}
+
+/// Writes a struct to the writer, ignoring alignment.
+///
+/// Always writes native endian. In practice, this is what you want when writing data for the GPU to
+/// read.
 ///
 /// https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-host-environment
-pub inline fn writeStruct(self: *Self, value: anytype) Error!void {
+pub inline fn writeStructUnaligned(self: *Self, value: anytype) void {
     // Implementation manually inlined to improve debug mode performance
     comptime assert(@typeInfo(@TypeOf(value)).@"struct".layout != .auto);
-    return self.writeAll(std.mem.asBytes(&value));
+    const new_pos = std.math.add(u64, self.pos, @sizeOf(@TypeOf(value))) catch @panic("OOB");
+    if (new_pos > self.size) @panic("OOB");
+    const dest: *align(1) volatile @TypeOf(value) = @ptrFromInt(@intFromPtr(self.ptr) + self.pos);
+    dest.* = value;
+    self.pos = new_pos;
 }
 
+/// Returns a `std.io.AnyWriter`. Will panic if used to write out of bounds.
 pub inline fn any(self: *Self) std.io.AnyWriter {
     return .{
         .context = @ptrCast(&self),
@@ -84,14 +59,12 @@ pub inline fn any(self: *Self) std.io.AnyWriter {
 
 fn typeErasedWriteFn(context: *const anyopaque, bytes: []const u8) anyerror!usize {
     const ptr: *const *Self = @alignCast(@ptrCast(context));
-    return write(ptr.*, bytes);
+    writeAll(ptr.*, bytes);
+    return bytes.len;
 }
 
 pub fn seekTo(self: *Self, pos: u64) void {
-    // Check bounds
     if (pos > self.size - self.pos) @panic("OOB");
-
-    // Set the pos
     self.pos = pos;
 }
 
@@ -117,10 +90,10 @@ pub fn splice(self: *Self, start: u64, maybe_len: ?u64) void {
 // Pads with `0`s to get the desired alignment. This is expected to be more efficient than
 // seeking, as seeking may cause unnecessary flushes of write combined memory on some
 // hardware.
-pub fn alignForward(self: *Self, comptime alignment: u16) Error!void {
+pub fn alignForward(self: *Self, comptime alignment: u16) void {
     const max_padding = [_]u8{0} ** alignment;
     const len = std.mem.alignForward(u64, self.pos, alignment) - self.pos;
-    try self.writeAll(max_padding[0..len]);
+    self.writeAll(max_padding[0..len]);
 }
 
 pub fn remainingBytes(self: *const Self) usize {
