@@ -120,7 +120,7 @@ pub fn Buf(k: BufKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Gx) void {
-            Backend.bufDestroy(gx, self.handle.as(.{}));
+            self.handle.deinit(gx);
             self.memory.deinit(gx);
         }
 
@@ -179,7 +179,7 @@ pub fn ReadbackBuf(k: BufKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Gx) void {
-            Backend.bufDestroy(gx, self.handle.as(.{}));
+            self.handle.deinit(gx);
             self.memory.deinit(gx);
         }
 
@@ -254,7 +254,7 @@ pub fn UploadBuf(k: BufKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Gx) void {
-            Backend.bufDestroy(gx, self.handle.as(.{}));
+            self.handle.deinit(gx);
             self.memory.deinit(gx);
         }
 
@@ -338,6 +338,10 @@ pub fn BufHandle(kind: BufKind) type {
         pub inline fn asBackendType(self: @This()) Backend.Buf {
             comptime assert(@sizeOf(Backend.Buf) == @sizeOf(@This()));
             return @enumFromInt(@intFromEnum(self));
+        }
+
+        pub fn deinit(self: @This(), gx: *Gx) void {
+            Backend.bufDestroy(gx, self.as(.{}));
         }
 
         _,
@@ -595,6 +599,10 @@ pub const ImageHandle = enum(u64) {
         comptime assert(@sizeOf(Backend.Image) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
     }
+
+    pub fn deinit(self: @This(), gx: *Gx) void {
+        Backend.imageDestroy(gx, self);
+    }
 };
 
 /// Represents a GPU image. The type is generic over color vs depth/stencil as this affects the
@@ -782,7 +790,9 @@ pub fn Image(kind: ImageKind) type {
         }
 
         pub fn deinit(self: @This(), gx: *Gx) void {
-            Backend.imageDestroy(gx, self.asAny());
+            self.view.deinit(gx);
+            self.handle.deinit(gx);
+            self.dedicated_memory.deinit(gx);
         }
 
         pub fn asAny(self: @This()) Image(.any) {
@@ -811,6 +821,10 @@ pub const ImageView = enum(u64) {
     pub inline fn asBackendType(self: @This()) Backend.ImageView {
         comptime assert(@sizeOf(Backend.ImageView) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
+    }
+
+    pub fn deinit(self: @This(), gx: *Gx) void {
+        Backend.imageViewDestroy(gx, self);
     }
 };
 

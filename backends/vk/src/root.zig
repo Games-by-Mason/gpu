@@ -1849,10 +1849,12 @@ pub fn imageCreate(
     }
 }
 
-pub fn imageDestroy(self: *Gx, image: gpu.Image(.any)) void {
-    self.backend.device.destroyImageView(image.view.asBackendType(), null);
-    self.backend.device.destroyImage(image.handle.asBackendType(), null);
-    image.dedicated_memory.deinit(self);
+pub fn imageViewDestroy(self: *Gx, view: gpu.ImageView) void {
+    self.backend.device.destroyImageView(view.asBackendType(), null);
+}
+
+pub fn imageDestroy(self: *Gx, image: gpu.ImageHandle) void {
+    self.backend.device.destroyImage(image.asBackendType(), null);
 }
 
 pub fn imageMemoryRequirements(
