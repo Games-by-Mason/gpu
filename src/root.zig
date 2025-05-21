@@ -67,12 +67,12 @@ pub const MemoryRequirements = struct {
     };
     size: u64,
     alignment: u64,
-    dedicated_allocation: DedicatedAllocationAffinity,
+    dedicated: DedicatedAllocationAffinity,
 
     /// Bumps the given offset by these memory requirements. If a dedicated allocation is preferred
     /// or required, the offset is left unchanged.
     pub fn bump(self: @This(), offset: *u64) void {
-        if (self.dedicated_allocation != .discouraged) return;
+        if (self.dedicated != .discouraged) return;
         offset.* = std.mem.alignForward(u64, offset.*, self.alignment);
         offset.* += self.size;
     }
@@ -81,6 +81,20 @@ pub const MemoryRequirements = struct {
 pub const DebugName = struct {
     str: [*:0]const u8,
     index: ?usize = null,
+
+    pub fn format(
+        self: @This(),
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("{s}", .{self.str});
+        if (self.index) |index| {
+            try writer.print(" {}", .{index});
+        }
+    }
 };
 
 pub fn Buf(k: BufKind) type {
@@ -408,22 +422,9 @@ pub fn Memory(k: MemoryKind) type {
 
         pub const kind = k;
 
-        pub const InitNoFormatOptions = struct {
+        pub const Options = struct {
             name: DebugName,
             size: u64,
-        };
-
-        pub const InitDepthStencilFormatOptions = struct {
-            name: DebugName,
-            size: u64,
-            format: ImageFormat,
-        };
-
-        pub const Options = switch (kind) {
-            .buf => InitNoFormatOptions,
-            .color_image => InitNoFormatOptions,
-            .depth_stencil_image => InitDepthStencilFormatOptions,
-            .any => unreachable,
         };
 
         pub inline fn init(gx: *Gx, options: @This().Options) @This() {
@@ -615,15 +616,13 @@ pub fn Image(kind: ImageKind) type {
         /// The image view. On backends that don't differentiate between views and handles, this is
         /// just a duplicate of the image handle.
         view: ImageView,
-        /// The memory for this image if it has a dedicated allocation.
-        dedicated_memory: MemoryHandle.Optional,
 
         pub const AllocOptions = union(enum) {
             /// Let the driver decide whether to bump allocate the image into the given buffer,
             /// updating offset to reflect the allocation, or to create a dedicated allocation. Use
             /// this approach unless you have a really good reason not to.
             auto: struct {
-                memory: Memory(memory_kind),
+                memory: Memory(kind.asMemoryKind()),
                 offset: *u64,
             },
             /// Creates a dedicated allocation for this image.
@@ -632,15 +631,9 @@ pub fn Image(kind: ImageKind) type {
             /// responsible for ensuring proper alignment, not overrunning the buffer, and checking
             /// that this image does not require a dedicated allocation on the current hardware.
             place: struct {
-                memory: Memory(memory_kind),
+                memory: Memory(kind.asMemoryKind()),
                 offset: u64,
             },
-
-            const memory_kind: MemoryKind = switch (kind) {
-                .color => .color_image,
-                .depth_stencil => |format| .{ .depth_stencil_image = format },
-                .any => .any,
-            };
 
             fn asAny(self: @This()) Image(.any).AllocOptions {
                 return switch (self) {
@@ -760,39 +753,74 @@ pub fn Image(kind: ImageKind) type {
             .any => unreachable,
         };
 
-        pub fn init(gx: *Gx, options: InitOptions) @This() {
+        pub const InitDedicatedOptions = struct {
+            name: DebugName,
+            image: Image(kind).Options,
+        };
+
+        pub const InitDedicatedResult = struct {
+            memory: Memory(kind.asMemoryKind()),
+            image: Image(kind),
+        };
+
+        /// Creates the image with a dedicated allocation.
+        pub fn initDedicated(gx: *Gx, options: InitDedicatedOptions) InitDedicatedResult {
             const zone = tracy.Zone.begin(.{ .src = @src() });
             defer zone.end();
-            const result = Backend.imageCreate(
+            const untyped = Backend.imageCreateDedicated(
                 gx,
                 options.name,
-                options.alloc.asAny(),
                 Image(kind).backendOptions(options.image),
             );
-            if (result.dedicated_memory) |dedicated_memory| {
-                tracy.alloc(.{
-                    .ptr = @ptrFromInt(@intFromEnum(dedicated_memory.handle)),
-                    .size = dedicated_memory.size,
-                    .pool_name = tracy_gpu_pool,
-                });
-                return .{
-                    .handle = result.handle,
-                    .view = result.view,
-                    .dedicated_memory = dedicated_memory.handle.asOptional(),
-                };
-            } else {
-                return .{
-                    .handle = result.handle,
-                    .view = result.view,
-                    .dedicated_memory = .none,
-                };
-            }
+            tracy.alloc(.{
+                .ptr = @ptrFromInt(@intFromEnum(untyped.memory.handle)),
+                .size = untyped.memory.size,
+                .pool_name = tracy_gpu_pool,
+            });
+            return .{
+                .memory = .{
+                    .handle = untyped.memory.handle,
+                    .size = untyped.memory.size,
+                },
+                .image = .{
+                    .handle = untyped.image.handle,
+                    .view = untyped.image.view,
+                },
+            };
+        }
+
+        pub const InitPlacedOptions = struct {
+            pub const Location = struct {
+            };
+            name: DebugName,
+            memory: Memory(kind.asMemoryKind()),
+            offset: u64,
+            image: Image(kind).Options,
+        };
+
+        /// Place the image beginning at the start of the given memory view. The caller is
+        /// responsible for ensuring proper alignment, not overrunning the buffer, and checking
+        /// that this image does not require a dedicated allocation on the current hardware.
+        pub fn initPlaced(gx: *Gx, options: InitPlacedOptions) @This() {
+            const zone = tracy.Zone.begin(.{ .src = @src() });
+            defer zone.end();
+            if (options.offset > options.memory.size) @panic("OOB");
+            const result = Backend.imageCreatePlaced(
+                gx,
+                options.name,
+                options.memory.handle,
+                options.offset,
+                Image(kind).backendOptions(options.image),
+            );
+            return .{
+                .handle = result.handle,
+                .view = result.view,
+            };
         }
 
         pub fn deinit(self: @This(), gx: *Gx) void {
             self.view.deinit(gx);
             self.handle.deinit(gx);
-            self.dedicated_memory.deinit(gx);
         }
 
         pub fn asAny(self: @This()) Image(.any) {
@@ -832,6 +860,14 @@ pub const ImageKind = union(enum) {
     color,
     depth_stencil: ImageFormat,
     any,
+
+    pub fn asMemoryKind(comptime self: @This()) MemoryKind {
+        return switch (self) {
+            .color => .color_image,
+            .depth_stencil => |format| .{ .depth_stencil_image = format },
+            .any => .any,
+        };
+    }
 
     fn eq(lhs: @This(), rhs: @This()) bool {
         return switch (lhs) {

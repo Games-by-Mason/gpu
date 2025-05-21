@@ -1714,13 +1714,20 @@ fn createImageView(
     return .fromBackendType(view);
 }
 
-fn allocImage(
+pub fn imageCreateDedicated(
     self: *Gx,
     name: gpu.DebugName,
-    image: vk.Image,
-    reqs: vk.MemoryRequirements,
     options: btypes.ImageOptions,
-) btypes.ImageCreateResult {
+) gpu.Image(.any).InitDedicatedResult {
+    // Create the image
+    const image = self.backend.device.createImage(&imageOptionsToVk(options), null)
+        catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_messenger, self.backend.device, image, name);
+    var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
+
+    // Get the memory requirements
+    self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
+    const reqs = reqs2.memory_requirements;
     const memory_type_bits: std.bit_set.IntegerBitSet(32) = .{
         .mask = reqs.memory_type_bits,
     };
@@ -1753,100 +1760,41 @@ fn allocImage(
 
     // Return the image and dedicated memory
     return .{
-        .handle = .fromBackendType(image),
-        .view = createImageView(self, name, image, options),
-        .dedicated_memory = .{
+        .image = .{
+            .handle = .fromBackendType(image),
+            .view = createImageView(self, name, image, options),
+        },
+        .memory = .{
             .handle = .fromBackendType(memory),
             .size = reqs.size,
         },
     };
 }
 
-fn placeImage(
+pub fn imageCreatePlaced(
     self: *Gx,
     name: gpu.DebugName,
-    image: vk.Image,
+    memory: gpu.MemoryHandle,
     offset: u64,
-    memory: vk.DeviceMemory,
     options: btypes.ImageOptions,
-) btypes.ImageCreateResult {
-    self.backend.device.bindImageMemory(image, memory, offset) catch |err| @panic(@errorName(err));
+) gpu.Image(.any) {
+    // Create the image
+    const image = self.backend.device.createImage(&imageOptionsToVk(options), null)
+        catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_messenger, self.backend.device, image, name);
+
+    // Place the image
+    self.backend.device.bindImageMemory(
+        image,
+        memory.asBackendType(),
+        offset,
+    ) catch |err| @panic(@errorName(err));
+
+    // Return the image
     return .{
         .handle = .fromBackendType(image),
         .view = createImageView(self, name, image, options),
-        .dedicated_memory = null,
     };
-}
-
-pub fn imageCreate(
-    self: *Gx,
-    name: gpu.DebugName,
-    alloc_options: gpu.Image(.any).AllocOptions,
-    image_options: btypes.ImageOptions,
-) btypes.ImageCreateResult {
-
-    // Create the image
-    const image = self.backend.device.createImage(&imageOptionsToVk(image_options), null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_messenger, self.backend.device, image, name);
-
-    switch (alloc_options) {
-        .auto => |auto| {
-            // Get the memory requirements
-            var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
-                .prefers_dedicated_allocation = vk.FALSE,
-                .requires_dedicated_allocation = vk.FALSE,
-            };
-            var reqs2: vk.MemoryRequirements2 = .{
-                .memory_requirements = undefined,
-                .p_next = &dedicated_reqs,
-            };
-            self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
-            const reqs = reqs2.memory_requirements;
-
-            // Check whether this should be a dedicated allocation
-            const dedicated = dedicated_reqs.prefers_dedicated_allocation == vk.TRUE or
-                dedicated_reqs.requires_dedicated_allocation == vk.TRUE;
-            if (dedicated) {
-                return allocImage(self, name, image, reqs, image_options);
-            } else {
-                auto.offset.* = std.mem.alignForward(u64, auto.offset.*, reqs.alignment);
-                const new_offset = auto.offset.* + reqs.size;
-                if (new_offset > auto.memory.size) @panic("OOB");
-                const result = placeImage(
-                    self,
-                    name,
-                    image,
-                    auto.offset.*,
-                    auto.memory.handle.asBackendType(),
-                    image_options,
-                );
-                auto.offset.* = new_offset;
-                return result;
-            }
-        },
-        .dedicated => {
-            var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
-            self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
-            const reqs = reqs2.memory_requirements;
-            return allocImage(self, name, image, reqs, image_options);
-        },
-        .place => |place| {
-            var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
-            self.backend.device.getImageMemoryRequirements2(&.{ .image = image }, &reqs2);
-            const reqs = reqs2.memory_requirements;
-            const offset = std.mem.alignForward(u64, place.offset, reqs.alignment);
-            const new_offset = offset + reqs.size;
-            if (new_offset > place.memory.size) @panic("OOB");
-            return placeImage(
-                self,
-                name,
-                image,
-                offset,
-                place.memory.handle.asBackendType(),
-                image_options,
-            );
-        },
-    }
 }
 
 pub fn imageViewDestroy(self: *Gx, view: gpu.ImageView) void {
@@ -1877,7 +1825,7 @@ pub fn imageMemoryRequirements(
     return .{
         .size = reqs.size,
         .alignment = reqs.alignment,
-        .dedicated_allocation = if (dedicated_reqs.requires_dedicated_allocation == vk.TRUE)
+        .dedicated = if (dedicated_reqs.requires_dedicated_allocation == vk.TRUE)
             .required
         else if (dedicated_reqs.prefers_dedicated_allocation == vk.TRUE)
             .preferred

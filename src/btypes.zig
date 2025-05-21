@@ -24,12 +24,6 @@ pub const NamedImageFormats = struct {
     d24_unorm_s8_uint: i32,
 };
 
-pub const ImageCreateResult = struct {
-    handle: gpu.ImageHandle,
-    view: gpu.ImageView,
-    dedicated_memory: ?gpu.Memory(.any),
-};
-
 pub const ImageOptions = struct {
     flags: gpu.ImageFlags,
     dimensions: gpu.Dimensions,
