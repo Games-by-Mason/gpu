@@ -22,6 +22,7 @@ pub const NamedImageFormats = struct {
     r8g8b8a8_srgb: i32,
 
     d24_unorm_s8_uint: i32,
+    d32_sfloat: i32,
 };
 
 pub const ImageOptions = struct {

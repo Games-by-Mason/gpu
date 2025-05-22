@@ -1833,8 +1833,6 @@ pub fn imageMemoryRequirements(
 }
 
 pub fn memoryCreate(self: *Gx, options: btypes.MemoryCreateOptions) gpu.MemoryHandle {
-    // Determine the memory type and size. Vulkan requires that we create an image or buffer to be
-    // able to do this, but we don't need to actually bind it to any memory it's just a handle.
     const memory_type_bits = switch (options.usage) {
         .color_image => b: {
             // "For images created with a color format, the memoryTypeBits member is identical for
@@ -3407,4 +3405,5 @@ pub const named_image_formats: btypes.NamedImageFormats = .{
     .r8g8b8a8_srgb = @intFromEnum(vk.Format.r8g8b8a8_srgb),
 
     .d24_unorm_s8_uint = @intFromEnum(vk.Format.d24_unorm_s8_uint),
+    .d32_sfloat = @intFromEnum(vk.Format.d32_sfloat),
 };

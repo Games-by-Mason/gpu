@@ -496,6 +496,7 @@ pub const ImageFormat = enum(i32) {
     r8g8b8a8_srgb = Backend.named_image_formats.r8g8b8a8_srgb,
 
     d24_unorm_s8_uint = Backend.named_image_formats.d24_unorm_s8_uint,
+    d32_sfloat = Backend.named_image_formats.d32_sfloat,
 
     _,
 

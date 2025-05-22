@@ -66,10 +66,17 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
         offset: u64,
 
         pub const Options = struct {
+            /// The debug name used for allocations exposed to validation layers and tools like
+            /// RenderDoc.
             name: [:0]const u8,
-            page_size: u64,
-            max_pages: usize,
-            initial_pages: usize,
+            /// AMD recommends a page size of 256MiB for devices with more than 1GiB of VRAM which
+            /// is about 91% of devices on the Steam Hardware Survey at the time of writing.
+            page_size: u64 = 256 * std.math.pow(u64, 2, 20),
+            /// Only 2.46% of GPUs would be able to allocate more pages than this at the default
+            /// page size, and that's making the calculation very liberally.
+            max_pages: usize = 128,
+            /// Increase this value if you end up getting warnings about dynamic allocations.
+            initial_pages: usize = 1,
         };
 
         /// Creates a new allocator.
