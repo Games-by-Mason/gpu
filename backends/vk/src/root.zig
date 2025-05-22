@@ -1720,8 +1720,7 @@ pub fn imageCreateDedicated(
     options: btypes.ImageOptions,
 ) gpu.Image(.any).InitDedicatedResult {
     // Create the image
-    const image = self.backend.device.createImage(&imageOptionsToVk(options), null)
-        catch |err| @panic(@errorName(err));
+    const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, image, name);
     var reqs2: vk.MemoryRequirements2 = .{ .memory_requirements = undefined };
 
@@ -1779,8 +1778,7 @@ pub fn imageCreatePlaced(
     options: btypes.ImageOptions,
 ) gpu.Image(.any) {
     // Create the image
-    const image = self.backend.device.createImage(&imageOptionsToVk(options), null)
-        catch |err| @panic(@errorName(err));
+    const image = self.backend.device.createImage(&imageOptionsToVk(options), null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, image, name);
 
     // Place the image
@@ -3395,8 +3393,6 @@ pub const ImageUploadRegion = vk.BufferImageCopy;
 pub const BufferUploadRegion = vk.BufferCopy;
 pub const Attachment = vk.RenderingAttachmentInfo;
 pub const ImageFormat = vk.Format;
-
-pub const memory_none: Memory = .null_handle;
 
 pub const named_image_formats: btypes.NamedImageFormats = .{
     .undefined = @intFromEnum(vk.Format.undefined),

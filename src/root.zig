@@ -12,6 +12,8 @@ const Zone = tracy.Zone;
 
 pub const tracy = @import("tracy");
 
+pub const ext = @import("ext.zig");
+
 pub const tracy_gpu_pool = "gpu";
 
 /// Compile time options for the library. You must declare a constant of this type in your root file
@@ -365,30 +367,6 @@ pub fn BufHandle(kind: BufKind) type {
 pub const MemoryHandle = enum(u64) {
     _,
 
-    pub const Optional = enum(u64) {
-        none = @intFromEnum(Backend.memory_none),
-        _,
-
-        pub fn unwrap(self: @This()) ?MemoryHandle {
-            if (self == .none) return null;
-            return @enumFromInt(@intFromEnum(self));
-        }
-
-        pub inline fn fromBackendType(value: Backend.Memory) @This() {
-            comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(value));
-        }
-
-        pub inline fn asBackendType(self: @This()) Backend.Memory {
-            comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(self));
-        }
-
-        pub fn deinit(self: @This(), gx: *Gx) void {
-            if (self.unwrap()) |some| some.deinit(gx);
-        }
-    };
-
     pub fn deinit(self: @This(), gx: *Gx) void {
         tracy.free(.{
             .ptr = @ptrFromInt(@intFromEnum(self)),
@@ -397,15 +375,8 @@ pub const MemoryHandle = enum(u64) {
         Backend.memoryDestroy(gx, self);
     }
 
-    pub fn asOptional(self: @This()) Optional {
-        const result: Optional = @enumFromInt(@intFromEnum(self));
-        assert(result != .none);
-        return result;
-    }
-
     pub inline fn fromBackendType(value: Backend.Memory) @This() {
         comptime assert(@sizeOf(Backend.Memory) == @sizeOf(@This()));
-        assert(value != Backend.memory_none);
         return @enumFromInt(@intFromEnum(value));
     }
 
@@ -617,39 +588,6 @@ pub fn Image(kind: ImageKind) type {
         /// just a duplicate of the image handle.
         view: ImageView,
 
-        pub const AllocOptions = union(enum) {
-            /// Let the driver decide whether to bump allocate the image into the given buffer,
-            /// updating offset to reflect the allocation, or to create a dedicated allocation. Use
-            /// this approach unless you have a really good reason not to.
-            auto: struct {
-                memory: Memory(kind.asMemoryKind()),
-                offset: *u64,
-            },
-            /// Creates a dedicated allocation for this image.
-            dedicated: void,
-            /// Place the image beginning at the start of the given memory view. The caller is
-            /// responsible for ensuring proper alignment, not overrunning the buffer, and checking
-            /// that this image does not require a dedicated allocation on the current hardware.
-            place: struct {
-                memory: Memory(kind.asMemoryKind()),
-                offset: u64,
-            },
-
-            fn asAny(self: @This()) Image(.any).AllocOptions {
-                return switch (self) {
-                    .auto => |auto| .{ .auto = .{
-                        .memory = auto.memory.as(.any),
-                        .offset = auto.offset,
-                    } },
-                    .dedicated => .dedicated,
-                    .place => |place| .{ .place = .{
-                        .memory = place.memory.as(.any),
-                        .offset = place.offset,
-                    } },
-                };
-            }
-        };
-
         fn backendOptions(options: @This().Options) btypes.ImageOptions {
             assert(options.extent.width * options.extent.height * options.extent.depth > 0);
             assert(options.mip_levels > 0);
@@ -741,12 +679,6 @@ pub fn Image(kind: ImageKind) type {
             array_layers: u32 = 1,
         };
 
-        pub const InitOptions = struct {
-            name: DebugName,
-            alloc: Image(kind).AllocOptions,
-            image: Image(kind).Options,
-        };
-
         pub const Options = switch (kind) {
             .color => ColorOptions,
             .depth_stencil => DepthStencilOptions,
@@ -790,8 +722,6 @@ pub fn Image(kind: ImageKind) type {
         }
 
         pub const InitPlacedOptions = struct {
-            pub const Location = struct {
-            };
             name: DebugName,
             memory: Memory(kind.asMemoryKind()),
             offset: u64,
@@ -827,7 +757,6 @@ pub fn Image(kind: ImageKind) type {
             return .{
                 .handle = @enumFromInt(@intFromEnum(self.handle)),
                 .view = self.view,
-                .dedicated_memory = self.dedicated_memory,
             };
         }
     };
