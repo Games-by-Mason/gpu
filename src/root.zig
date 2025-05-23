@@ -38,11 +38,13 @@ pub const btypes = @import("btypes.zig");
 const gpu = @This();
 
 pub const Extent2D = struct {
+    pub const zero: @This() = .{ .width = 0, .height = 0 };
     width: u32,
     height: u32,
 };
 
 pub const Offset2D = struct {
+    pub const zero: @This() = .{ .x = 0, .y = 0 };
     x: i32,
     y: i32,
 };
