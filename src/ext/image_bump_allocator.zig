@@ -14,7 +14,7 @@ const DebugName = gpu.DebugName;
 const log = std.log.scoped(.gpu);
 const assert = std.debug.assert;
 
-/// A bump allocator for images. For managing buffer allocations, see `BufferLayout`.
+/// A bump allocator for images. For managing buffer allocations, see `gpu.ext.bufPart`.
 ///
 /// Modern graphics APIs provide what is essentially a page allocator, and expect you to suballocate
 /// from it. However, different resources may require different memory types, and some resources may
@@ -24,6 +24,10 @@ const assert = std.debug.assert;
 /// conservative padding (https://microsoft.github.io/DirectX-Specs/d3d/D3D12TightPlacedResourceAlignment.html)
 /// so it's difficult to estimate the correct fixed buffer size to allocate up front unless you
 /// statically know which resources you'll load in what order, which is highly restrictive.
+///
+/// More resources:
+/// - https://asawicki.info/news_1726_secrets_of_direct3d_12_resource_alignment
+/// - https://asawicki.info/news_1783_directx_12_agility_sdk_17160-preview_explained
 ///
 /// A simple solution to this for many cases is a page based bump allocator. The intended usage is
 /// to statically allocate the required number of pages up front, but leave room for additional

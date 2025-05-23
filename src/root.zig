@@ -309,9 +309,7 @@ pub const BufKind = packed struct {
     uniform: bool = false,
     storage: bool = false,
     index: bool = false,
-    vertex: bool = false,
     indirect: bool = false,
-    shader_device_address: bool = false,
 
     inline fn checkCast(comptime self: @This(), comptime rtype: @This()) void {
         if (comptime !containsBits(self, rtype)) {
@@ -1219,6 +1217,25 @@ pub const Device = struct {
     // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
     pub const max_storage_buf_offset_alignment = 256;
 
+    /// The required alignment of a resource in a buffer being copied.
+    ///
+    /// When running Vulkan, this value is just a recommendation, and can vary per device--real GPUs
+    /// sometimes set it to 1. With DX12, it's a requirement, and is always 512. We're exposing the DX12
+    /// value since it's the strictest.
+    ///
+    /// https://learn.microsoft.com/en-us/windows/win32/direct3d12/upload-and-readback-of-texture-data
+    pub const buffer_copy_offset_alignment = 512;
+
+    /// The required row pitch alignment of a resource in a buffer being copied. Keep in mind that the
+    /// row pitch is the distance between the rows, this means that tightly packed rows are always
+    /// properly aligned, allowing you to ignore this value if you like.
+    ///
+    /// See `buffer_copy_offset_alignment` for more info on why this is a constant. This is also often
+    /// 1 on real GPUs under Vulkan.
+    ///
+    /// https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_subresource_footprint
+    pub const buffer_copy_row_pitch_alignment = 256;
+
     pub const Kind = enum {
         other,
         integrated,
@@ -1230,6 +1247,7 @@ pub const Device = struct {
     kind: Kind,
     uniform_buf_offset_alignment: u16,
     storage_buf_offset_alignment: u16,
+    texel_buffer_offset_alignment: u16,
     timestamp_period: f32,
     tracy_queue: TracyQueue,
     surface_format: ImageFormat,
@@ -1716,22 +1734,3 @@ fn AsBackendSlice(Item: type) type {
         }
     };
 }
-
-/// The required alignment of a resource in a buffer being copied.
-///
-/// When running Vulkan, this value is just a recommendation, and can vary per device--real GPUs
-/// sometimes set it to 1. With DX12, it's a requirement, and is always 512. We're exposing the DX12
-/// value since it's the strictest.
-///
-/// https://learn.microsoft.com/en-us/windows/win32/direct3d12/upload-and-readback-of-texture-data
-pub const buffer_copy_offset_alignment = 512;
-
-/// The required row pitch alignment of a resource in a buffer being copied. Keep in mind that the
-/// row pitch is the distance between the rows, this means that tightly packed rows are always
-/// properly aligned, allowing you to ignore this value if you like.
-///
-/// See `buffer_copy_offset_alignment` for more info on why this is a constant. This is also often
-/// 1 on real GPUs under Vulkan.
-///
-/// https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_subresource_footprint
-pub const buffer_copy_row_pitch_alignment = 256;

@@ -88,7 +88,7 @@ pub fn beginWrite(
     // practice real GPUs may have the value set to 1. If DX12 ever lifts this requirements we could
     // elide this padding, though keep in mind that block based formats would still need to be
     // aligned to their blocks or such which is happening implicitly here.
-    self.writer.alignForward(gpu.buffer_copy_offset_alignment);
+    self.writer.alignForward(gpu.Device.buffer_copy_offset_alignment);
 
     // Create the image.
     const image: gpu.Image(.color) = allocator.alloc(gx, options);

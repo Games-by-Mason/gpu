@@ -514,6 +514,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                 // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
                 .min_uniform_buffer_offset_alignment = @intCast(properties.limits.min_uniform_buffer_offset_alignment),
                 .min_storage_buffer_offset_alignment = @intCast(properties.limits.min_storage_buffer_offset_alignment),
+                .min_texel_buffer_offset_alignment = @intCast(properties.limits.min_texel_buffer_offset_alignment),
                 .sampler_anisotropy = features.vk10.features.sampler_anisotropy == vk.TRUE,
                 .max_sampler_anisotropy = properties.limits.max_sampler_anisotropy,
                 .queue_family_index = queue_family_index.?,
@@ -690,6 +691,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .kind = best_physical_device.ty,
             .uniform_buf_offset_alignment = best_physical_device.min_uniform_buffer_offset_alignment,
             .storage_buf_offset_alignment = best_physical_device.min_storage_buffer_offset_alignment,
+            .texel_buffer_offset_alignment = best_physical_device.min_texel_buffer_offset_alignment,
             .timestamp_period = timestamp_period,
             .tracy_queue = tracy_queue,
             .surface_format = .fromBackendType(best_physical_device.surface_format.format),
@@ -935,9 +937,7 @@ fn bufUsageFlagsFromKind(kind: gpu.BufKind) vk.BufferUsageFlags {
         .uniform_buffer_bit = kind.uniform,
         .storage_buffer_bit = kind.storage,
         .index_buffer_bit = kind.index,
-        .vertex_buffer_bit = kind.vertex,
         .indirect_buffer_bit = kind.indirect,
-        .shader_device_address_bit = kind.shader_device_address,
     };
     assert(@as(u32, @bitCast(result)) != 0);
     return result;
@@ -3088,6 +3088,7 @@ const PhysicalDevice = struct {
     ty: gpu.Device.Kind = undefined,
     min_uniform_buffer_offset_alignment: u16 = undefined,
     min_storage_buffer_offset_alignment: u16 = undefined,
+    min_texel_buffer_offset_alignment: u16 = undefined,
     sampler_anisotropy: bool = undefined,
     max_sampler_anisotropy: f32 = undefined,
     queue_family_index: u32 = undefined,
