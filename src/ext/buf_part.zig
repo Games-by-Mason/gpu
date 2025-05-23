@@ -58,7 +58,6 @@ pub fn Options(Buf: type) type {
             }
         } else struct {
             name: DebugName,
-            size: u64,
 
             fn asBufOptions(self: @This(), size: u64) Buf.Options {
                 return .{
