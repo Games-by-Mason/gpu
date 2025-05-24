@@ -6,4 +6,4 @@ pub const ImageBumpAllocator = @import("ext/image_bump_allocator.zig").ImageBump
 pub const DeleteQueue = @import("ext/delete_queue.zig").DeleteQueue;
 pub const ImageUploadQueue = @import("ext/ImageUploadQueue.zig");
 pub const bufPart = @import("ext/buf_part.zig").bufPart;
-pub const color = @import("ext/color.zig");
+pub const colors = @import("ext/colors.zig");
