@@ -1,4 +1,5 @@
-//! Convenience functions for color conversions.
+//! Convenience functions for color conversions. Methods operate on structs containing r/g/b/a
+//! fields, tuples, arrays, or vectors.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -17,6 +18,7 @@ test f32_to_u8_unorm_decimals {
     }
 }
 
+/// Converts a linear float color to sRGB.
 pub fn linearToSrgb(T: type, linear: T) T {
     var result = anyColor(linear);
     if (@TypeOf(result.r) != void) result.r = linearToSrgbInner(result.r);
@@ -36,6 +38,7 @@ fn linearToSrgbInner(linear: anytype) @TypeOf(linear) {
     }
 }
 
+/// Converts a sRGB float color to linear sRGB.
 pub fn srgbToLinear(T: type, srgb: T) T {
     var result = anyColor(srgb);
     if (@TypeOf(result.r) != void) result.r = srgbToLinearInner(result.r);
@@ -74,6 +77,7 @@ test "srgb" {
     }
 }
 
+/// Converts a float color to a unorm color.
 pub fn floatToUnorm(Result: type, input: anytype) Result {
     const any_input = anyColor(input);
     var result: AnyColor(Result) = undefined;
@@ -94,6 +98,7 @@ test floatToUnorm {
     try std.testing.expectEqual(0, floatToUnorm(u8, 0.0));
 }
 
+/// Converts a unorm color to a float color.
 pub fn unormToFloat(Result: type, input: anytype) Result {
     const any_input = anyColor(input);
     var result: AnyColor(Result) = undefined;
@@ -149,6 +154,18 @@ test unormToFloat {
     }
 }
 
+/// Helper function for converting a sRGB float color to a linear unorm color.
+pub fn srgbToLinearUnorm(Output: type, Input: type, input: Input) Output {
+    return floatToUnorm(Output, srgbToLinear(Input, input));
+}
+
+test srgbToLinearUnorm {
+    try std.testing.expectEqual(
+        [4]u8{ 1, 51, 141, 255 },
+        srgbToLinearUnorm([4]u8, [4]f32, .{ 0.063, 0.486, 0.769, 1.0 }),
+    );
+}
+
 /// A generic color type for use in writing generic conversions. Not recommended for general
 /// application use, provide your own color type for this.
 pub fn AnyColor(Input: type) type {
@@ -161,7 +178,7 @@ pub fn AnyColor(Input: type) type {
         .float, .comptime_float, .int, .comptime_int => {
             R = Input;
         },
-        .array => |info| {
+        inline .array, .vector => |info| {
             if (info.len > 0) R = info.child;
             if (info.len > 1) G = info.child;
             if (info.len > 2) B = info.child;
@@ -218,7 +235,7 @@ pub fn AnyColor(Input: type) type {
                     comptime assert(channels == 1);
                     result = self.r;
                 },
-                .array => |info| {
+                inline .array, .vector => |info| {
                     comptime assert(channels == info.len);
                     if (info.len > 0) result[0] = self.r;
                     if (info.len > 1) result[1] = self.g;
@@ -255,7 +272,7 @@ pub fn anyColor(input: anytype) AnyColor(@TypeOf(input)) {
         .float, .comptime_float, .int, .comptime_int => {
             result.r = input;
         },
-        .array => |info| {
+        inline .array, .vector => |info| {
             if (info.len > 0) result.r = input[0];
             if (info.len > 1) result.g = input[1];
             if (info.len > 2) result.b = input[2];
@@ -422,6 +439,58 @@ test anyColor {
     // Array 4
     {
         const input: [4]f32 = .{ 1.0, 2.0, 3.0, 4.0 };
+        const any = anyColor(input);
+        try std.testing.expectEqual(f32, @TypeOf(any.r));
+        try std.testing.expectEqual(1.0, any.r);
+        try std.testing.expectEqual(f32, @TypeOf(any.g));
+        try std.testing.expectEqual(2.0, any.g);
+        try std.testing.expectEqual(f32, @TypeOf(any.b));
+        try std.testing.expectEqual(3.0, any.b);
+        try std.testing.expectEqual(f32, @TypeOf(any.a));
+        try std.testing.expectEqual(4.0, any.a);
+        try std.testing.expectEqual(input, any.to(@TypeOf(input)));
+    }
+
+    // Vector 0
+    {
+        const input: @Vector(0, f32) = .{};
+        const any = anyColor(input);
+        try std.testing.expectEqual({}, any.r);
+        try std.testing.expectEqual({}, any.g);
+        try std.testing.expectEqual({}, any.b);
+        try std.testing.expectEqual({}, any.a);
+        try std.testing.expectEqual(input, any.to(@TypeOf(input)));
+    }
+
+    // Vector 1
+    {
+        const input: @Vector(1, f32) = .{1.0};
+        const any = anyColor(input);
+        try std.testing.expectEqual(f32, @TypeOf(any.r));
+        try std.testing.expectEqual(1.0, any.r);
+        try std.testing.expectEqual({}, any.g);
+        try std.testing.expectEqual({}, any.b);
+        try std.testing.expectEqual({}, any.a);
+        try std.testing.expectEqual(input, any.to(@TypeOf(input)));
+    }
+
+    // Vector 3
+    {
+        const input: @Vector(3, f32) = .{ 1.0, 2.0, 3.0 };
+        const any = anyColor(input);
+        try std.testing.expectEqual(f32, @TypeOf(any.r));
+        try std.testing.expectEqual(1.0, any.r);
+        try std.testing.expectEqual(f32, @TypeOf(any.g));
+        try std.testing.expectEqual(2.0, any.g);
+        try std.testing.expectEqual(f32, @TypeOf(any.b));
+        try std.testing.expectEqual(3.0, any.b);
+        try std.testing.expectEqual({}, any.a);
+        try std.testing.expectEqual(input, any.to(@TypeOf(input)));
+    }
+
+    // Vector 4
+    {
+        const input: @Vector(4, f32) = .{ 1.0, 2.0, 3.0, 4.0 };
         const any = anyColor(input);
         try std.testing.expectEqual(f32, @TypeOf(any.r));
         try std.testing.expectEqual(1.0, any.r);
