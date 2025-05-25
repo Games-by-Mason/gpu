@@ -421,17 +421,25 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             defer gpa.free(surface_formats);
             for (surface_formats) |surface_format| {
                 var format_rank: u8 = 0;
-                switch (surface_format.format) {
-                    .b8g8r8a8_srgb => format_rank += 3,
-                    .r8g8b8a8_srgb => format_rank += 2,
-                    else => {},
-                }
-                switch (surface_format.color_space) {
-                    .srgb_nonlinear_khr => format_rank += 3,
-                    else => {},
+                // We require at least three channel sRGB surface format.
+                if (surface_format.color_space == .srgb_nonlinear_khr) {
+                    switch (surface_format.format) {
+                        // 99.89% of Windows devices on vulkan.gpuinfo.org support this format and
+                        // color space.
+                        .b8g8r8a8_srgb => format_rank += 3,
+                        // These hopefully cover the remaining devices. I doubt desktop hardware exists
+                        // that doesn't support at least one sRGB surface format, if it does then we'd
+                        // have to fall back to doing the sRGB conversion at the end ourselves.
+                        .r8g8b8a8_srgb => format_rank += 2,
+                        .r8g8b8_srgb,
+                        .b8g8r8_srgb,
+                        .a8b8g8r8_srgb_pack32,
+                        => format_rank += 1,
+                        else => {},
+                    }
                 }
 
-                if (best_surface_format == null or format_rank > best_surface_format_rank) {
+                if (format_rank > best_surface_format_rank) {
                     best_surface_format = surface_format;
                     best_surface_format_rank = format_rank;
                 }
