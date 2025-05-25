@@ -53,7 +53,7 @@ pub const Options = struct {
         Unknown,
     };
 
-    instance_extensions: [][*:0]const u8,
+    instance_extensions: []const [*:0]const u8,
     getInstanceProcAddress: vk.PfnGetInstanceProcAddr,
     surface_context: ?*anyopaque,
     createSurface: *const fn (
