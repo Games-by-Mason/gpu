@@ -486,13 +486,16 @@ fn containsBits(self: anytype, other: @TypeOf(self)) bool {
 pub const ImageFormat = enum(i32) {
     undefined = Backend.named_image_formats.undefined,
 
+    r8_unorm = Backend.named_image_formats.r8_unorm,
+    r8_snorm = Backend.named_image_formats.r8_snorm,
+    r8_uint = Backend.named_image_formats.r8_uint,
+    r8_sint = Backend.named_image_formats.r8_sint,
+    r8_srgb = Backend.named_image_formats.r8_srgb,
+
     r8g8b8a8_unorm = Backend.named_image_formats.r8g8b8a8_unorm,
     r8g8b8a8_snorm = Backend.named_image_formats.r8g8b8a8_snorm,
-    r8g8b8a8_uscaled = Backend.named_image_formats.r8g8b8a8_uscaled,
-    r8g8b8a8_sscaled = Backend.named_image_formats.r8g8b8a8_sscaled,
     r8g8b8a8_uint = Backend.named_image_formats.r8g8b8a8_uint,
     r8g8b8a8_sint = Backend.named_image_formats.r8g8b8a8_sint,
-
     r8g8b8a8_srgb = Backend.named_image_formats.r8g8b8a8_srgb,
 
     d24_unorm_s8_uint = Backend.named_image_formats.d24_unorm_s8_uint,

@@ -3404,10 +3404,14 @@ pub const ImageFormat = vk.Format;
 pub const named_image_formats: btypes.NamedImageFormats = .{
     .undefined = @intFromEnum(vk.Format.undefined),
 
+    .r8_unorm = @intFromEnum(vk.Format.r8_unorm),
+    .r8_snorm = @intFromEnum(vk.Format.r8_snorm),
+    .r8_uint = @intFromEnum(vk.Format.r8_uint),
+    .r8_sint = @intFromEnum(vk.Format.r8_sint),
+    .r8_srgb = @intFromEnum(vk.Format.r8_srgb),
+
     .r8g8b8a8_unorm = @intFromEnum(vk.Format.r8g8b8a8_unorm),
     .r8g8b8a8_snorm = @intFromEnum(vk.Format.r8g8b8a8_snorm),
-    .r8g8b8a8_uscaled = @intFromEnum(vk.Format.r8g8b8a8_uscaled),
-    .r8g8b8a8_sscaled = @intFromEnum(vk.Format.r8g8b8a8_sscaled),
     .r8g8b8a8_uint = @intFromEnum(vk.Format.r8g8b8a8_uint),
     .r8g8b8a8_sint = @intFromEnum(vk.Format.r8g8b8a8_sint),
 
