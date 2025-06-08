@@ -37,24 +37,24 @@ pub const btypes = @import("btypes.zig");
 
 const gpu = @This();
 
-pub const Extent2D = struct {
+pub const Extent2D = extern struct {
     pub const zero: @This() = .{ .width = 0, .height = 0 };
     width: u32,
     height: u32,
 };
 
-pub const Offset2D = struct {
+pub const Offset2D = extern struct {
     pub const zero: @This() = .{ .x = 0, .y = 0 };
     x: i32,
     y: i32,
 };
 
-pub const Rect2D = struct {
+pub const Rect2D = extern struct {
     offset: Offset2D,
     extent: Extent2D,
 };
 
-pub const Viewport = struct {
+pub const Viewport = extern struct {
     x: f32,
     y: f32,
     width: f32,
