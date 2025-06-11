@@ -16,6 +16,9 @@ pub const vk = @import("vulkan");
 
 const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
+// In practice, there should typically be only two or three.
+const max_swapchain_depth = 8;
+
 // Context
 surface: vk.SurfaceKHR,
 base_wrapper: vk.BaseWrapper,
@@ -34,7 +37,7 @@ cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
 // Synchronization
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
-ready_for_present: [global_options.max_frames_in_flight]vk.Semaphore,
+ready_for_present: [max_swapchain_depth]vk.Semaphore,
 cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 
 // The current swapchain image index. Other APIs track this automatically, Vulkan appears to allow
@@ -620,7 +623,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         setName(debug_messenger, device, image_availables[i], .{ .str = "Image Available", .index = i });
     }
 
-    var ready_for_present: [global_options.max_frames_in_flight]vk.Semaphore = undefined;
+    var ready_for_present: [max_swapchain_depth]vk.Semaphore = undefined;
     for (&ready_for_present, 0..) |*semaphore, frame| {
         semaphore.* = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
         setName(debug_messenger, device, semaphore.*, .{
@@ -2307,7 +2310,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
                 .p_command_buffers = &.{cb.asBackendType()},
                 .signal_semaphore_count = 1,
                 .p_signal_semaphores = &.{
-                    self.backend.ready_for_present[self.frame],
+                    self.backend.ready_for_present[self.backend.image_index.?],
                 },
                 .p_next = null,
             }},
@@ -2325,7 +2328,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
             self.backend.queue,
             &.{
                 .wait_semaphore_count = 1,
-                .p_wait_semaphores = &.{self.backend.ready_for_present[self.frame]},
+                .p_wait_semaphores = &.{self.backend.ready_for_present[self.backend.image_index.?]},
                 .swapchain_count = swapchain.len,
                 .p_swapchains = &swapchain,
                 .p_image_indices = &image_index,
@@ -2929,9 +2932,6 @@ const Swapchain = struct {
         },
         .out_of_date = true,
     };
-
-    // In practice, there should typically be only two or three.
-    const max_swapchain_depth = 8;
 
     swapchain: vk.SwapchainKHR,
     images: std.BoundedArray(vk.Image, max_swapchain_depth),
