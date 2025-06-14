@@ -5,12 +5,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const no_llvm = b.option(
-        bool,
-        "no-llvm",
-        "Don't use the LLVM backend.",
-    ) orelse false;
-
     const gpu = b.addModule("gpu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -27,7 +21,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .use_llvm = !no_llvm,
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
@@ -45,7 +38,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/docs.zig"),
         .target = target,
         .optimize = optimize,
-        .use_llvm = !no_llvm,
     });
     const docs = docs_exe.getEmittedDocs();
     const install_docs = b.addInstallDirectory(.{

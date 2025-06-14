@@ -1741,5 +1741,5 @@ fn AsBackendSlice(Item: type) type {
 }
 
 test {
-    _ = ext.colors;
+    _ = ext;
 }
