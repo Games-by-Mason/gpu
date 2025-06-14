@@ -17,11 +17,18 @@ pub fn build(b: *std.Build) void {
     });
     gpu.addImport("tracy", tracy.module("tracy"));
 
+    const geom = b.dependency("geom", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    gpu.addImport("geom", geom.module("geom"));
+
     const lib_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    lib_unit_tests.root_module.addImport("geom", geom.module("geom"));
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 

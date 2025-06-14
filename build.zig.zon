@@ -16,6 +16,11 @@
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.313.tar.gz",
             .hash = "N-V-__8AAPLT7gH4vgN7Xo6yZlOMrzllGbdvVxxhrwUvgI9r",
         },
+        // Only used by extensions
+        .geom = .{
+            .url = "git+https://github.com/Games-By-Mason/geom#aebe39f84db50fe8bfa55a4b31d46d7bae11a4d7",
+            .hash = "geom-0.0.0-U1ma3x5AAQCykHvJ4VWSAzJekeTlY5huX7XF1NgpZm2P",
+        },
     },
     .paths = .{
         "build.zig",
