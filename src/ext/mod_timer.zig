@@ -14,7 +14,7 @@ pub const ModTimer = extern struct {
     ///
     /// By initializing to a value near the point where the timer wraps, we're more likely to catch
     /// effects that don't correctly handle the wrap.
-    seconds: f32 = 1000 - 10,
+    seconds: f32 = 1000 - 5,
 
     /// Update the timer.
     pub fn update(self: *@This(), delta_s: f32) void {
