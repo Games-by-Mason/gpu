@@ -1,5 +1,9 @@
 //! Convenience functions for color conversions. Methods operate on structs containing r/g/b/a
 //! fields, tuples, arrays, or vectors.
+//!
+//! These functions are mirrored in `gbms`:
+//!
+//! https://github.com/Games-by-Mason/gbms
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -30,7 +34,7 @@ pub fn linearToSrgb(T: type, linear: T) T {
 fn linearToSrgbInner(linear: anytype) @TypeOf(linear) {
     // The color component transfer function from the SRGB specification:
     // https://www.w3.org/Graphics/Color/srgb
-    if (linear <= 0.031308) {
+    if (linear <= 0.0031308) {
         return 12.92 * linear;
     } else {
         @setEvalBranchQuota(2000);
