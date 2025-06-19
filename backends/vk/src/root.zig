@@ -482,7 +482,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         } else .{ null, null, null };
 
         log.debug("\t* present mode: {?}", .{present_mode});
-        log.err("\t* surface format: {?}", .{surface_format});
+        log.debug("\t* surface format: {?}", .{surface_format});
         if (!extensions_supported) {
             log.debug("\t* missing extensions:", .{});
             var key_iterator = missing_device_extensions.keyIterator();
