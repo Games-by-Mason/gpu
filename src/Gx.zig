@@ -40,6 +40,11 @@ validate: bool,
 
 /// Initialization options.
 pub const Options = struct {
+    pub const ColorSpace = enum {
+        srgb,
+        linear,
+    };
+
     pub const DebugMode = enum(u8) {
         /// Enables graphics API validation and debug output. High performance cost.
         ///
@@ -104,6 +109,8 @@ pub const Options = struct {
     /// Whether or not to force maximum alignment, may be useful for diagnosing some memory related
     /// issues.
     max_alignment: bool = false,
+    /// The swapchain's color space.
+    swapchain_color_space: ColorSpace,
     /// Backend specific options.
     backend: Backend.Options,
 };

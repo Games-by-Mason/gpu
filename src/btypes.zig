@@ -16,13 +16,15 @@ pub const NamedImageFormats = struct {
     r8_snorm: i32,
     r8_uint: i32,
     r8_sint: i32,
-    r8_srgb: i32,
 
     r8g8b8a8_unorm: i32,
     r8g8b8a8_snorm: i32,
     r8g8b8a8_uint: i32,
     r8g8b8a8_sint: i32,
     r8g8b8a8_srgb: i32,
+
+    b8g8r8a8_unorm: i32,
+    b8g8r8a8_srgb: i32,
 
     d24_unorm_s8_uint: i32,
     d32_sfloat: i32,

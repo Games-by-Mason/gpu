@@ -486,19 +486,34 @@ fn containsBits(self: anytype, other: @TypeOf(self)) bool {
 pub const ImageFormat = enum(i32) {
     undefined = Backend.named_image_formats.undefined,
 
+    /// DX12 requires support for use as a storage image, and as a sampled image.
     r8_unorm = Backend.named_image_formats.r8_unorm,
+    /// DX12 requires support for use as a write only storage image, and as a sampled image.
     r8_snorm = Backend.named_image_formats.r8_snorm,
+    /// DX12 requires support for use as a storage image, and as a sampled image.
     r8_uint = Backend.named_image_formats.r8_uint,
+    /// DX12 requires support for use as a storage image, and as a sampled image.
     r8_sint = Backend.named_image_formats.r8_sint,
-    r8_srgb = Backend.named_image_formats.r8_srgb,
 
+    /// DX12 requires support for use as a storage image, and as a sampled image.
     r8g8b8a8_unorm = Backend.named_image_formats.r8g8b8a8_unorm,
+    /// DX12 requires support for use as a write only storage image, and as a sampled image.
     r8g8b8a8_snorm = Backend.named_image_formats.r8g8b8a8_snorm,
+    /// DX12 requires support for use as a write only storage image, and as a sampled image.
     r8g8b8a8_uint = Backend.named_image_formats.r8g8b8a8_uint,
+    /// DX12 requires support for use as a write only storage image, and as a sampled image.
     r8g8b8a8_sint = Backend.named_image_formats.r8g8b8a8_sint,
+    /// DX12 requires support for use as a sampled image.
     r8g8b8a8_srgb = Backend.named_image_formats.r8g8b8a8_srgb,
 
+    /// DX12 requires support for use as a sampled image.
+    b8g8r8a8_unorm = Backend.named_image_formats.b8g8r8a8_unorm,
+    /// DX12 requires support for use as a sampled image.
+    b8g8r8a8_srgb = Backend.named_image_formats.b8g8r8a8_srgb,
+
+    /// DX12 requires support for use as a 1D or 2D sampled image.
     d24_unorm_s8_uint = Backend.named_image_formats.d24_unorm_s8_uint,
+    /// DX12 requires support for use as a 1D or 2D sampled image.
     d32_sfloat = Backend.named_image_formats.d32_sfloat,
 
     _,
@@ -1209,6 +1224,7 @@ pub const DescSet = enum(u64) {
     /// Submit descriptor set update commands. Fastest when sorted. Copy commands not currently
     /// supported.
     pub fn update(gx: *Gx, cmds: []const Update) void {
+        if (cmds.len == 0) return;
         Backend.descSetsUpdate(gx, cmds);
     }
 };
@@ -1365,8 +1381,8 @@ pub const ImageBarrier = extern struct {
 
     pub const ColorAttachmentToComputeOptions = struct {
         pub const Access = struct {
-            read: bool,
-            write: bool,
+            read: bool = false,
+            write: bool = false,
         };
         handle: ImageHandle,
         range: Range,
@@ -1379,8 +1395,8 @@ pub const ImageBarrier = extern struct {
 
     pub const ComputeToColorAttachmentOptions = struct {
         pub const Access = struct {
-            read: bool,
-            write: bool,
+            read: bool = false,
+            write: bool = false,
         };
         handle: ImageHandle,
         range: Range,
@@ -1397,8 +1413,8 @@ pub const ImageBarrier = extern struct {
             fragment_shader: bool = false,
         };
         pub const Access = struct {
-            read: bool,
-            write: bool,
+            read: bool = false,
+            write: bool = false,
         };
         handle: ImageHandle,
         range: Range,

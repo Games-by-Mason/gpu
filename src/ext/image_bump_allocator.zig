@@ -163,7 +163,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
                 },
                 .discouraged => if (reqs.size > self.page_size) b: {
                     log.warn(
-                        "{}: dedicated allocation discouraged, but image larger than page size",
+                        "{}: drivers discourage dedicated allocation for this image, but it's larger than the page size",
                         .{options.name},
                     );
                     break :b true;

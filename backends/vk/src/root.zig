@@ -424,21 +424,39 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             defer gpa.free(surface_formats);
             for (surface_formats) |surface_format| {
                 var format_rank: u8 = 0;
-                // We require at least three channel sRGB surface format.
+                // Regardless of our surface format, the output color space should be srgb.
                 if (surface_format.color_space == .srgb_nonlinear_khr) {
-                    switch (surface_format.format) {
-                        // 99.89% of Windows devices on vulkan.gpuinfo.org support this format and
-                        // color space.
-                        .b8g8r8a8_srgb => format_rank += 3,
-                        // These hopefully cover the remaining devices. I doubt desktop hardware exists
-                        // that doesn't support at least one sRGB surface format, if it does then we'd
-                        // have to fall back to doing the sRGB conversion at the end ourselves.
-                        .r8g8b8a8_srgb => format_rank += 2,
-                        .r8g8b8_srgb,
-                        .b8g8r8_srgb,
-                        .a8b8g8r8_srgb_pack32,
-                        => format_rank += 1,
-                        else => {},
+                    // We require at least three channels of whichever color space is requested
+                    switch (options.swapchain_color_space) {
+                        .linear => switch (surface_format.format) {
+                            // 100% of Windows devices on vulkan.gpuinfo.org support this format and
+                            // color space.
+                            .b8g8r8a8_unorm => format_rank += 3,
+                            // Some fallbacks since support on Linux is more varied, at least
+                            // according to the database. I suspect that in practice any machine
+                            // capable of running games won't need these fallbacks.
+                            .r8g8b8a8_unorm => format_rank += 2,
+                            .r8g8b8_unorm,
+                            .b8g8r8_unorm,
+                            .a8b8g8r8_unorm_pack32,
+                            => format_rank += 1,
+                            else => {},
+                        },
+                        .srgb => switch (surface_format.format) {
+                            // 99.89% of Windows devices on vulkan.gpuinfo.org support this format
+                            // and color space.
+                            .b8g8r8a8_srgb => format_rank += 3,
+                            // These should cover the remaining devices. I doubt hardware capable of
+                            // running games exists that doesn't support at least one SRGB surface
+                            // format, if it does then you need to fall back to a linear swapchain
+                            // format and do the conversion yourselves.
+                            .r8g8b8a8_srgb => format_rank += 2,
+                            .r8g8b8_srgb,
+                            .b8g8r8_srgb,
+                            .a8b8g8r8_srgb_pack32,
+                            => format_rank += 1,
+                            else => {},
+                        },
                     }
                 }
 
@@ -464,7 +482,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         } else .{ null, null, null };
 
         log.debug("\t* present mode: {?}", .{present_mode});
-        log.debug("\t* surface format: {?}", .{surface_format});
+        log.err("\t* surface format: {?}", .{surface_format});
         if (!extensions_supported) {
             log.debug("\t* missing extensions:", .{});
             var key_iterator = missing_device_extensions.keyIterator();
@@ -504,7 +522,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         }
 
         if (compatible and rank > best_physical_device.rank) {
-            best_physical_device = .{
+            const new: PhysicalDevice = .{
                 .device = device,
                 .name = properties.device_name,
                 .index = i,
@@ -530,6 +548,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                 .max_sampler_anisotropy = properties.limits.max_sampler_anisotropy,
                 .queue_family_index = queue_family_index.?,
             };
+            // Separate line to work around partial assignment on continue
+            best_physical_device = new;
         }
     }
 
@@ -3408,14 +3428,15 @@ pub const named_image_formats: btypes.NamedImageFormats = .{
     .r8_snorm = @intFromEnum(vk.Format.r8_snorm),
     .r8_uint = @intFromEnum(vk.Format.r8_uint),
     .r8_sint = @intFromEnum(vk.Format.r8_sint),
-    .r8_srgb = @intFromEnum(vk.Format.r8_srgb),
 
     .r8g8b8a8_unorm = @intFromEnum(vk.Format.r8g8b8a8_unorm),
     .r8g8b8a8_snorm = @intFromEnum(vk.Format.r8g8b8a8_snorm),
     .r8g8b8a8_uint = @intFromEnum(vk.Format.r8g8b8a8_uint),
     .r8g8b8a8_sint = @intFromEnum(vk.Format.r8g8b8a8_sint),
-
     .r8g8b8a8_srgb = @intFromEnum(vk.Format.r8g8b8a8_srgb),
+
+    .b8g8r8a8_unorm = @intFromEnum(vk.Format.b8g8r8a8_unorm),
+    .b8g8r8a8_srgb = @intFromEnum(vk.Format.b8g8r8a8_srgb),
 
     .d24_unorm_s8_uint = @intFromEnum(vk.Format.d24_unorm_s8_uint),
     .d32_sfloat = @intFromEnum(vk.Format.d32_sfloat),
