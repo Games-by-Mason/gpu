@@ -989,10 +989,12 @@ pub fn pipelineLayoutCreate(
         descs.append(.{
             .binding = @intCast(i),
             .descriptor_type = switch (desc.kind) {
+                .sampler => .sampler,
+                .combined_image_sampler => .combined_image_sampler,
+                .sampled_image => .sampled_image,
+                .storage_image => .storage_image,
                 .uniform_buffer => .uniform_buffer,
                 .storage_buffer => .storage_buffer,
-                .combined_image_sampler => .combined_image_sampler,
-                .storage_image => .storage_image,
             },
             .descriptor_count = desc.count,
             .stage_flags = .{
@@ -1266,19 +1268,23 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
     // Create the descriptor pool
     const desc_pool = b: {
         // Calculate the size of the pool
+        var samplers: u32 = 0;
+        var combined_image_samplers: u32 = 0;
+        var sampled_images: u32 = 0;
+        var storage_images: u32 = 0;
         var uniform_buffers: u32 = 0;
         var storage_buffers: u32 = 0;
-        var combined_image_samplers: u32 = 0;
-        var storage_images: u32 = 0;
         var descriptors: u32 = 0;
 
         for (options.cmds) |cmd| {
             for (cmd.layout_options.descs) |desc| {
                 switch (desc.kind) {
+                    .sampler => samplers += desc.count,
+                    .combined_image_sampler => combined_image_samplers += desc.count,
+                    .sampled_image => sampled_images += desc.count,
+                    .storage_image => storage_images += desc.count,
                     .uniform_buffer => uniform_buffers += desc.count,
                     .storage_buffer => storage_buffers += desc.count,
-                    .combined_image_sampler => combined_image_samplers += desc.count,
-                    .storage_image => storage_images += desc.count,
                 }
             }
             descriptors += @intCast(cmd.layout_options.descs.len);
@@ -1287,6 +1293,22 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
         // Descriptor count must be greater than zero, so skip any that are zero
         // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkDescriptorPoolSize.html
         var sizes: std.BoundedArray(vk.DescriptorPoolSize, 4) = .{};
+        if (samplers > 0) sizes.appendAssumeCapacity(.{
+            .type = .sampler,
+            .descriptor_count = samplers,
+        });
+        if (combined_image_samplers > 0) sizes.appendAssumeCapacity(.{
+            .type = .combined_image_sampler,
+            .descriptor_count = combined_image_samplers,
+        });
+        if (sampled_images > 0) sizes.appendAssumeCapacity(.{
+            .type = .sampled_image,
+            .descriptor_count = sampled_images,
+        });
+        if (storage_images > 0) sizes.appendAssumeCapacity(.{
+            .type = .storage_image,
+            .descriptor_count = storage_images,
+        });
         if (uniform_buffers > 0) sizes.appendAssumeCapacity(.{
             .type = .uniform_buffer,
             .descriptor_count = uniform_buffers,
@@ -1294,14 +1316,6 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
         if (storage_buffers > 0) sizes.appendAssumeCapacity(.{
             .type = .storage_buffer,
             .descriptor_count = storage_buffers,
-        });
-        if (combined_image_samplers > 0) sizes.appendAssumeCapacity(.{
-            .type = .combined_image_sampler,
-            .descriptor_count = combined_image_samplers,
-        });
-        if (storage_images > 0) sizes.appendAssumeCapacity(.{
-            .type = .storage_image,
-            .descriptor_count = storage_images,
         });
 
         // Create the descriptor pool
@@ -1347,8 +1361,7 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     const buf_len = global_options.update_desc_sets_buf_len;
 
     var buffer_infos: std.BoundedArray(vk.DescriptorBufferInfo, buf_len) = .{};
-    var combined_image_samplers: std.BoundedArray(vk.DescriptorImageInfo, buf_len) = .{};
-    var storage_images: std.BoundedArray(vk.DescriptorImageInfo, buf_len) = .{};
+    var image_infos: std.BoundedArray(vk.DescriptorImageInfo, buf_len) = .{};
     var write_sets: std.BoundedArray(vk.WriteDescriptorSet, buf_len) = .{};
 
     // Iterate over the updates
@@ -1365,6 +1378,40 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
             const update_curr = updates[i + batch_size];
 
             switch (update_curr.value) {
+                .sampler => |sampler| {
+                    image_infos.appendAssumeCapacity(.{
+                        .sampler = sampler.asBackendType(),
+                        .image_view = .null_handle,
+                        .image_layout = .undefined,
+                    });
+                },
+                .combined_image_sampler => |combined| {
+                    image_infos.appendAssumeCapacity(.{
+                        .sampler = combined.sampler.asBackendType(),
+                        .image_view = combined.view.asBackendType(),
+                        .image_layout = switch (combined.layout) {
+                            .read_only => .read_only_optimal,
+                            .attachment => .attachment_optimal,
+                        },
+                    });
+                },
+                .sampled_image => |sampled| {
+                    image_infos.appendAssumeCapacity(.{
+                        .sampler = .null_handle,
+                        .image_view = sampled.view.asBackendType(),
+                        .image_layout = switch (sampled.layout) {
+                            .read_only => .read_only_optimal,
+                            .attachment => .attachment_optimal,
+                        },
+                    });
+                },
+                .storage_image => |view| {
+                    image_infos.appendAssumeCapacity(.{
+                        .sampler = .null_handle,
+                        .image_view = view.asBackendType(),
+                        .image_layout = .general,
+                    });
+                },
                 .uniform_buf => |view| buffer_infos.appendAssumeCapacity(.{
                     .buffer = view.handle.asBackendType(),
                     .offset = view.offset,
@@ -1375,25 +1422,6 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
                     .offset = view.offset,
                     .range = view.len,
                 }),
-                .combined_image_sampler => {
-                    const combined_image_sampler = update_curr.value.combined_image_sampler;
-                    combined_image_samplers.appendAssumeCapacity(.{
-                        .sampler = combined_image_sampler.sampler.asBackendType(),
-                        .image_view = combined_image_sampler.view.asBackendType(),
-                        .image_layout = switch (combined_image_sampler.layout) {
-                            .read_only => .read_only_optimal,
-                            .attachment => .attachment_optimal,
-                        },
-                    });
-                },
-                .storage_image => {
-                    const storage_image = update_curr.value.storage_image;
-                    storage_images.appendAssumeCapacity(.{
-                        .sampler = .null_handle,
-                        .image_view = storage_image.asBackendType(),
-                        .image_layout = .general,
-                    });
-                },
             }
 
             batch_size += 1;
@@ -1407,6 +1435,58 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
 
         // Write the update
         switch (batch_kind) {
+            .sampler => {
+                const batch_combined_image_samplers = image_infos.constSlice()[image_infos.len - batch_size ..];
+                write_sets.appendAssumeCapacity(.{
+                    .dst_set = batch_set.asBackendType(),
+                    .dst_binding = batch_binding,
+                    .dst_array_element = batch_index_start,
+                    .descriptor_type = .sampler,
+                    .descriptor_count = batch_size,
+                    .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
+                    .p_image_info = batch_combined_image_samplers.ptr,
+                    .p_texel_buffer_view = &[0]vk.BufferView{},
+                });
+            },
+            .combined_image_sampler => {
+                const batch_combined_image_samplers = image_infos.constSlice()[image_infos.len - batch_size ..];
+                write_sets.appendAssumeCapacity(.{
+                    .dst_set = batch_set.asBackendType(),
+                    .dst_binding = batch_binding,
+                    .dst_array_element = batch_index_start,
+                    .descriptor_type = .combined_image_sampler,
+                    .descriptor_count = batch_size,
+                    .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
+                    .p_image_info = batch_combined_image_samplers.ptr,
+                    .p_texel_buffer_view = &[0]vk.BufferView{},
+                });
+            },
+            .sampled_image => {
+                const batch_sampled_images = image_infos.constSlice()[image_infos.len - batch_size ..];
+                write_sets.appendAssumeCapacity(.{
+                    .dst_set = batch_set.asBackendType(),
+                    .dst_binding = batch_binding,
+                    .dst_array_element = batch_index_start,
+                    .descriptor_type = .sampled_image,
+                    .descriptor_count = batch_size,
+                    .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
+                    .p_image_info = batch_sampled_images.ptr,
+                    .p_texel_buffer_view = &[0]vk.BufferView{},
+                });
+            },
+            .storage_image => {
+                const batch_sampled_images = image_infos.constSlice()[image_infos.len - batch_size ..];
+                write_sets.appendAssumeCapacity(.{
+                    .dst_set = batch_set.asBackendType(),
+                    .dst_binding = batch_binding,
+                    .dst_array_element = batch_index_start,
+                    .descriptor_type = .storage_image,
+                    .descriptor_count = batch_size,
+                    .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
+                    .p_image_info = batch_sampled_images.ptr,
+                    .p_texel_buffer_view = &[0]vk.BufferView{},
+                });
+            },
             .uniform_buf => {
                 const batch_buffer_infos = buffer_infos.constSlice()[buffer_infos.len - batch_size ..];
                 write_sets.appendAssumeCapacity(.{
@@ -1430,32 +1510,6 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
                     .descriptor_count = batch_size,
                     .p_buffer_info = batch_buffer_infos.ptr,
                     .p_image_info = &[0]vk.DescriptorImageInfo{},
-                    .p_texel_buffer_view = &[0]vk.BufferView{},
-                });
-            },
-            .combined_image_sampler => {
-                const batch_combined_image_samplers = combined_image_samplers.constSlice()[combined_image_samplers.len - batch_size ..];
-                write_sets.appendAssumeCapacity(.{
-                    .dst_set = batch_set.asBackendType(),
-                    .dst_binding = batch_binding,
-                    .dst_array_element = batch_index_start,
-                    .descriptor_type = .combined_image_sampler,
-                    .descriptor_count = batch_size,
-                    .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
-                    .p_image_info = batch_combined_image_samplers.ptr,
-                    .p_texel_buffer_view = &[0]vk.BufferView{},
-                });
-            },
-            .storage_image => {
-                const batch_storage_images = storage_images.constSlice()[storage_images.len - batch_size ..];
-                write_sets.appendAssumeCapacity(.{
-                    .dst_set = batch_set.asBackendType(),
-                    .dst_binding = batch_binding,
-                    .dst_array_element = batch_index_start,
-                    .descriptor_type = .storage_image,
-                    .descriptor_count = batch_size,
-                    .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
-                    .p_image_info = batch_storage_images.ptr,
                     .p_texel_buffer_view = &[0]vk.BufferView{},
                 });
             },

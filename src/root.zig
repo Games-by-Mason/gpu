@@ -972,6 +972,10 @@ pub const Pipeline = struct {
         pub const Options = struct {
             pub const Desc = struct {
                 pub const Kind = union(enum) {
+                    sampler: void,
+                    combined_image_sampler: void,
+                    sampled_image: void,
+                    storage_image: void,
                     uniform_buffer: struct {
                         // We only support sizes up to 2^14, as Vulkan implementations don't have to support
                         // uniform buffers larger than this:
@@ -979,8 +983,6 @@ pub const Pipeline = struct {
                         size: u14,
                     },
                     storage_buffer: void,
-                    combined_image_sampler: void,
-                    storage_image: void,
                 };
                 pub const Stages = packed struct {
                     vertex: bool = false,
@@ -1176,10 +1178,22 @@ pub const DescSet = enum(u64) {
                 layout: @This().Layout,
             };
 
-            storage_buf: Buf(.{ .storage = true }).View,
-            uniform_buf: Buf(.{ .uniform = true }).View,
+            pub const SampledImage = struct {
+                pub const Layout = enum {
+                    read_only,
+                    attachment,
+                };
+
+                view: ImageView,
+                layout: @This().Layout,
+            };
+
+            sampler: Sampler,
             combined_image_sampler: CombinedImageSampler,
+            sampled_image: SampledImage,
             storage_image: ImageView,
+            uniform_buf: Buf(.{ .uniform = true }).View,
+            storage_buf: Buf(.{ .storage = true }).View,
         };
 
         set: DescSet,

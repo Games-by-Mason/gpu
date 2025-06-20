@@ -52,30 +52,37 @@ pub fn RenderTargetPool(kind: ImageKind) type {
                 gx: *Gx,
                 updates: *std.ArrayList(gpu.DescSet.Update),
             ) void {
-                var desc: ImageBumpAllocator(kind).AllocOptions = pool.descs.items[@intFromEnum(self)];
-                const image = pool.allocator.alloc(gx, desc);
-                desc.image.extent = self.extent(pool);
+                // Initialize the image
+                var info: ImageBumpAllocator(kind).AllocOptions = pool.info.items[@intFromEnum(self)];
+                const image = pool.allocator.alloc(gx, info);
+                info.image.extent = self.extent(pool);
                 pool.images.items[@intFromEnum(self)] = image;
-                for (pool.desc_sets) |desc_set| {
-                    updates.append(.{
-                        .set = desc_set,
-                        .binding = pool.binding,
-                        .value = .{
-                            .storage_image = image.view,
-                        },
-                    }) catch @panic("OOB");
+
+                // Update the storage binding array
+                if (pool.storage_binding) |storage_binding| {
+                    if (info.image.usage.storage) {
+                        for (pool.desc_sets) |desc_set| {
+                            updates.append(.{
+                                .set = desc_set,
+                                .binding = storage_binding,
+                                .value = .{
+                                    .storage_image = image.view,
+                                },
+                            }) catch @panic("OOB");
+                        }
+                    }
                 }
             }
 
             /// Returns the extent of this handle.
             fn extent(self: @This(), pool: *const Pool) gpu.ImageExtent {
-                const desc: ImageBumpAllocator(kind).AllocOptions = pool.descs.items[@intFromEnum(self)];
+                const info: ImageBumpAllocator(kind).AllocOptions = pool.info.items[@intFromEnum(self)];
                 const x_scale: f32 = @as(f32, @floatFromInt(pool.physical_extent.width)) / @as(f32, @floatFromInt(pool.virtual_extent.width));
                 const y_scale: f32 = @as(f32, @floatFromInt(pool.physical_extent.height)) / @as(f32, @floatFromInt(pool.virtual_extent.height));
                 return .{
-                    .width = @intFromFloat(x_scale * @as(f32, @floatFromInt(desc.image.extent.width))),
-                    .height = @intFromFloat(y_scale * @as(f32, @floatFromInt(desc.image.extent.height))),
-                    .depth = desc.image.extent.depth,
+                    .width = @intFromFloat(x_scale * @as(f32, @floatFromInt(info.image.extent.width))),
+                    .height = @intFromFloat(y_scale * @as(f32, @floatFromInt(info.image.extent.height))),
+                    .depth = info.image.extent.depth,
                 };
             }
 
@@ -101,11 +108,11 @@ pub fn RenderTargetPool(kind: ImageKind) type {
 
         physical_extent: gpu.Extent2D,
         virtual_extent: gpu.Extent2D,
-        descs: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions),
+        info: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions),
         images: std.ArrayListUnmanaged(gpu.Image(kind)),
         allocator: ImageBumpAllocator(kind),
         desc_sets: [gpu.global_options.max_frames_in_flight]gpu.DescSet,
-        binding: u32,
+        storage_binding: ?u32,
 
         /// Options for `init`.
         pub const Options = struct {
@@ -114,7 +121,8 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             capacity: u8,
             allocator: ImageBumpAllocator(kind).Options,
             desc_sets: [gpu.global_options.max_frames_in_flight]gpu.DescSet,
-            binding: u32,
+            storage_binding: ?u32,
+            sampled_binding: ?u32,
         };
 
         /// Initialize a render target pool.
@@ -128,20 +136,20 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             );
             errdefer images.deinit(gpa);
 
-            const descs: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions) = try .initCapacity(
+            const info: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions) = try .initCapacity(
                 gpa,
                 options.capacity,
             );
-            errdefer descs.deinit(gpa);
+            errdefer info.deinit(gpa);
 
             return .{
                 .physical_extent = options.physical_extent,
                 .virtual_extent = options.virtual_extent,
                 .images = images,
-                .descs = descs,
+                .info = info,
                 .allocator = allocator,
                 .desc_sets = options.desc_sets,
-                .binding = options.binding,
+                .storage_binding = options.storage_binding,
             };
         }
 
@@ -165,7 +173,7 @@ pub fn RenderTargetPool(kind: ImageKind) type {
         ) Handle {
             if (self.images.items.len == self.images.capacity) @panic("OOB");
             const handle: Handle = @enumFromInt(self.images.items.len);
-            self.descs.appendAssumeCapacity(options);
+            self.info.appendAssumeCapacity(options);
             _ = self.images.addOneAssumeCapacity();
             handle.init(self, gx, updates);
             return handle;
