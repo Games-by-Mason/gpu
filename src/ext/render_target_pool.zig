@@ -58,6 +58,19 @@ pub fn RenderTargetPool(kind: ImageKind) type {
                 info.image.extent = self.extent(pool);
                 pool.images.items[@intFromEnum(self)] = image;
 
+                // Update the sampled binding array
+                if (pool.sampled_binding) |sampled_binding| {
+                    if (info.image.usage.sampled) {
+                        for (pool.desc_sets) |desc_set| {
+                            updates.append(.{
+                                .set = desc_set,
+                                .binding = sampled_binding,
+                                .value = .{ .sampled_image = image.view },
+                            }) catch @panic("OOB");
+                        }
+                    }
+                }
+
                 // Update the storage binding array
                 if (pool.storage_binding) |storage_binding| {
                     if (info.image.usage.storage) {
@@ -113,6 +126,7 @@ pub fn RenderTargetPool(kind: ImageKind) type {
         allocator: ImageBumpAllocator(kind),
         desc_sets: [gpu.global_options.max_frames_in_flight]gpu.DescSet,
         storage_binding: ?u32,
+        sampled_binding: ?u32,
 
         /// Options for `init`.
         pub const Options = struct {
@@ -150,6 +164,7 @@ pub fn RenderTargetPool(kind: ImageKind) type {
                 .allocator = allocator,
                 .desc_sets = options.desc_sets,
                 .storage_binding = options.storage_binding,
+                .sampled_binding = options.sampled_binding,
             };
         }
 

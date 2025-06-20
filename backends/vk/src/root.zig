@@ -1389,20 +1389,14 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
                     image_infos.appendAssumeCapacity(.{
                         .sampler = combined.sampler.asBackendType(),
                         .image_view = combined.view.asBackendType(),
-                        .image_layout = switch (combined.layout) {
-                            .read_only => .read_only_optimal,
-                            .attachment => .attachment_optimal,
-                        },
+                        .image_layout = .read_only_optimal,
                     });
                 },
-                .sampled_image => |sampled| {
+                .sampled_image => |view| {
                     image_infos.appendAssumeCapacity(.{
                         .sampler = .null_handle,
-                        .image_view = sampled.view.asBackendType(),
-                        .image_layout = switch (sampled.layout) {
-                            .read_only => .read_only_optimal,
-                            .attachment => .attachment_optimal,
-                        },
+                        .image_view = view.asBackendType(),
+                        .image_layout = .read_only_optimal,
                     });
                 },
                 .storage_image => |view| {

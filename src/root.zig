@@ -1168,29 +1168,13 @@ pub const DescSet = enum(u64) {
         pub const Value = union(enum) {
             pub const Tag: type = @typeInfo(@This()).@"union".tag_type.?;
             pub const CombinedImageSampler = struct {
-                pub const Layout = enum {
-                    read_only,
-                    attachment,
-                };
-
                 view: ImageView,
                 sampler: Sampler,
-                layout: @This().Layout,
-            };
-
-            pub const SampledImage = struct {
-                pub const Layout = enum {
-                    read_only,
-                    attachment,
-                };
-
-                view: ImageView,
-                layout: @This().Layout,
             };
 
             sampler: Sampler,
             combined_image_sampler: CombinedImageSampler,
-            sampled_image: SampledImage,
+            sampled_image: ImageView,
             storage_image: ImageView,
             uniform_buf: Buf(.{ .uniform = true }).View,
             storage_buf: Buf(.{ .storage = true }).View,
