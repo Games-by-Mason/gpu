@@ -427,8 +427,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                 // Regardless of our surface format, the output color space should be srgb.
                 if (surface_format.color_space == .srgb_nonlinear_khr) {
                     // We require at least three channels of whichever color space is requested
-                    switch (options.swapchain_color_space) {
-                        .linear => switch (surface_format.format) {
+                    switch (options.surface_format) {
+                        .unorm4x8 => switch (surface_format.format) {
                             // 100% of Windows devices on vulkan.gpuinfo.org support this format and
                             // color space.
                             .b8g8r8a8_unorm => format_rank += 3,
@@ -442,7 +442,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                             => format_rank += 1,
                             else => {},
                         },
-                        .srgb => switch (surface_format.format) {
+                        .srgb4x8 => switch (surface_format.format) {
                             // 99.89% of Windows devices on vulkan.gpuinfo.org support this format
                             // and color space.
                             .b8g8r8a8_srgb => format_rank += 3,

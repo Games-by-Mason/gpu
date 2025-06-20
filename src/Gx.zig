@@ -40,9 +40,17 @@ validate: bool,
 
 /// Initialization options.
 pub const Options = struct {
-    pub const ColorSpace = enum {
-        srgb,
-        linear,
+    pub const SurfaceFormat = enum {
+        /// Requests a 4 channel 8 bit per channel unorm surface format with any channel order.
+        ///
+        /// These formats do no automatic conversion of color spaces, they're the right choice when
+        /// your shaders write sRGB colors.
+        unorm4x8,
+        /// Requests a 4 channel 8 bit per channel sRGB surface format with any channel order.
+        ///
+        /// These formats convert from linear to sRGB on write. They're the right choice when your
+        /// shaders write linear colors.
+        srgb4x8,
     };
 
     pub const DebugMode = enum(u8) {
@@ -109,8 +117,9 @@ pub const Options = struct {
     /// Whether or not to force maximum alignment, may be useful for diagnosing some memory related
     /// issues.
     max_alignment: bool = false,
-    /// The swapchain's color space.
-    swapchain_color_space: ColorSpace,
+    /// The surface format request. This request will resolve to a format supported by the current
+    /// hardware, you can check the result at `device.surface_format`.
+    surface_format: SurfaceFormat,
     /// Backend specific options.
     backend: Backend.Options,
 };
