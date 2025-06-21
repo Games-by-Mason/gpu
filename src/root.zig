@@ -1008,7 +1008,7 @@ pub const Pipeline = struct {
             name: DebugName,
             descs: []const Desc,
 
-            pub fn getBindingIndex(comptime self: *const @This(), comptime name: []const u8) u32 {
+            pub fn binding(comptime self: *const @This(), comptime name: []const u8) u32 {
                 const result = comptime for (self.descs, 0..) |desc, i| {
                     if (std.mem.eql(u8, desc.name, name)) {
                         break i;
