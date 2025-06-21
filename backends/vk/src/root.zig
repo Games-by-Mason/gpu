@@ -1886,6 +1886,27 @@ pub fn imageMemoryRequirements(
     self: *Gx,
     options: btypes.ImageOptions,
 ) gpu.MemoryRequirements {
+    // Get the image options
+    const options_vk = imageOptionsToVk(options);
+
+    // Panic if this image format isn't supported, `vkGetDeviceImageMemoryRequirements` won't check
+    // this for us
+    var props: vk.ImageFormatProperties2 = .{
+        .image_format_properties = undefined,
+    };
+    self.backend.instance.getPhysicalDeviceImageFormatProperties2(
+        self.backend.physical_device.device,
+        &.{
+            .format = options_vk.format,
+            .type = options_vk.image_type,
+            .tiling = options_vk.tiling,
+            .usage = options_vk.usage,
+            .flags = options_vk.flags,
+        },
+        &props,
+    ) catch |err| @panic(@errorName(err));
+
+    // Get the memory requirements
     var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
         .prefers_dedicated_allocation = vk.FALSE,
         .requires_dedicated_allocation = vk.FALSE,
@@ -1895,7 +1916,7 @@ pub fn imageMemoryRequirements(
         .p_next = &dedicated_reqs,
     };
     self.backend.device.getDeviceImageMemoryRequirements(&.{
-        .p_create_info = &imageOptionsToVk(options),
+        .p_create_info = &options_vk,
         .plane_aspect = .{},
     }, &reqs2);
     const reqs = reqs2.memory_requirements;
