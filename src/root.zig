@@ -1005,8 +1005,32 @@ pub const Pipeline = struct {
                 partially_bound: bool,
             };
 
+            /// A range of push constant data.
+            ///
+            /// Some APIs (e.g. Vulkan) allow setting the offset and size of each push constant
+            /// range separately, whereas others like DX12 only allow you to specify non-overlapping
+            /// ranges. For compatibility with the later class of APIs, we only allow
+            /// non-overlapping ranges here. On an API like DX12 this can be converted directly to
+            /// register + offsets since each register is a fixed size.
+            pub const PushConstantRange = struct {
+                pub const Stages = packed struct {
+                    vertex: bool = false,
+                    fragment: bool = false,
+                    compute: bool = false,
+
+                    fn nonZero(self: @This()) bool {
+                        const Int = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(self)));
+                        const int: Int = @bitCast(self);
+                        return int != 0;
+                    }
+                };
+                stages: Stages,
+                size: u32,
+            };
+
             name: DebugName,
-            descs: []const Desc,
+            descs: []const Desc = &.{},
+            push_constant_ranges: []const PushConstantRange = &.{},
 
             pub fn binding(comptime self: *const @This(), comptime name: []const u8) u32 {
                 const result = comptime for (self.descs, 0..) |desc, i| {
@@ -1019,6 +1043,23 @@ pub const Pipeline = struct {
         };
 
         pub fn init(gx: *Gx, options: @This().Options) Layout {
+            // Check that we're under the minimum guaranteed push constant size
+            const max_pc_bytes = 128; // `maxPushConstantsSize` will be raised to 256 in Vulkan 1.4
+            const min_pc_alignment = 4; // Vulkan requires multiple of 4
+            var pc_bytes: u32 = 0;
+            for (options.push_constant_ranges) |range| {
+                // Vulkan doesn't support 0 length push constant ranges
+                assert(range.size > 0);
+                // we can't just align forward ourselves as that makes writing weird
+                assert(range.size % min_pc_alignment == 0);
+                // Vulkan requires at least one stage to be set
+                assert(range.stages.nonZero());
+                // Increment the total size
+                pc_bytes += range.size;
+            }
+            assert(pc_bytes <= max_pc_bytes);
+
+            // Create the layout
             return Backend.pipelineLayoutCreate(gx, options);
         }
 
@@ -1642,6 +1683,41 @@ pub const CmdBuf = enum(u64) {
         const zone = Zone.begin(.{ .src = @src() });
         defer zone.end();
         Backend.cmdBufBindDescSet(gx, self, pipeline, set);
+    }
+
+    pub const PushConstantSliceOptions = struct {
+        pipeline_layout: Pipeline.Layout.Handle,
+        stages: Pipeline.Layout.Options.PushConstantRange.Stages,
+        offset: u32,
+        data: []const u32,
+    };
+
+    pub fn pushConstantSlice(self: @This(), gx: *Gx, options: PushConstantSliceOptions) void {
+        Backend.cmdBufPushConstants(gx, self, options);
+    }
+
+    pub fn PushConstantOptions(T: type) type {
+        return struct {
+            pipeline_layout: Pipeline.Layout.Handle,
+            stages: Pipeline.Layout.Options.PushConstantRange.Stages,
+            offset: u32,
+            data: *const T,
+        };
+    }
+
+    pub fn pushConstant(
+        self: @This(),
+        T: type,
+        gx: *Gx,
+        options: PushConstantOptions(T),
+    ) void {
+        _ = extern struct { extern_type: @TypeOf(options.data.*) };
+        Backend.cmdBufPushConstants(gx, self, .{
+            .pipeline_layout = options.pipeline_layout,
+            .stages = options.stages,
+            .offset = options.offset,
+            .data = @ptrCast(std.mem.asBytes(options.data)),
+        });
     }
 
     pub const DrawOptions = struct {

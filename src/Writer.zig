@@ -12,13 +12,13 @@ size: u64,
 
 /// Similar to `Writer`, but can only write type `T`.
 pub fn Typed(T: type) type {
+    _ = extern struct { extern_type: T };
     return struct {
         ptr: *volatile anyopaque,
         capacity: u64,
         len: u64,
 
         pub fn write(self: *@This(), value: T) void {
-            comptime assert(@typeInfo(T).@"struct".layout != .auto);
             const offset = std.math.mul(u64, self.len, @sizeOf(T)) catch @panic("OOB");
             if (offset >= self.capacity * @sizeOf(T)) @panic("OOB");
             const dest: *align(1) volatile T = @ptrFromInt(@intFromPtr(self.ptr) + offset);

@@ -1007,6 +1007,23 @@ pub fn pipelineLayoutCreate(
         flags.appendAssumeCapacity(.{ .partially_bound_bit = desc.partially_bound });
     }
 
+    // Translate the push constant ranges
+    var pc_ranges: std.BoundedArray(vk.PushConstantRange, global_options.combined_pipeline_layout_create_buf_len) = .{};
+    var pc_offset: u32 = 0;
+    for (options.push_constant_ranges) |range| {
+        // Add the range
+        pc_ranges.append(.{
+            .stage_flags = .{
+                .vertex_bit = range.stages.vertex,
+                .fragment_bit = range.stages.fragment,
+                .compute_bit = range.stages.compute,
+            },
+            .offset = pc_offset,
+            .size = range.size,
+        }) catch @panic("OOB");
+        pc_offset += range.size;
+    }
+
     var binding_flags: vk.DescriptorSetLayoutBindingFlagsCreateInfo = .{
         .binding_count = @intCast(flags.len),
         .p_binding_flags = flags.constSlice().ptr,
@@ -1023,6 +1040,8 @@ pub fn pipelineLayoutCreate(
     const pipeline_layout = self.backend.device.createPipelineLayout(&.{
         .set_layout_count = 1,
         .p_set_layouts = &.{descriptor_set_layout},
+        .push_constant_range_count = @intCast(pc_ranges.len),
+        .p_push_constant_ranges = pc_ranges.constSlice().ptr,
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, pipeline_layout, options.name);
 
@@ -1133,6 +1152,25 @@ pub fn cmdBufBeginRendering(
 
 pub fn cmdBufEndRendering(self: *Gx, cb: gpu.CmdBuf) void {
     self.backend.device.cmdEndRendering(cb.asBackendType());
+}
+
+pub fn cmdBufPushConstants(
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    options: gpu.CmdBuf.PushConstantSliceOptions,
+) void {
+    self.backend.device.cmdPushConstants(
+        cb.asBackendType(),
+        options.pipeline_layout.asBackendType(),
+        .{
+            .vertex_bit = options.stages.vertex,
+            .fragment_bit = options.stages.fragment,
+            .compute_bit = options.stages.compute,
+        },
+        options.offset,
+        @intCast(options.data.len * @sizeOf(u32)),
+        options.data.ptr,
+    );
 }
 
 pub fn cmdBufDraw(
