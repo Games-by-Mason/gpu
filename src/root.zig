@@ -856,6 +856,47 @@ pub const ShaderModule = enum(u64) {
     }
 };
 
+/// All shader stages.
+pub const ShaderStage = enum {
+    vertex,
+    fragment,
+    compute,
+};
+
+/// Graphics pipeline shader stages.
+pub const GraphicsShaderStage = enum {
+    vertex,
+    fragment,
+};
+
+fn EnumBitSet(T: type) type {
+    const fields = @typeInfo(T).@"enum".fields;
+    var struct_fields: [fields.len]std.builtin.Type.StructField = undefined;
+    for (&struct_fields, fields) |*struct_field, enum_field| {
+        struct_field.* = .{
+            .name = enum_field.name,
+            .type = bool,
+            .default_value_ptr = @as(?*const anyopaque, @ptrCast(&false)),
+            .is_comptime = false,
+            .alignment = 0,
+        };
+    }
+    return @Type(.{ .@"struct" = .{
+        .layout = .@"packed",
+        .fields = &struct_fields,
+        .decls = &.{},
+        .is_tuple = false,
+    } });
+}
+
+fn nonZero(T: type, self: T) bool {
+    const Int = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(self)));
+    const int: Int = @bitCast(self);
+    return int != 0;
+}
+
+pub const ShaderStages = EnumBitSet(ShaderStage);
+
 pub const Pipeline = struct {
     handle: Handle,
     layout: Layout.Handle,
@@ -881,11 +922,7 @@ pub const Pipeline = struct {
     };
 
     pub const InitGraphicsCmd = struct {
-        pub const Stages = struct {
-            pub const max_stages = std.meta.fields(@This()).len;
-            vertex: ShaderModule,
-            fragment: ShaderModule,
-        };
+        pub const Stages = std.enums.EnumFieldStruct(GraphicsShaderStage, ShaderModule, null);
         pub const InputAssembly = union(enum) {
             const Strip = struct { indexed_primitive_restart: bool = false };
             point_list: void,
@@ -984,16 +1021,11 @@ pub const Pipeline = struct {
                     },
                     storage_buffer: void,
                 };
-                pub const Stages = packed struct {
-                    vertex: bool = false,
-                    fragment: bool = false,
-                    compute: bool = false,
-                };
 
                 name: []const u8,
                 kind: Desc.Kind,
                 count: u32 = 1,
-                stages: Stages,
+                stages: ShaderStages,
                 /// Careful. If false, all descriptors must be bound, but at the time of writing the
                 /// Vulkan validation layers will not catch if you fail to set this flag.
                 ///
@@ -1013,18 +1045,7 @@ pub const Pipeline = struct {
             /// non-overlapping ranges here. On an API like DX12 this can be converted directly to
             /// register + offsets since each register is a fixed size.
             pub const PushConstantRange = struct {
-                pub const Stages = packed struct {
-                    vertex: bool = false,
-                    fragment: bool = false,
-                    compute: bool = false,
-
-                    fn nonZero(self: @This()) bool {
-                        const Int = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(self)));
-                        const int: Int = @bitCast(self);
-                        return int != 0;
-                    }
-                };
-                stages: Stages,
+                stages: ShaderStages,
                 size: u32,
             };
 
@@ -1053,7 +1074,7 @@ pub const Pipeline = struct {
                 // we can't just align forward ourselves as that makes writing weird
                 assert(range.size % min_pc_alignment == 0);
                 // Vulkan requires at least one stage to be set
-                assert(range.stages.nonZero());
+                assert(nonZero(ShaderStages, range.stages));
                 // Increment the total size
                 pc_bytes += range.size;
             }
@@ -1348,30 +1369,20 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierUndefinedToColorAttachment(options);
     }
 
-    pub const UndefinedToColorAttachmentOptionsAfterRead = struct {
-        pub const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-        };
-
+    pub const UndefinedToColorAttachmentAfterReadOptions = struct {
         handle: ImageHandle,
         range: Range,
-        src_stage: Stage,
+        src_stages: ShaderStages,
     };
 
-    pub fn undefinedToColorAttachmentAfterRead(options: UndefinedToColorAttachmentOptionsAfterRead) @This() {
+    pub fn undefinedToColorAttachmentAfterRead(options: UndefinedToColorAttachmentAfterReadOptions) @This() {
         return Backend.imageBarrierUndefinedToColorAttachmentAfterRead(options);
     }
 
     pub const TransferDstToReadOnlyOptions = struct {
-        pub const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-        };
-
         handle: ImageHandle,
         range: Range,
-        dst_stage: Stage,
+        dst_stages: ShaderStages,
         aspect: ImageAspect,
     };
 
@@ -1379,91 +1390,36 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierTransferDstToReadOnly(options);
     }
 
-    pub const TransferDstToColorAttachmentOptions = struct {
-        handle: ImageHandle,
-        range: Range,
-    };
-
-    pub fn transferDstToColorAttachment(options: TransferDstToColorAttachmentOptions) @This() {
-        return Backend.imageBarrierTransferDstToColorAttachment(options);
-    }
-
-    pub const ReadOnlyToColorAttachmentOptions = struct {
-        pub const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-        };
-
-        handle: ImageHandle,
-        range: Range,
-        src_stage: Stage,
-    };
-
-    pub fn readOnlyToColorAttachment(options: ReadOnlyToColorAttachmentOptions) @This() {
-        return Backend.imageBarrierReadOnlyToColorAttachment(options);
-    }
-
     pub const ColorAttachmentToReadOnlyOptions = struct {
-        pub const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-        };
-
         handle: ImageHandle,
         range: Range,
-        dst_stage: Stage,
+        dst_stages: ShaderStages,
     };
 
     pub fn colorAttachmentToReadOnly(options: ColorAttachmentToReadOnlyOptions) @This() {
         return Backend.imageBarrierColorAttachmentToReadOnly(options);
     }
 
-    pub const ColorAttachmentToComputeOptions = struct {
-        pub const Access = struct {
-            read: bool = false,
-            write: bool = false,
-        };
+    pub const ColorAttachmentToReadWriteOptions = struct {
         handle: ImageHandle,
         range: Range,
-        dst_access: Access,
+        dst_stages: ShaderStages,
     };
 
-    pub fn colorAttachmentToCompute(options: ColorAttachmentToComputeOptions) @This() {
-        return Backend.imageBarrierColorAttachmentToCompute(options);
+    pub fn colorAttachmentToReadWrite(options: ColorAttachmentToReadWriteOptions) @This() {
+        return Backend.imageBarrierColorAttachmentToReadWrite(options);
     }
 
-    pub const ComputeToColorAttachmentOptions = struct {
-        pub const Access = struct {
-            read: bool = false,
-            write: bool = false,
-        };
+    pub const ReadWriteToReadOnlyOptions = struct {
         handle: ImageHandle,
         range: Range,
-        src_access: Access,
-    };
-
-    pub fn computeToColorAttachment(options: ComputeToColorAttachmentOptions) @This() {
-        return Backend.imageBarrierComputeToColorAttachment(options);
-    }
-
-    pub const ComputeToReadOnlyOptions = struct {
-        pub const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-        };
-        pub const Access = struct {
-            read: bool = false,
-            write: bool = false,
-        };
-        handle: ImageHandle,
-        range: Range,
-        src_access: Access,
-        dst_stage: Stage,
+        src_stages: ShaderStages,
+        dst_stages: ShaderStages,
         aspect: ImageAspect,
     };
 
-    pub fn computeToReadOnly(options: ComputeToReadOnlyOptions) @This() {
-        return Backend.imageBarrierComputeToReadOnly(options);
+    pub fn readWriteToReadOnly(options: ReadWriteToReadOnlyOptions) @This() {
+        return Backend.imageBarrierReadWriteToReadOnly(options);
     }
 
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;
@@ -1472,61 +1428,20 @@ pub const ImageBarrier = extern struct {
 pub const BufBarrier = extern struct {
     backend: Backend.BufBarrier,
 
-    pub const Access = union(enum) {
-        compute_write: void,
-        compute_read: void,
-    };
-
-    pub const ComputeWriteToGraphicsReadOptions = struct {
-        const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
+    pub const Options = struct {
+        pub const Access = packed struct {
+            read: bool = false,
+            write: bool = false,
         };
-        dst_stage: Stage,
+        src_stages: ShaderStages,
+        src_access: Access,
+        dst_stages: ShaderStages,
+        dst_access: Access,
         handle: BufHandle(.{}),
     };
 
-    pub fn computeWriteToGraphicsRead(options: ComputeWriteToGraphicsReadOptions) @This() {
-        return Backend.bufBarrierComputeWriteToGraphicsRead(options);
-    }
-
-    pub const ComputeReadToGraphicsWriteOptions = struct {
-        const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-        };
-        dst_stage: Stage,
-        handle: BufHandle(.{}),
-    };
-
-    pub fn computeReadToGraphicsWrite(options: ComputeReadToGraphicsWriteOptions) @This() {
-        return Backend.bufBarrierComputeReadToGraphicsWrite(options);
-    }
-
-    pub const GraphicsWriteToComputeReadOptions = struct {
-        const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-        };
-        src_stage: Stage,
-        handle: BufHandle(.{}),
-    };
-
-    pub fn graphicsWriteToComputeRead(options: GraphicsWriteToComputeReadOptions) @This() {
-        return Backend.bufBarrierGraphicsWriteToComputeRead(options);
-    }
-
-    pub const GraphicsReadToComputeWriteOptions = struct {
-        const Stage = packed struct {
-            vertex_shader: bool = false,
-            fragment_shader: bool = false,
-        };
-        src_stage: Stage,
-        handle: BufHandle(.{}),
-    };
-
-    pub fn graphicsReadToComputeWrite(options: GraphicsReadToComputeWriteOptions) @This() {
-        return Backend.bufBarrierGraphicsReadToComputeWrite(options);
+    pub fn init(options: @This().Options) @This() {
+        return Backend.bufBarrierInit(options);
     }
 
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;
@@ -1687,7 +1602,7 @@ pub const CmdBuf = enum(u64) {
 
     pub const PushConstantSliceOptions = struct {
         pipeline_layout: Pipeline.Layout.Handle,
-        stages: Pipeline.Layout.Options.PushConstantRange.Stages,
+        stages: ShaderStages,
         offset: u32,
         data: []const u32,
     };
@@ -1699,7 +1614,7 @@ pub const CmdBuf = enum(u64) {
     pub fn PushConstantOptions(T: type) type {
         return struct {
             pipeline_layout: Pipeline.Layout.Handle,
-            stages: Pipeline.Layout.Options.PushConstantRange.Stages,
+            stages: ShaderStages,
             offset: u32,
             data: *const T,
         };

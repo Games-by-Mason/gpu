@@ -997,11 +997,7 @@ pub fn pipelineLayoutCreate(
                 .storage_buffer => .storage_buffer,
             },
             .descriptor_count = desc.count,
-            .stage_flags = .{
-                .vertex_bit = desc.stages.vertex,
-                .fragment_bit = desc.stages.fragment,
-                .compute_bit = desc.stages.compute,
-            },
+            .stage_flags = shaderStagesToVk(desc.stages),
             .p_immutable_samplers = null,
         }) catch @panic("OOB");
         flags.appendAssumeCapacity(.{ .partially_bound_bit = desc.partially_bound });
@@ -1013,11 +1009,7 @@ pub fn pipelineLayoutCreate(
     for (options.push_constant_ranges) |range| {
         // Add the range
         pc_ranges.append(.{
-            .stage_flags = .{
-                .vertex_bit = range.stages.vertex,
-                .fragment_bit = range.stages.fragment,
-                .compute_bit = range.stages.compute,
-            },
+            .stage_flags = shaderStagesToVk(range.stages),
             .offset = pc_offset,
             .size = range.size,
         }) catch @panic("OOB");
@@ -1162,11 +1154,7 @@ pub fn cmdBufPushConstants(
     self.backend.device.cmdPushConstants(
         cb.asBackendType(),
         options.pipeline_layout.asBackendType(),
-        .{
-            .vertex_bit = options.stages.vertex,
-            .fragment_bit = options.stages.fragment,
-            .compute_bit = options.stages.compute,
-        },
+        shaderStagesToVk(options.stages),
         options.offset,
         @intCast(options.data.len * @sizeOf(u32)),
         options.data.ptr,
@@ -2168,7 +2156,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
     };
 
     // Pipeline create info
-    const max_shader_stages = gpu.Pipeline.InitGraphicsCmd.Stages.max_stages;
+    const max_shader_stages = std.meta.fields(gpu.Pipeline.InitGraphicsCmd.Stages).len;
     var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
@@ -2561,6 +2549,24 @@ pub const TimestampCalibration = struct {
     }
 };
 
+fn shaderStagesToVk(stages: gpu.ShaderStages) vk.ShaderStageFlags {
+    comptime assert(std.meta.fields(gpu.ShaderStages).len == 3); // Update below if this fails!
+    return .{
+        .vertex_bit = stages.vertex,
+        .fragment_bit = stages.fragment,
+        .compute_bit = stages.compute,
+    };
+}
+
+fn shaderStagesToVkPipelineStages(stages: gpu.ShaderStages) vk.PipelineStageFlags2 {
+    comptime assert(std.meta.fields(gpu.ShaderStages).len == 3); // Update below if this fails!
+    return .{
+        .vertex_shader_bit = stages.vertex,
+        .fragment_shader_bit = stages.fragment,
+        .compute_shader_bit = stages.compute,
+    };
+}
+
 fn rangeToVk(range: gpu.ImageBarrier.Range, aspect: gpu.ImageAspect) vk.ImageSubresourceRange {
     return .{
         .aspect_mask = aspectToVk(aspect),
@@ -2606,13 +2612,10 @@ pub fn imageBarrierUndefinedToColorAttachment(
 }
 
 pub fn imageBarrierUndefinedToColorAttachmentAfterRead(
-    options: gpu.ImageBarrier.UndefinedToColorAttachmentOptionsAfterRead,
+    options: gpu.ImageBarrier.UndefinedToColorAttachmentAfterReadOptions,
 ) gpu.ImageBarrier {
     return .{ .backend = .{
-        .src_stage_mask = .{
-            .vertex_shader_bit = options.src_stage.vertex_shader,
-            .fragment_shader_bit = options.src_stage.fragment_shader,
-        },
+        .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
         .src_access_mask = .{ .shader_read_bit = true },
         .dst_stage_mask = .{ .color_attachment_output_bit = true },
         .dst_access_mask = .{ .color_attachment_write_bit = true },
@@ -2631,10 +2634,7 @@ pub fn imageBarrierTransferDstToReadOnly(
     return .{ .backend = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
-        .dst_stage_mask = .{
-            .vertex_shader_bit = options.dst_stage.vertex_shader,
-            .fragment_shader_bit = options.dst_stage.fragment_shader,
-        },
+        .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
         .dst_access_mask = .{ .shader_read_bit = true },
         .old_layout = .transfer_dst_optimal,
         .new_layout = .read_only_optimal,
@@ -2642,43 +2642,6 @@ pub fn imageBarrierTransferDstToReadOnly(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range, options.aspect),
-    } };
-}
-
-pub fn imageBarrierTransferDstToColorAttachment(
-    options: gpu.ImageBarrier.TransferDstToColorAttachmentOptions,
-) gpu.ImageBarrier {
-    return .{ .backend = .{
-        .src_stage_mask = .{ .copy_bit = true },
-        .src_access_mask = .{ .transfer_write_bit = true },
-        .dst_stage_mask = .{ .color_attachment_output_bit = true },
-        .dst_access_mask = .{ .color_attachment_write_bit = true },
-        .old_layout = .transfer_dst_optimal,
-        .new_layout = .attachment_optimal,
-        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, .{ .color = true }),
-    } };
-}
-
-pub fn imageBarrierReadOnlyToColorAttachment(
-    options: gpu.ImageBarrier.ReadOnlyToColorAttachmentOptions,
-) gpu.ImageBarrier {
-    return .{ .backend = .{
-        .src_stage_mask = .{
-            .vertex_shader_bit = options.src_stage.vertex_shader,
-            .fragment_shader_bit = options.src_stage.fragment_shader,
-        },
-        .src_access_mask = .{ .shader_read_bit = true },
-        .dst_stage_mask = .{ .color_attachment_output_bit = true },
-        .dst_access_mask = .{ .color_attachment_write_bit = true },
-        .old_layout = .read_only_optimal,
-        .new_layout = .attachment_optimal,
-        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, .{ .color = true }),
     } };
 }
 
@@ -2688,33 +2651,10 @@ pub fn imageBarrierColorAttachmentToReadOnly(
     return .{ .backend = .{
         .src_stage_mask = .{ .color_attachment_output_bit = true },
         .src_access_mask = .{ .color_attachment_write_bit = true },
-        .dst_stage_mask = .{
-            .vertex_shader_bit = options.dst_stage.vertex_shader,
-            .fragment_shader_bit = options.dst_stage.fragment_shader,
-        },
+        .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
         .dst_access_mask = .{ .shader_read_bit = true },
         .old_layout = .attachment_optimal,
         .new_layout = .read_only_optimal,
-        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, options.aspect),
-    } };
-}
-
-pub fn imageBarrierColorAttachmentToCompute(
-    options: gpu.ImageBarrier.ColorAttachmentToComputeOptions,
-) gpu.ImageBarrier {
-    return .{ .backend = .{
-        .src_stage_mask = .{ .color_attachment_output_bit = true },
-        .src_access_mask = .{ .color_attachment_write_bit = true },
-        .dst_stage_mask = .{ .compute_shader_bit = true },
-        .dst_access_mask = .{
-            .shader_read_bit = options.dst_access.read,
-            .shader_write_bit = options.dst_access.write,
-        },
-        .old_layout = .attachment_optimal,
-        .new_layout = .general,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
@@ -2722,61 +2662,65 @@ pub fn imageBarrierColorAttachmentToCompute(
     } };
 }
 
-pub fn imageBarrierComputeToColorAttachment(
-    options: gpu.ImageBarrier.ComputeToColorAttachmentOptions,
+pub fn imageBarrierColorAttachmentToReadWrite(
+    options: gpu.ImageBarrier.ColorAttachmentToReadWriteOptions,
 ) gpu.ImageBarrier {
-    return .{ .backend = .{
-        .src_stage_mask = .{ .compute_shader_bit = true },
-        .src_access_mask = .{
-            .shader_read_bit = options.src_access.read,
-            .shader_write_bit = options.src_access.write,
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .color_attachment_output_bit = true },
+            .src_access_mask = .{ .color_attachment_write_bit = true },
+            .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+            .dst_access_mask = .{
+                .shader_read_bit = true,
+                .shader_write_bit = true,
+            },
+            .old_layout = .attachment_optimal,
+            .new_layout = .general,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, .{ .color = true }),
         },
-        .dst_stage_mask = .{ .color_attachment_output_bit = true },
-        .dst_access_mask = .{ .color_attachment_write_bit = true },
-        .old_layout = .general,
-        .new_layout = .attachment_optimal,
-        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, .{ .color = true }),
-    } };
+    };
 }
 
-pub fn imageBarrierComputeToReadOnly(
-    options: gpu.ImageBarrier.ComputeToReadOnlyOptions,
+pub fn imageBarrierReadWriteToReadOnly(
+    options: gpu.ImageBarrier.ReadWriteToReadOnlyOptions,
 ) gpu.ImageBarrier {
-    return .{ .backend = .{
-        .src_stage_mask = .{ .compute_shader_bit = true },
-        .src_access_mask = .{
-            .shader_read_bit = options.src_access.read,
-            .shader_write_bit = options.src_access.write,
+    return .{
+        .backend = .{
+            .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
+            .src_access_mask = .{
+                .shader_read_bit = true,
+                .shader_write_bit = true,
+            },
+            .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+            .dst_access_mask = .{ .shader_read_bit = true },
+            .old_layout = .general,
+            .new_layout = .read_only_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, options.aspect),
         },
-        .dst_stage_mask = .{
-            .vertex_shader_bit = options.dst_stage.vertex_shader,
-            .fragment_shader_bit = options.dst_stage.fragment_shader,
-        },
-        .dst_access_mask = .{ .shader_read_bit = true },
-        .old_layout = .general,
-        .new_layout = .read_only_optimal,
-        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, options.aspect),
-    } };
+    };
 }
 
-pub fn bufBarrierComputeWriteToGraphicsRead(
-    options: gpu.BufBarrier.ComputeWriteToGraphicsReadOptions,
+pub fn bufBarrierInit(
+    options: gpu.BufBarrier.Options,
 ) gpu.BufBarrier {
     return .{
         .backend = .{
-            .src_stage_mask = .{ .compute_shader_bit = true },
-            .src_access_mask = .{ .shader_write_bit = true },
-            .dst_stage_mask = .{
-                .vertex_shader_bit = options.dst_stage.vertex_shader,
-                .fragment_shader_bit = options.dst_stage.fragment_shader,
+            .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
+            .src_access_mask = .{
+                .shader_read_bit = options.src_access.read,
+                .shader_write_bit = options.src_access.write,
             },
-            .dst_access_mask = .{ .shader_read_bit = true },
+            .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+            .dst_access_mask = .{
+                .shader_read_bit = options.dst_access.read,
+                .shader_write_bit = options.dst_access.write,
+            },
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .buffer = options.handle.asBackendType(),
@@ -2785,72 +2729,6 @@ pub fn bufBarrierComputeWriteToGraphicsRead(
             // going to complicate the API by asking for it. If this turns out to be incorrect we can
             // always add it later, but this is further implied by the fact that AFAICT DX12 doesn't
             // have a way to pass this value in.
-            .size = vk.WHOLE_SIZE,
-        },
-    };
-}
-
-pub fn bufBarrierComputeReadToGraphicsWrite(
-    options: gpu.BufBarrier.ComputeReadToGraphicsWriteOptions,
-) gpu.BufBarrier {
-    return .{
-        .backend = .{
-            .src_stage_mask = .{ .compute_shader_bit = true },
-            .src_access_mask = .{ .shader_read_bit = true },
-            .dst_stage_mask = .{
-                .vertex_shader_bit = options.dst_stage.vertex_shader,
-                .fragment_shader_bit = options.dst_stage.fragment_shader,
-            },
-            .dst_access_mask = .{ .shader_write_bit = true },
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .buffer = options.handle.asBackendType(),
-            .offset = 0,
-            // See `bufBarrierComputeWriteToGraphicsRead`.
-            .size = vk.WHOLE_SIZE,
-        },
-    };
-}
-
-pub fn bufBarrierGraphicsReadToComputeWrite(
-    options: gpu.BufBarrier.GraphicsReadToComputeWriteOptions,
-) gpu.BufBarrier {
-    return .{
-        .backend = .{
-            .src_stage_mask = .{
-                .vertex_shader_bit = options.src_stage.vertex_shader,
-                .fragment_shader_bit = options.src_stage.fragment_shader,
-            },
-            .src_access_mask = .{ .shader_read_bit = true },
-            .dst_stage_mask = .{ .compute_shader_bit = true },
-            .dst_access_mask = .{ .shader_write_bit = true },
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .buffer = options.handle.asBackendType(),
-            .offset = 0,
-            // See `bufBarrierComputeWriteToGraphicsRead`.
-            .size = vk.WHOLE_SIZE,
-        },
-    };
-}
-
-pub fn bufBarrierGraphicsWriteToComputeRead(
-    options: gpu.BufBarrier.GraphicsWriteToComputeReadOptions,
-) gpu.BufBarrier {
-    return .{
-        .backend = .{
-            .src_stage_mask = .{
-                .vertex_shader_bit = options.src_stage.vertex_shader,
-                .fragment_shader_bit = options.src_stage.fragment_shader,
-            },
-            .src_access_mask = .{ .shader_write_bit = true },
-            .dst_stage_mask = .{ .compute_shader_bit = true },
-            .dst_access_mask = .{ .shader_read_bit = true },
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .buffer = options.handle.asBackendType(),
-            .offset = 0,
-            // See `bufBarrierComputeWriteToGraphicsRead`.
             .size = vk.WHOLE_SIZE,
         },
     };
