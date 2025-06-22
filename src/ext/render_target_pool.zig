@@ -42,7 +42,7 @@ pub fn RenderTargetPool(kind: ImageKind) type {
         const Pool = @This();
 
         /// A persistent render target handle.
-        pub const Handle = enum(u8) {
+        pub const Handle = enum(u32) {
             _,
 
             /// Internal helper for initializing a render target.
