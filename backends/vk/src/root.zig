@@ -1252,19 +1252,13 @@ pub fn cmdBufBindDescSet(
     );
 }
 
-pub fn cmdBufPrepareSubmit(
+pub fn cmdBufSubmit(
     self: *Gx,
     cb: gpu.CmdBuf,
 ) void {
     cb.endZone(self);
     self.backend.device.endCommandBuffer(cb.asBackendType()) catch |err| @panic(@errorName(err));
-}
 
-pub fn cmdBufSubmit(
-    self: *Gx,
-    cb: gpu.CmdBuf,
-) void {
-    cmdBufPrepareSubmit(self, cb);
     const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
     defer queue_submit_zone.end();
     const cbs = [_]vk.CommandBuffer{cb.asBackendType()};
@@ -1541,7 +1535,21 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) gpu.ImageView.Sized2D {
+pub fn swapchainImages(self: *const Gx) []const gpu.Image(.color) {
+    return self.backend.swapchain.images.constSlice();
+}
+
+pub fn swapchainExtent(self: *const Gx) gpu.Extent2D {
+    return .{
+        .width = self.backend.swapchain.swap_extent.width,
+        .height = self.backend.swapchain.swap_extent.height,
+    };
+}
+
+pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) u32 {
+    // Make sure we haven't already acquired an image this frame
+    assert(self.backend.image_index == null);
+
     // Acquire the image
     const acquire_result = b: {
         const acquire_zone = Zone.begin(.{
@@ -1572,26 +1580,12 @@ pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) gpu.ImageView.
             };
         }
     };
-    assert(self.backend.image_index == null);
-    self.backend.image_index = acquire_result.image_index;
 
-    // Transition it to the right format
+    // Submit the semaphore to cause the GPU to wait for it to become available before writing
     {
-        const transition_zone = Zone.begin(.{ .name = "prepare swapchain image", .src = @src() });
+        const transition_zone = Zone.begin(.{ .name = "image available", .src = @src() });
         defer transition_zone.end();
 
-        const cb: gpu.CmdBuf = .init(self, .{
-            .name = "Prepare Swapchain Image",
-            .src = @src(),
-        });
-
-        transitionImageToColorAttachmentOptimal(
-            self,
-            cb.asBackendType(),
-            self.backend.swapchain.images.get(acquire_result.image_index),
-        );
-
-        cmdBufPrepareSubmit(self, cb);
         self.backend.device.queueSubmit(
             self.backend.queue,
             1,
@@ -1599,8 +1593,8 @@ pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) gpu.ImageView.
                 .wait_semaphore_count = 1,
                 .p_wait_semaphores = &.{self.backend.image_availables[self.frame]},
                 .p_wait_dst_stage_mask = &.{.{ .top_of_pipe_bit = true }},
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{cb.asBackendType()},
+                .command_buffer_count = 0,
+                .p_command_buffers = &.{},
                 .signal_semaphore_count = 0,
                 .p_signal_semaphores = &.{},
                 .p_next = null,
@@ -1609,18 +1603,14 @@ pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) gpu.ImageView.
         ) catch |err| @panic(@errorName(err));
     }
 
-    return .{
-        .view = .fromBackendType(self.backend.swapchain.views.get(acquire_result.image_index)),
-        .extent = .{
-            .width = self.backend.swapchain.swap_extent.width,
-            .height = self.backend.swapchain.swap_extent.height,
-        },
-    };
+    // Save the index, we use this on end frame
+    self.backend.image_index = acquire_result.image_index;
+
+    // Return the index to the caller
+    return acquire_result.image_index;
 }
 
 pub fn beginFrame(self: *Gx) void {
-    self.backend.image_index = null;
-
     {
         const wait_zone = Zone.begin(.{
             .src = @src(),
@@ -2310,74 +2300,61 @@ pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeC
     }
 }
 
-fn transitionImageColorAttachmentToPresent(
-    self: *Gx,
-    cb: vk.CommandBuffer,
-    image: vk.Image,
-) void {
-    self.backend.device.cmdPipelineBarrier2(cb, &.{
-        .dependency_flags = .{},
-        .memory_barrier_count = 0,
-        .p_memory_barriers = &.{},
-        .buffer_memory_barrier_count = 0,
-        .p_buffer_memory_barriers = &.{},
-        .image_memory_barrier_count = 1,
-        .p_image_memory_barriers = &.{.{
-            .src_stage_mask = .{ .color_attachment_output_bit = true },
-            .src_access_mask = .{ .color_attachment_write_bit = true },
-            .dst_stage_mask = .{ .bottom_of_pipe_bit = true },
-            .dst_access_mask = .{},
-            .old_layout = .attachment_optimal,
-            .new_layout = .present_src_khr,
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        }},
-    });
-}
+pub fn endFrame(self: *Gx) void {
+    if (self.backend.image_index) |image_index| {
+        // We acquired a swapchain image this frame, present it.
+        {
+            // Signal the ready for present semaphore when the graphics queue finishes executing
+            const transition_zone = Zone.begin(.{ .name = "ready for present", .src = @src() });
+            defer transition_zone.end();
+            self.backend.device.queueSubmit(
+                self.backend.queue,
+                1,
+                &.{.{
+                    .wait_semaphore_count = 0,
+                    .p_wait_semaphores = &.{},
+                    .p_wait_dst_stage_mask = &.{},
+                    .command_buffer_count = 0,
+                    .p_command_buffers = &.{},
+                    .signal_semaphore_count = 1,
+                    .p_signal_semaphores = &.{self.backend.ready_for_present[image_index]},
+                    .p_next = null,
+                }},
+                self.backend.cmd_pool_ready[self.frame],
+            ) catch |err| @panic(@errorName(err));
+        }
 
-fn transitionImageToColorAttachmentOptimal(
-    self: *Gx,
-    cb: vk.CommandBuffer,
-    image: vk.Image,
-) void {
-    self.backend.device.cmdPipelineBarrier2(cb, &.{
-        .dependency_flags = .{},
-        .memory_barrier_count = 0,
-        .p_memory_barriers = &.{},
-        .buffer_memory_barrier_count = 0,
-        .p_buffer_memory_barriers = &.{},
-        .image_memory_barrier_count = 1,
-        .p_image_memory_barriers = &.{.{
-            .src_stage_mask = .{ .top_of_pipe_bit = true },
-            .src_access_mask = .{},
-            .dst_stage_mask = .{ .color_attachment_output_bit = true },
-            .dst_access_mask = .{ .color_attachment_write_bit = true },
-            .old_layout = .undefined,
-            .new_layout = .attachment_optimal,
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        }},
-    });
-}
-
-pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
-    if (!options.present) {
+        {
+            // Present the image
+            const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
+            defer queue_present_zone.end();
+            const result = self.backend.device.queuePresentKHR(
+                self.backend.queue,
+                &.{
+                    .wait_semaphore_count = 1,
+                    .p_wait_semaphores = &.{self.backend.ready_for_present[image_index]},
+                    .swapchain_count = 1,
+                    .p_swapchains = &.{self.backend.swapchain.swapchain},
+                    .p_image_indices = &.{image_index},
+                    .p_results = null,
+                },
+            ) catch |err| b: switch (err) {
+                error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
+                    self.backend.swapchain.out_of_date = true;
+                    break :b .success;
+                },
+                error.OutOfHostMemory,
+                error.OutOfDeviceMemory,
+                error.Unknown,
+                error.SurfaceLostKHR,
+                error.DeviceLost,
+                => @panic(@errorName(err)),
+            };
+            if (result == .suboptimal_khr) {
+                self.backend.swapchain.out_of_date = true;
+            }
+        }
+    } else {
         // We aren't presenting, just wrap up this command pool submission by signaling the fence
         // for this frame and then early out.
         self.backend.device.queueSubmit(
@@ -2395,76 +2372,10 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
             }},
             self.backend.cmd_pool_ready[self.frame],
         ) catch |err| @panic(@errorName(err));
-        return;
     }
 
-    {
-        const transition_zone = Zone.begin(.{ .name = "finalize swapchain image", .src = @src() });
-        defer transition_zone.end();
-
-        const cb: gpu.CmdBuf = .init(self, .{
-            .name = "Finalize Swapchain Image",
-            .src = @src(),
-        });
-
-        transitionImageColorAttachmentToPresent(
-            self,
-            cb.asBackendType(),
-            self.backend.swapchain.images.get(self.backend.image_index.?),
-        );
-
-        cmdBufPrepareSubmit(self, cb);
-        self.backend.device.queueSubmit(
-            self.backend.queue,
-            1,
-            &.{.{
-                .wait_semaphore_count = 0,
-                .p_wait_semaphores = &.{},
-                .p_wait_dst_stage_mask = &.{},
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{cb.asBackendType()},
-                .signal_semaphore_count = 1,
-                .p_signal_semaphores = &.{
-                    self.backend.ready_for_present[self.backend.image_index.?],
-                },
-                .p_next = null,
-            }},
-            self.backend.cmd_pool_ready[self.frame],
-        ) catch |err| @panic(@errorName(err));
-    }
-
-    {
-        const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
-        defer queue_present_zone.end();
-        const swapchain = [_]vk.SwapchainKHR{self.backend.swapchain.swapchain};
-        const image_index = [_]u32{self.backend.image_index.?};
-
-        const result = self.backend.device.queuePresentKHR(
-            self.backend.queue,
-            &.{
-                .wait_semaphore_count = 1,
-                .p_wait_semaphores = &.{self.backend.ready_for_present[self.backend.image_index.?]},
-                .swapchain_count = swapchain.len,
-                .p_swapchains = &swapchain,
-                .p_image_indices = &image_index,
-                .p_results = null,
-            },
-        ) catch |err| b: switch (err) {
-            error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                self.backend.swapchain.out_of_date = true;
-                break :b .success;
-            },
-            error.OutOfHostMemory,
-            error.OutOfDeviceMemory,
-            error.Unknown,
-            error.SurfaceLostKHR,
-            error.DeviceLost,
-            => @panic(@errorName(err)),
-        };
-        if (result == .suboptimal_khr) {
-            self.backend.swapchain.out_of_date = true;
-        }
-    }
+    // Clear the image index
+    self.backend.image_index = null;
 }
 
 pub fn samplerCreate(
@@ -2608,6 +2519,29 @@ pub fn imageBarrierUndefinedToColorAttachment(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range, .{ .color = true }),
+    } };
+}
+
+pub fn imageBarrierColorAttachmentToPresent(
+    options: gpu.ImageBarrier.ColorAttachmentToPresentOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = .{ .color_attachment_output_bit = true },
+        .src_access_mask = .{ .color_attachment_write_bit = true },
+        .dst_stage_mask = .{ .bottom_of_pipe_bit = true },
+        .dst_access_mask = .{},
+        .old_layout = .attachment_optimal,
+        .new_layout = .present_src_khr,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
     } };
 }
 
@@ -2926,7 +2860,6 @@ const Swapchain = struct {
     pub const empty: @This() = .{
         .swapchain = .null_handle,
         .images = .{},
-        .views = .{},
         .swap_extent = .{
             .width = 0,
             .height = 0,
@@ -2939,8 +2872,7 @@ const Swapchain = struct {
     };
 
     swapchain: vk.SwapchainKHR,
-    images: std.BoundedArray(vk.Image, max_swapchain_depth),
-    views: std.BoundedArray(vk.ImageView, max_swapchain_depth),
+    images: std.BoundedArray(gpu.Image(.color), max_swapchain_depth),
     swap_extent: vk.Extent2D,
     external_framebuf_size: gpu.Extent2D,
     out_of_date: bool = false,
@@ -3002,20 +2934,21 @@ const Swapchain = struct {
 
         const swapchain = device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
         setName(debug_messenger, device, swapchain, .{ .str = "Main" });
-        var images: std.BoundedArray(vk.Image, max_swapchain_depth) = .{};
+        var image_handles: std.BoundedArray(vk.Image, max_swapchain_depth) = .{};
         var image_count: u32 = max_swapchain_depth;
         const get_images_result = device.getSwapchainImagesKHR(
             swapchain,
             &image_count,
-            &images.buffer,
+            &image_handles.buffer,
         ) catch |err| @panic(@errorName(err));
         if (get_images_result != .success) @panic(@tagName(get_images_result));
-        images.len = image_count;
-        var views: std.BoundedArray(vk.ImageView, max_swapchain_depth) = .{};
-        for (images.constSlice(), 0..) |image, i| {
-            setName(debug_messenger, device, image, .{ .str = "Swapchain", .index = i });
+        image_handles.len = image_count;
+        var images: std.BoundedArray(gpu.Image(.color), max_swapchain_depth) = .{};
+        var views: std.BoundedArray(gpu.ImageView, max_swapchain_depth) = .{};
+        for (image_handles.constSlice(), 0..) |handle, i| {
+            setName(debug_messenger, device, handle, .{ .str = "Swapchain", .index = i });
             const create_info: vk.ImageViewCreateInfo = .{
-                .image = image,
+                .image = handle,
                 .view_type = .@"2d",
                 .format = physical_device.surface_format.format,
                 .subresource_range = .{
@@ -3034,20 +2967,23 @@ const Swapchain = struct {
             };
             const view = device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
             setName(debug_messenger, device, view, .{ .str = "Swapchain", .index = i });
-            views.appendAssumeCapacity(view);
+            views.appendAssumeCapacity(.fromBackendType(view));
+            images.appendAssumeCapacity(.{
+                .handle = .fromBackendType(handle),
+                .view = .fromBackendType(view),
+            });
         }
 
         return .{
             .swapchain = swapchain,
             .images = images,
-            .views = views,
             .swap_extent = swap_extent,
             .external_framebuf_size = framebuf_extent,
         };
     }
 
     fn destroyEverythingExceptSwapchain(self: *@This(), device: vk.DeviceProxy) void {
-        for (self.views.constSlice()) |v| device.destroyImageView(v, null);
+        for (self.images.constSlice()) |i| device.destroyImageView(i.view.asBackendType(), null);
     }
 
     fn deinit(self: *@This(), device: vk.DeviceProxy) void {

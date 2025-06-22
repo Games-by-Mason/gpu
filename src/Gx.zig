@@ -170,17 +170,10 @@ pub fn getBackendConst(self: *const @This(), T: type) *const T {
     return &self.backend;
 }
 
-/// Options for ending the current frame.
-pub const EndFrameOptions = struct {
-    /// If true, presents the current image, otherwise ends the frame without presentation.
-    ///
-    /// Some drivers sometimes block here waiting for the swapchain image instead of when acquiring
-    /// it.
-    present: bool = true,
-};
-
-/// Ends the current frame.
-pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
+/// Ends the current frame. If an image was acquired with `acquireNextImage`, it will be presented.
+///
+/// Drivers may sometimes block here instead of on `acquireNextImage`.
+pub fn endFrame(self: *@This()) void {
     const zone = Zone.begin(.{ .src = @src() });
     defer zone.end();
     const blocking_zone = Zone.begin(.{
@@ -188,7 +181,7 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
         .color = gpu.global_options.blocking_zone_color,
     });
     defer blocking_zone.end();
-    Backend.endFrame(self, options);
+    Backend.endFrame(self);
     const Frame = @TypeOf(self.frame);
     const FramesInFlight = @TypeOf(self.frames_in_flight);
     comptime assert(std.math.maxInt(FramesInFlight) < std.math.maxInt(Frame));
@@ -197,11 +190,17 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
     self.in_frame = false;
 }
 
-/// Acquires the next swapchain image, blocking until it's available if necessary. Returns the
-/// nanoseconds spent blocking.
-///
-/// Returns null if the swapchain needed to be recreated, in which case you should drop this frame.
-pub fn acquireNextImage(self: *@This(), framebuf_extent: Ctx.Extent2D) ImageView.Sized2D {
+pub fn swapchainImages(self: *const @This()) []const gpu.Image(.color) {
+    return Backend.swapchainImages(self);
+}
+
+pub fn swapchainExtent(self: *const @This()) Extent2D {
+    return Backend.swapchainExtent(self);
+}
+
+/// Acquires the next swapchain image, blocking until it's available if necessary. The result is the
+/// index into `swapchainImages`.
+pub fn acquireNextImage(self: *@This(), framebuf_extent: Ctx.Extent2D) u32 {
     const zone = Zone.begin(.{
         .src = @src(),
         .color = gpu.global_options.blocking_zone_color,

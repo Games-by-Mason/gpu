@@ -1290,12 +1290,12 @@ pub const DescSet = enum(u64) {
 };
 
 pub const Device = struct {
-    // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
+    /// https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
     pub const StorageBufSize = u27;
 
-    // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
+    /// https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
     pub const max_uniform_buf_offset_alignment = 256;
-    // https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
+    /// https://registry.khronos.org/vulkan/specs/1.3/html/chap33.html#limits-minmax
     pub const max_storage_buf_offset_alignment = 256;
 
     /// The required alignment of a resource in a buffer being copied.
@@ -1367,6 +1367,14 @@ pub const ImageBarrier = extern struct {
 
     pub fn undefinedToColorAttachment(options: UndefinedToColorAttachmentOptions) @This() {
         return Backend.imageBarrierUndefinedToColorAttachment(options);
+    }
+
+    pub const ColorAttachmentToPresentOptions = struct {
+        handle: ImageHandle,
+    };
+
+    pub fn colorAttachmentToPresent(options: ColorAttachmentToPresentOptions) @This() {
+        return Backend.imageBarrierColorAttachmentToPresent(options);
     }
 
     pub const UndefinedToColorAttachmentAfterReadOptions = struct {
