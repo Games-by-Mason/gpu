@@ -16,6 +16,7 @@ const ImageView = gpu.ImageView;
 const Sampler = gpu.Sampler;
 const DescSet = gpu.DescSet;
 const Device = gpu.Device;
+const Swapchain = gpu.Swapchain;
 
 const Ctx = @This();
 
@@ -23,8 +24,10 @@ const Backend = gpu.global_options.Backend;
 
 /// Backend specific state.
 backend: Backend,
-/// Device information.
+/// Device information, initialized at init time.
 device: Device,
+/// Swapchain information, initialized and updated by `acquireNextImage`.
+swapchain: Swapchain,
 /// The number of frames that can be in flight at once.
 frames_in_flight: u4,
 /// The current frame in flight.
@@ -138,6 +141,10 @@ pub fn init(gpa: Allocator, options: Options) @This() {
     var gx: @This() = .{
         .backend = backend_result.backend,
         .device = backend_result.device,
+        .swapchain = .{
+            .images = .{},
+            .extent = .{ .width = 0, .height = 0 },
+        },
         .frames_in_flight = options.frames_in_flight,
         .timestamp_queries = options.timestamp_queries,
         .validate = options.debug.gte(.validate),
@@ -188,14 +195,6 @@ pub fn endFrame(self: *@This()) void {
     self.frame = (self.frame + 1) % self.frames_in_flight;
     assert(self.in_frame);
     self.in_frame = false;
-}
-
-pub fn swapchainImages(self: *const @This()) []const gpu.Image(.color) {
-    return Backend.swapchainImages(self);
-}
-
-pub fn swapchainExtent(self: *const @This()) Extent2D {
-    return Backend.swapchainExtent(self);
 }
 
 /// Acquires the next swapchain image, blocking until it's available if necessary. The result is the

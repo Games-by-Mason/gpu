@@ -16,16 +16,14 @@ pub const vk = @import("vulkan");
 
 const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
-// In practice, there should typically be only two or three.
-const max_swapchain_depth = 8;
-
 // Context
 surface: vk.SurfaceKHR,
 base_wrapper: vk.BaseWrapper,
 device: vk.DeviceProxy,
 instance: vk.InstanceProxy,
 physical_device: PhysicalDevice,
-swapchain: Swapchain,
+swapchain: vk.SwapchainKHR,
+swapchain_out_of_date: bool,
 debug_messenger: vk.DebugUtilsMessengerEXT,
 pipeline_cache: vk.PipelineCache,
 
@@ -37,7 +35,7 @@ cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
 // Synchronization
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
-ready_for_present: [max_swapchain_depth]vk.Semaphore,
+ready_for_present: [gpu.Swapchain.max_swapchain_images]vk.Semaphore,
 cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 
 // The current swapchain image index. Other APIs track this automatically, Vulkan appears to allow
@@ -643,7 +641,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         setName(debug_messenger, device, image_availables[i], .{ .str = "Image Available", .index = i });
     }
 
-    var ready_for_present: [max_swapchain_depth]vk.Semaphore = undefined;
+    var ready_for_present: [gpu.Swapchain.max_swapchain_images]vk.Semaphore = undefined;
     for (&ready_for_present, 0..) |*semaphore, frame| {
         semaphore.* = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
         setName(debug_messenger, device, semaphore.*, .{
@@ -707,7 +705,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .pipeline_cache = pipeline_cache,
             .instance = instance_proxy,
             .device = device,
-            .swapchain = .empty,
+            .swapchain = .null_handle,
+            .swapchain_out_of_date = true,
             .cmd_pools = cmd_pools,
             .image_availables = image_availables,
             .ready_for_present = ready_for_present,
@@ -756,7 +755,8 @@ pub fn deinit(self: *Gx, gpa: Allocator) void {
     }
 
     // Destroy swapchain state
-    self.backend.swapchain.deinit(self.backend.device);
+    destroySwapchainViews(self);
+    self.backend.device.destroySwapchainKHR(self.backend.swapchain, null);
 
     // Destroy device state
     self.backend.device.destroyDevice(null);
@@ -1535,17 +1535,6 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn swapchainImages(self: *const Gx) []const gpu.Image(.color) {
-    return self.backend.swapchain.images.constSlice();
-}
-
-pub fn swapchainExtent(self: *const Gx) gpu.Extent2D {
-    return .{
-        .width = self.backend.swapchain.swap_extent.width,
-        .height = self.backend.swapchain.swap_extent.height,
-    };
-}
-
 pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) u32 {
     // Make sure we haven't already acquired an image this frame
     assert(self.backend.image_index == null);
@@ -1557,18 +1546,18 @@ pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) u32 {
             .name = "acquire next image",
         });
         defer acquire_zone.end();
-        if (self.backend.swapchain.out_of_date) {
-            self.backend.swapchain.recreate(self, framebuf_extent);
+        if (self.backend.swapchain_out_of_date) {
+            recreateSwapchain(self, framebuf_extent);
         }
         while (true) {
             break :b self.backend.device.acquireNextImageKHR(
-                self.backend.swapchain.swapchain,
+                self.backend.swapchain,
                 std.math.maxInt(u64),
                 self.backend.image_availables[self.frame],
                 .null_handle,
             ) catch |err| switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    self.backend.swapchain.recreate(self, framebuf_extent);
+                    recreateSwapchain(self, framebuf_extent);
                     continue;
                 },
                 error.OutOfHostMemory,
@@ -2334,13 +2323,13 @@ pub fn endFrame(self: *Gx) void {
                     .wait_semaphore_count = 1,
                     .p_wait_semaphores = &.{self.backend.ready_for_present[image_index]},
                     .swapchain_count = 1,
-                    .p_swapchains = &.{self.backend.swapchain.swapchain},
+                    .p_swapchains = &.{self.backend.swapchain},
                     .p_image_indices = &.{image_index},
                     .p_results = null,
                 },
             ) catch |err| b: switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    self.backend.swapchain.out_of_date = true;
+                    self.backend.swapchain_out_of_date = true;
                     break :b .success;
                 },
                 error.OutOfHostMemory,
@@ -2351,7 +2340,7 @@ pub fn endFrame(self: *Gx) void {
                 => @panic(@errorName(err)),
             };
             if (result == .suboptimal_khr) {
-                self.backend.swapchain.out_of_date = true;
+                self.backend.swapchain_out_of_date = true;
             }
         }
     } else {
@@ -2856,173 +2845,126 @@ fn findMemoryType(
     return null;
 }
 
-const Swapchain = struct {
-    pub const empty: @This() = .{
-        .swapchain = .null_handle,
-        .images = .{},
-        .swap_extent = .{
-            .width = 0,
-            .height = 0,
-        },
-        .external_framebuf_size = .{
-            .width = 0,
-            .height = 0,
-        },
-        .out_of_date = true,
+fn destroySwapchainViews(gx: *Gx) void {
+    for (gx.swapchain.images.constSlice()) |i| {
+        gx.backend.device.destroyImageView(i.view.asBackendType(), null);
+    }
+    gx.swapchain.images.clear();
+}
+
+fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
+    const zone = tracy.Zone.begin(.{ .src = @src() });
+    defer zone.end();
+
+    // Get the retired swapchain, if any
+    const retired = self.backend.swapchain;
+
+    // We wait idle on every recreate so that we can delete the old swapchain after. Technically
+    // this is still incorrect, there is a spec bug that makes it impossible to do this
+    // correctly without an extension that isn't widely supported:
+    //
+    // https://github.com/KhronosGroup/Vulkan-Docs/issues/1678
+    //
+    // If this causes us issues, and the extension still isn't widely supported, we can queue up
+    // retired swapchains and wait a few seconds before deleting them or something.
+    if (retired != .null_handle) {
+        self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
+    }
+
+    destroySwapchainViews(self);
+
+    const surface_capabilities = self.backend.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
+        self.backend.physical_device.device,
+        self.backend.surface,
+    ) catch |err| @panic(@errorName(err));
+    self.swapchain.extent = if (surface_capabilities.current_extent.width == std.math.maxInt(u32) and
+        surface_capabilities.current_extent.height == std.math.maxInt(u32))
+    e: {
+        break :e .{
+            .width = std.math.clamp(
+                framebuf_extent.width,
+                surface_capabilities.min_image_extent.width,
+                surface_capabilities.max_image_extent.width,
+            ),
+            .height = std.math.clamp(
+                framebuf_extent.height,
+                surface_capabilities.min_image_extent.height,
+                surface_capabilities.max_image_extent.height,
+            ),
+        };
+    } else .{
+        .width = surface_capabilities.current_extent.width,
+        .height = surface_capabilities.current_extent.height,
     };
 
-    swapchain: vk.SwapchainKHR,
-    images: std.BoundedArray(gpu.Image(.color), max_swapchain_depth),
-    swap_extent: vk.Extent2D,
-    external_framebuf_size: gpu.Extent2D,
-    out_of_date: bool = false,
+    const max_images = if (surface_capabilities.max_image_count == 0) b: {
+        break :b std.math.maxInt(u32);
+    } else surface_capabilities.max_image_count;
+    const min_image_count = @min(max_images, surface_capabilities.min_image_count + 1);
+    var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
+        .surface = self.backend.surface,
+        .min_image_count = min_image_count,
+        .image_format = self.backend.physical_device.surface_format.format,
+        .image_color_space = self.backend.physical_device.surface_format.color_space,
+        .image_extent = .{ .width = self.swapchain.extent.width, .height = self.swapchain.extent.height },
+        .image_array_layers = 1,
+        .image_usage = .{ .color_attachment_bit = true },
+        .pre_transform = surface_capabilities.current_transform,
+        .composite_alpha = self.backend.physical_device.composite_alpha,
+        .present_mode = self.backend.physical_device.present_mode,
+        .clipped = vk.TRUE,
+        .image_sharing_mode = .exclusive,
+        .p_queue_family_indices = null,
+        .queue_family_index_count = 0,
+        .old_swapchain = retired,
+    };
 
-    fn init(
-        instance: vk.InstanceProxy,
-        framebuf_extent: gpu.Extent2D,
-        device: vk.DeviceProxy,
-        physical_device: PhysicalDevice,
-        surface: vk.SurfaceKHR,
-        old_swapchain: vk.SwapchainKHR,
-        debug_messenger: vk.DebugUtilsMessengerEXT,
-    ) @This() {
-        const zone = tracy.Zone.begin(.{ .name = "swapchain init", .src = @src() });
-        defer zone.end();
-
-        const surface_capabilities = instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
-            physical_device.device,
-            surface,
-        ) catch |err| @panic(@errorName(err));
-        const swap_extent = if (surface_capabilities.current_extent.width == std.math.maxInt(u32) and
-            surface_capabilities.current_extent.height == std.math.maxInt(u32))
-        e: {
-            break :e vk.Extent2D{
-                .width = std.math.clamp(
-                    framebuf_extent.width,
-                    surface_capabilities.min_image_extent.width,
-                    surface_capabilities.max_image_extent.width,
-                ),
-                .height = std.math.clamp(
-                    framebuf_extent.height,
-                    surface_capabilities.min_image_extent.height,
-                    surface_capabilities.max_image_extent.height,
-                ),
-            };
-        } else surface_capabilities.current_extent;
-
-        const max_images = if (surface_capabilities.max_image_count == 0) b: {
-            break :b std.math.maxInt(u32);
-        } else surface_capabilities.max_image_count;
-        const min_image_count = @min(max_images, surface_capabilities.min_image_count + 1);
-        var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
-            .surface = surface,
-            .min_image_count = min_image_count,
-            .image_format = physical_device.surface_format.format,
-            .image_color_space = physical_device.surface_format.color_space,
-            .image_extent = swap_extent,
-            .image_array_layers = 1,
-            .image_usage = .{ .color_attachment_bit = true },
-            .pre_transform = surface_capabilities.current_transform,
-            .composite_alpha = physical_device.composite_alpha,
-            .present_mode = physical_device.present_mode,
-            .clipped = vk.TRUE,
-            .image_sharing_mode = .exclusive,
-            .p_queue_family_indices = null,
-            .queue_family_index_count = 0,
-            .old_swapchain = old_swapchain,
+    self.backend.swapchain = self.backend.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
+    setName(self.backend.debug_messenger, self.backend.device, self.backend.swapchain, .{ .str = "Main" });
+    var image_handles: std.BoundedArray(vk.Image, gpu.Swapchain.max_swapchain_images) = .{};
+    var image_count: u32 = gpu.Swapchain.max_swapchain_images;
+    const get_images_result = self.backend.device.getSwapchainImagesKHR(
+        self.backend.swapchain,
+        &image_count,
+        &image_handles.buffer,
+    ) catch |err| @panic(@errorName(err));
+    if (get_images_result != .success) @panic(@tagName(get_images_result));
+    image_handles.len = image_count;
+    assert(self.swapchain.images.len == 0);
+    var views: std.BoundedArray(gpu.ImageView, gpu.Swapchain.max_swapchain_images) = .{};
+    for (image_handles.constSlice(), 0..) |handle, i| {
+        setName(self.backend.debug_messenger, self.backend.device, handle, .{ .str = "Swapchain", .index = i });
+        const create_info: vk.ImageViewCreateInfo = .{
+            .image = handle,
+            .view_type = .@"2d",
+            .format = self.backend.physical_device.surface_format.format,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .components = .{
+                .r = .identity,
+                .g = .identity,
+                .b = .identity,
+                .a = .identity,
+            },
         };
-
-        const swapchain = device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
-        setName(debug_messenger, device, swapchain, .{ .str = "Main" });
-        var image_handles: std.BoundedArray(vk.Image, max_swapchain_depth) = .{};
-        var image_count: u32 = max_swapchain_depth;
-        const get_images_result = device.getSwapchainImagesKHR(
-            swapchain,
-            &image_count,
-            &image_handles.buffer,
-        ) catch |err| @panic(@errorName(err));
-        if (get_images_result != .success) @panic(@tagName(get_images_result));
-        image_handles.len = image_count;
-        var images: std.BoundedArray(gpu.Image(.color), max_swapchain_depth) = .{};
-        var views: std.BoundedArray(gpu.ImageView, max_swapchain_depth) = .{};
-        for (image_handles.constSlice(), 0..) |handle, i| {
-            setName(debug_messenger, device, handle, .{ .str = "Swapchain", .index = i });
-            const create_info: vk.ImageViewCreateInfo = .{
-                .image = handle,
-                .view_type = .@"2d",
-                .format = physical_device.surface_format.format,
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-                .components = .{
-                    .r = .identity,
-                    .g = .identity,
-                    .b = .identity,
-                    .a = .identity,
-                },
-            };
-            const view = device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
-            setName(debug_messenger, device, view, .{ .str = "Swapchain", .index = i });
-            views.appendAssumeCapacity(.fromBackendType(view));
-            images.appendAssumeCapacity(.{
-                .handle = .fromBackendType(handle),
-                .view = .fromBackendType(view),
-            });
-        }
-
-        return .{
-            .swapchain = swapchain,
-            .images = images,
-            .swap_extent = swap_extent,
-            .external_framebuf_size = framebuf_extent,
-        };
+        const view = self.backend.device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
+        setName(self.backend.debug_messenger, self.backend.device, view, .{ .str = "Swapchain", .index = i });
+        views.appendAssumeCapacity(.fromBackendType(view));
+        self.swapchain.images.appendAssumeCapacity(.{
+            .handle = .fromBackendType(handle),
+            .view = .fromBackendType(view),
+        });
     }
 
-    fn destroyEverythingExceptSwapchain(self: *@This(), device: vk.DeviceProxy) void {
-        for (self.images.constSlice()) |i| device.destroyImageView(i.view.asBackendType(), null);
+    if (retired != .null_handle) {
+        self.backend.device.destroySwapchainKHR(retired, null);
     }
-
-    fn deinit(self: *@This(), device: vk.DeviceProxy) void {
-        self.destroyEverythingExceptSwapchain(device);
-        device.destroySwapchainKHR(self.swapchain, null);
-        self.* = undefined;
-    }
-
-    fn recreate(self: *@This(), gx: *Gx, framebuf_extent: gpu.Extent2D) void {
-        const zone = tracy.Zone.begin(.{ .src = @src() });
-        defer zone.end();
-
-        // We wait idle on every recreate so that we can delete the old swapchain after. Technically
-        // this is still incorrect, there is a spec bug that makes it impossible to do this
-        // correctly without an extension that isn't widely supported:
-        //
-        // https://github.com/KhronosGroup/Vulkan-Docs/issues/1678
-        //
-        // If this causes us issues, and the extension still isn't widely supported, we can queue up
-        // retired swapchains and wait a few seconds before deleting them or something.
-        if (self.swapchain != .null_handle) {
-            gx.backend.device.deviceWaitIdle() catch |err| std.debug.panic("vkDeviceWaitIdle failed: {}", .{err});
-        }
-        const retired = self.swapchain;
-        self.destroyEverythingExceptSwapchain(gx.backend.device);
-        self.* = .init(
-            gx.backend.instance,
-            framebuf_extent,
-            gx.backend.device,
-            gx.backend.physical_device,
-            gx.backend.surface,
-            retired,
-            gx.backend.debug_messenger,
-        );
-        if (self.swapchain != .null_handle) {
-            gx.backend.device.destroySwapchainKHR(retired, null);
-        }
-    }
-};
+}
 
 const PhysicalDevice = struct {
     device: vk.PhysicalDevice = .null_handle,
