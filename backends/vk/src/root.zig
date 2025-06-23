@@ -16,6 +16,12 @@ pub const vk = @import("vulkan");
 
 const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
+const SwapchainState = enum {
+    optimal,
+    suboptimal,
+    out_of_date,
+};
+
 // Context
 surface: vk.SurfaceKHR,
 base_wrapper: vk.BaseWrapper,
@@ -23,7 +29,7 @@ device: vk.DeviceProxy,
 instance: vk.InstanceProxy,
 physical_device: PhysicalDevice,
 swapchain: vk.SwapchainKHR,
-swapchain_out_of_date: bool,
+swapchain_state: SwapchainState = .out_of_date,
 debug_messenger: vk.DebugUtilsMessengerEXT,
 pipeline_cache: vk.PipelineCache,
 
@@ -706,7 +712,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .instance = instance_proxy,
             .device = device,
             .swapchain = .null_handle,
-            .swapchain_out_of_date = true,
+            .swapchain_state = .out_of_date,
             .cmd_pools = cmd_pools,
             .image_availables = image_availables,
             .ready_for_present = ready_for_present,
@@ -1535,7 +1541,9 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) u32 {
+pub fn acquireNextImage(self: *Gx, options: Gx.AcquireNextImageOptions) Gx.AcquireNextImageResult {
+    var recreated = false;
+
     // Make sure we haven't already acquired an image this frame
     assert(self.backend.image_index == null);
 
@@ -1546,8 +1554,14 @@ pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) u32 {
             .name = "acquire next image",
         });
         defer acquire_zone.end();
-        if (self.backend.swapchain_out_of_date) {
-            recreateSwapchain(self, framebuf_extent);
+        const should_recreate = switch (self.backend.swapchain_state) {
+            .optimal => false,
+            .out_of_date => true,
+            .suboptimal => options.recreate_if_suboptimal,
+        };
+        if (should_recreate) {
+            recreateSwapchain(self, options.window_extent);
+            recreated = true;
         }
         while (true) {
             break :b self.backend.device.acquireNextImageKHR(
@@ -1557,7 +1571,8 @@ pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) u32 {
                 .null_handle,
             ) catch |err| switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    recreateSwapchain(self, framebuf_extent);
+                    recreateSwapchain(self, options.window_extent);
+                    recreated = true;
                     continue;
                 },
                 error.OutOfHostMemory,
@@ -1594,9 +1609,13 @@ pub fn acquireNextImage(self: *Gx, framebuf_extent: gpu.Extent2D) u32 {
 
     // Save the index, we use this on end frame
     self.backend.image_index = acquire_result.image_index;
+    self.backend.swapchain_state = .optimal;
 
     // Return the index to the caller
-    return acquire_result.image_index;
+    return .{
+        .index = acquire_result.image_index,
+        .recreated = recreated,
+    };
 }
 
 pub fn beginFrame(self: *Gx) void {
@@ -2329,7 +2348,8 @@ pub fn endFrame(self: *Gx) void {
                 },
             ) catch |err| b: switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    self.backend.swapchain_out_of_date = true;
+                    self.backend.swapchain_state = .out_of_date;
+                    std.log.warn("out of date", .{});
                     break :b .success;
                 },
                 error.OutOfHostMemory,
@@ -2339,8 +2359,8 @@ pub fn endFrame(self: *Gx) void {
                 error.DeviceLost,
                 => @panic(@errorName(err)),
             };
-            if (result == .suboptimal_khr) {
-                self.backend.swapchain_out_of_date = true;
+            if (result == .suboptimal_khr and self.backend.swapchain_state == .optimal) {
+                self.backend.swapchain_state = .suboptimal;
             }
         }
     } else {
@@ -2855,6 +2875,7 @@ fn destroySwapchainViews(gx: *Gx) void {
 fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
+    log.info("recreating swapchain", .{});
 
     // Get the retired swapchain, if any
     const retired = self.backend.swapchain;

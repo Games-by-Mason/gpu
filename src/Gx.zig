@@ -197,17 +197,42 @@ pub fn endFrame(self: *@This()) void {
     self.in_frame = false;
 }
 
+/// Options for `acquireNextImage`.
+pub const AcquireNextImageOptions = struct {
+    /// If true, recreate the swapchain if it's suboptimal.
+    ///
+    /// For best resizing experience, set this to true only when outside of an active resize to
+    /// prevent  redundant swapchain recreations.
+    ///
+    /// The swapchain will be recreated if it's out of date regardless of this option.
+    recreate_if_suboptimal: bool,
+    /// The extent of the client window area.
+    ///
+    /// On desktop operating systems, you're often better getting this from the event queue than
+    /// polling for it every frame. You'll want to be listening to resize events on the event queue
+    /// to handle creation when suboptimal properly regardless.
+    window_extent: gpu.Extent2D,
+};
+
+/// The result of `acquireNextImage`.
+pub const AcquireNextImageResult = struct {
+    /// An index into `swapchain.images`.
+    index: u32,
+    /// True if the swapchain was recreated.
+    recreated: bool,
+};
+
 /// Acquires the next swapchain image, blocking until it's available if necessary. The result is the
 /// index into `swapchainImages`.
-pub fn acquireNextImage(self: *@This(), framebuf_extent: Ctx.Extent2D) u32 {
+pub fn acquireNextImage(self: *@This(), options: AcquireNextImageOptions) AcquireNextImageResult {
     const zone = Zone.begin(.{
         .src = @src(),
         .color = gpu.global_options.blocking_zone_color,
     });
     defer zone.end();
-    assert(framebuf_extent.width != 0 and framebuf_extent.height != 0);
+    assert(options.window_extent.width != 0 and options.window_extent.height != 0);
     assert(self.in_frame);
-    return Backend.acquireNextImage(self, framebuf_extent);
+    return Backend.acquireNextImage(self, options);
 }
 
 /// Will blocks until the next frame in flight's resources can be reclaimed.
