@@ -141,9 +141,13 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
                     }),
                     .dedicated = false,
                 });
-                self.offset = 0;
             }
             return self.available.items[self.available.items.len - 1];
+        }
+
+        fn retirePage(self: *@This()) void {
+            self.full.appendAssumeCapacity(self.available.pop().?);
+            self.offset = 0;
         }
 
         /// Allocates an image. This will attempt to place the image in an existing page, or
@@ -190,7 +194,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
             var page = self.peekPage(gx, options.name);
             self.offset = std.mem.alignForwardAnyAlign(u64, self.offset, reqs.alignment);
             if (self.offset + reqs.size >= page.memory.size) {
-                self.full.appendAssumeCapacity(self.available.pop().?);
+                self.retirePage();
                 page = self.peekPage(gx, options.name);
             }
             const image: Image = .initPlaced(gx, .{
