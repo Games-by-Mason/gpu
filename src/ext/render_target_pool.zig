@@ -9,7 +9,6 @@ const ImageKind = gpu.ImageKind;
 const Image = gpu.Image;
 const DebugName = gpu.DebugName;
 const ImageBumpAllocator = gpu.ext.ImageBumpAllocator;
-const DescSet = gpu.DescSet;
 
 /// A pool for managing render targets.
 ///
@@ -18,25 +17,15 @@ const DescSet = gpu.DescSet;
 /// the window size (e.g. a blur) or at a multiple of the window size (e.g. super sampling.)
 ///
 /// In practice this becomes difficult to manage: the window size can change at runtime, which
-/// necessitates destroying and recreating all render targets to resize them. Furthermore, if the
-/// image is recreated, it will need to be updated in any descriptor sets its currently bound to.
+/// necessitates destroying and recreating all render targets to resize them.
 ///
 /// This abstraction allows specifying render target images according to a virtual coordinate
-/// system, and then manages recreating and rebinding the render target images for you.
+/// system, returns persistent handles to the created images through a layer of indirection, and
+/// then manages recreating of the render targets for you.
 ///
 /// For example, you may set up the pool to have a virtual extent of 1920x1080 and a physical extent
 /// of 1920x1080. Under this, a 960x540 image will be half window sized. However, if the physical
-/// extent later changes to 3840x2160, the image will also double in size. This will also emit the
-/// required descriptor set update commands.
-///
-/// Updating the descriptor sets automatically is made possible by a bindless design. That is to
-/// say, this abstraction assumes all your render targets are bound to a single descriptor set per
-/// frame in flight, and indexed via the handle returned by this pool. It's up to you how to decide
-/// in the shader which index to access, but the intended approach is that you'd index an arguments
-/// array based on the base instance or invocation ID.
-///
-/// If you need to represent multiple access patterns or formats in the shader, you can alias the
-/// uniform under multiple types.
+/// extent later changes to 3840x2160, the image will also double in size.
 pub fn RenderTargetPool(kind: ImageKind) type {
     return struct {
         const Pool = @This();
@@ -46,45 +35,12 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             _,
 
             /// Internal helper for initializing a render target.
-            fn init(
-                self: @This(),
-                pool: *Pool,
-                gx: *Gx,
-                updates: *std.ArrayList(gpu.DescSet.Update),
-            ) void {
+            fn init(self: @This(), pool: *Pool, gx: *Gx) void {
                 // Initialize the image
                 var info: ImageBumpAllocator(kind).AllocOptions = pool.info.items[@intFromEnum(self)];
                 const image = pool.allocator.alloc(gx, info);
                 info.image.extent = self.extent(pool);
                 pool.images.items[@intFromEnum(self)] = image;
-
-                // Update the sampled binding array
-                if (pool.sampled_binding) |sampled_binding| {
-                    if (info.image.usage.sampled) {
-                        for (pool.desc_sets) |desc_set| {
-                            updates.append(.{
-                                .set = desc_set,
-                                .binding = sampled_binding,
-                                .value = .{ .sampled_image = image.view },
-                            }) catch @panic("OOB");
-                        }
-                    }
-                }
-
-                // Update the storage binding array
-                if (pool.storage_binding) |storage_binding| {
-                    if (info.image.usage.storage) {
-                        for (pool.desc_sets) |desc_set| {
-                            updates.append(.{
-                                .set = desc_set,
-                                .binding = storage_binding,
-                                .value = .{
-                                    .storage_image = image.view,
-                                },
-                            }) catch @panic("OOB");
-                        }
-                    }
-                }
             }
 
             /// Returns the extent of this handle.
@@ -183,14 +139,13 @@ pub fn RenderTargetPool(kind: ImageKind) type {
         pub fn alloc(
             self: *@This(),
             gx: *Gx,
-            updates: *std.ArrayList(DescSet.Update),
             options: ImageBumpAllocator(kind).AllocOptions,
         ) Handle {
             if (self.images.items.len == self.images.capacity) @panic("OOB");
             const handle: Handle = @enumFromInt(self.images.items.len);
             self.info.appendAssumeCapacity(options);
             _ = self.images.addOneAssumeCapacity();
-            handle.init(self, gx, updates);
+            handle.init(self, gx);
             return handle;
         }
 
@@ -202,7 +157,6 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             self: *@This(),
             gx: *Gx,
             physical_extent: gpu.Extent2D,
-            updates: std.ArrayListUnmanaged(DescSet.Update),
         ) error.OutOfBounds!void {
             // Update the physical extent, or early out if it hasn't changed
             if (self.physical_extent == physical_extent) return;
@@ -217,7 +171,7 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             // Recreate the render targets
             for (0..self.images.len) |i| {
                 const handle: Handle = @enumFromInt(i);
-                handle.init(self, gx, updates);
+                handle.init(self, gx);
             }
         }
     };

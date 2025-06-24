@@ -984,10 +984,19 @@ pub const Pipeline = struct {
         Backend.pipelineDestroy(gx, self);
     }
 
-    /// Some APIs have separate handles for descriptor set layouts and pipelines (e.g. Vulkan), others
-    /// have a single handle that refers to both the pipeline layout state and the descriptor set layout
-    /// state (e.g. DireGx 12). On APIs that don't distinguish between pipeline and descriptor set
-    /// layouts, both handles are equivalent.
+    /// For the time being, descriptor set layouts are tied to pipeline layouts.
+    ///
+    /// This may be changed in the future, but in general I've found it simpler and typically more
+    /// efficient to just buffer up arguments and get the index from push constants or the instance
+    /// ID.
+    ///
+    /// The problem with complex use of descriptor sets for per draw data is that unless you're
+    /// using push descriptors which only have 73% adoption on Windows at the time of writing, you
+    /// have to allocate a new descriptor set for each variant you use during a frame. This results
+    /// in a lot of complexity, and a lot of calls into the driver to rebind descriptors.
+    ///
+    /// Keep in mind that separate descriptor sets can still share the underlying buffers that
+    /// contain their data.
     pub const Layout = struct {
         handle: @This().Handle,
         desc_set: DescSet.Layout,
@@ -1423,17 +1432,17 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierColorAttachmentToReadOnly(options);
     }
 
-    pub const ColorAttachmentToReadWriteOptions = struct {
+    pub const ColorAttachmentToGeneralOptions = struct {
         handle: ImageHandle,
         range: Range,
         dst_stages: ShaderStages,
     };
 
-    pub fn colorAttachmentToReadWrite(options: ColorAttachmentToReadWriteOptions) @This() {
-        return Backend.imageBarrierColorAttachmentToReadWrite(options);
+    pub fn colorAttachmentToGeneral(options: ColorAttachmentToGeneralOptions) @This() {
+        return Backend.imageBarrierColorAttachmentToGeneral(options);
     }
 
-    pub const ReadWriteToReadOnlyOptions = struct {
+    pub const GeneralToReadOnlyOptions = struct {
         handle: ImageHandle,
         range: Range,
         src_stages: ShaderStages,
@@ -1441,8 +1450,8 @@ pub const ImageBarrier = extern struct {
         aspect: ImageAspect,
     };
 
-    pub fn readWriteToReadOnly(options: ReadWriteToReadOnlyOptions) @This() {
-        return Backend.imageBarrierReadWriteToReadOnly(options);
+    pub fn generalWriteToReadOnly(options: GeneralToReadOnlyOptions) @This() {
+        return Backend.imageBarrierGeneralToReadOnly(options);
     }
 
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;

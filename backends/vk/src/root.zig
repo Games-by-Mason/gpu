@@ -2605,8 +2605,8 @@ pub fn imageBarrierColorAttachmentToReadOnly(
     } };
 }
 
-pub fn imageBarrierColorAttachmentToReadWrite(
-    options: gpu.ImageBarrier.ColorAttachmentToReadWriteOptions,
+pub fn imageBarrierColorAttachmentToGeneral(
+    options: gpu.ImageBarrier.ColorAttachmentToGeneralOptions,
 ) gpu.ImageBarrier {
     return .{
         .backend = .{
@@ -2627,8 +2627,8 @@ pub fn imageBarrierColorAttachmentToReadWrite(
     };
 }
 
-pub fn imageBarrierReadWriteToReadOnly(
-    options: gpu.ImageBarrier.ReadWriteToReadOnlyOptions,
+pub fn imageBarrierGeneralToReadOnly(
+    options: gpu.ImageBarrier.GeneralToReadOnlyOptions,
 ) gpu.ImageBarrier {
     return .{
         .backend = .{
