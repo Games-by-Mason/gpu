@@ -222,8 +222,9 @@ pub const AcquireNextImageResult = struct {
     recreated: bool,
 };
 
-/// Acquires the next swapchain image, blocking until it's available if necessary. The result is the
-/// index into `swapchainImages`.
+/// Acquires the next swapchain image, blocking the CPU if necessary. The result is the index into
+/// `swapchainImages`. To cause the GPU to wait on this image, set `wait_for_swapchain` when
+/// submitting a command buffer.
 pub fn acquireNextImage(self: *@This(), options: AcquireNextImageOptions) AcquireNextImageResult {
     const zone = Zone.begin(.{
         .src = @src(),

@@ -1261,17 +1261,25 @@ pub fn cmdBufBindDescSet(
 pub fn cmdBufSubmit(
     self: *Gx,
     cb: gpu.CmdBuf,
+    options: gpu.CmdBuf.SubmitOptions,
 ) void {
     cb.endZone(self);
     self.backend.device.endCommandBuffer(cb.asBackendType()) catch |err| @panic(@errorName(err));
+
+    var wait_semaphores: std.BoundedArray(vk.Semaphore, 1) = .{};
+    var wait_dst_stage_masks: std.BoundedArray(vk.PipelineStageFlags, 1) = .{};
+    if (options.wait_for_swapchain) {
+        wait_semaphores.appendAssumeCapacity(self.backend.image_availables[self.frame]);
+        wait_dst_stage_masks.appendAssumeCapacity(.{ .top_of_pipe_bit = true });
+    }
 
     const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
     defer queue_submit_zone.end();
     const cbs = [_]vk.CommandBuffer{cb.asBackendType()};
     const submit_infos = [_]vk.SubmitInfo{.{
-        .wait_semaphore_count = 0,
-        .p_wait_semaphores = &.{},
-        .p_wait_dst_stage_mask = &.{},
+        .wait_semaphore_count = @intCast(wait_semaphores.len),
+        .p_wait_semaphores = &wait_semaphores.buffer,
+        .p_wait_dst_stage_mask = &wait_dst_stage_masks.buffer,
         .command_buffer_count = cbs.len,
         .p_command_buffers = &cbs,
         .signal_semaphore_count = 0,
@@ -1584,28 +1592,6 @@ pub fn acquireNextImage(self: *Gx, options: Gx.AcquireNextImageOptions) Gx.Acqui
             };
         }
     };
-
-    // Submit the semaphore to cause the GPU to wait for it to become available before writing
-    {
-        const transition_zone = Zone.begin(.{ .name = "image available", .src = @src() });
-        defer transition_zone.end();
-
-        self.backend.device.queueSubmit(
-            self.backend.queue,
-            1,
-            &.{.{
-                .wait_semaphore_count = 1,
-                .p_wait_semaphores = &.{self.backend.image_availables[self.frame]},
-                .p_wait_dst_stage_mask = &.{.{ .top_of_pipe_bit = true }},
-                .command_buffer_count = 0,
-                .p_command_buffers = &.{},
-                .signal_semaphore_count = 0,
-                .p_signal_semaphores = &.{},
-                .p_next = null,
-            }},
-            .null_handle,
-        ) catch |err| @panic(@errorName(err));
-    }
 
     // Save the index, we use this on end frame
     self.backend.image_index = acquire_result.image_index;
