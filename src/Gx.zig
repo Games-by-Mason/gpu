@@ -16,7 +16,6 @@ const ImageView = gpu.ImageView;
 const Sampler = gpu.Sampler;
 const DescSet = gpu.DescSet;
 const Device = gpu.Device;
-const Swapchain = gpu.Swapchain;
 
 const Ctx = @This();
 
@@ -26,8 +25,6 @@ const Backend = gpu.global_options.Backend;
 backend: Backend,
 /// Device information, initialized at init time.
 device: Device,
-/// Swapchain information, initialized and updated by `acquireNextImage`.
-swapchain: Swapchain,
 /// The number of frames that can be in flight at once.
 frames_in_flight: u4,
 /// The current frame in flight.
@@ -141,10 +138,6 @@ pub fn init(gpa: Allocator, options: Options) @This() {
     var gx: @This() = .{
         .backend = backend_result.backend,
         .device = backend_result.device,
-        .swapchain = .{
-            .images = .{},
-            .extent = .{ .width = 0, .height = 0 },
-        },
         .frames_in_flight = options.frames_in_flight,
         .timestamp_queries = options.timestamp_queries,
         .validate = options.debug.gte(.validate),
@@ -197,43 +190,29 @@ pub fn endFrame(self: *@This()) void {
     self.in_frame = false;
 }
 
-/// Options for `acquireNextImage`.
-pub const AcquireNextImageOptions = struct {
-    /// If true, recreate the swapchain if it's suboptimal.
-    ///
-    /// For best resizing experience, set this to true only when outside of an active resize to
-    /// prevent  redundant swapchain recreations.
-    ///
-    /// The swapchain will be recreated if it's out of date regardless of this option.
-    recreate_if_suboptimal: bool,
-    /// The extent of the client window area.
-    ///
-    /// On desktop operating systems, you're often better getting this from the event queue than
-    /// polling for it every frame. You'll want to be listening to resize events on the event queue
-    /// to handle creation when suboptimal properly regardless.
-    window_extent: gpu.Extent2D,
-};
-
 /// The result of `acquireNextImage`.
 pub const AcquireNextImageResult = struct {
-    /// An index into `swapchain.images`.
-    index: u32,
-    /// True if the swapchain was recreated.
-    recreated: bool,
+    image: gpu.Image(.color),
+    extent: Extent2D,
 };
 
-/// Acquires the next swapchain image, blocking the CPU if necessary. The result is the index into
-/// `swapchainImages`. To cause the GPU to wait on this image, set `wait_for_swapchain` when
-/// submitting a command buffer.
-pub fn acquireNextImage(self: *@This(), options: AcquireNextImageOptions) AcquireNextImageResult {
+/// Acquires the next swapchain image, blocking the CPU if necessary. To cause the GPU to wait on
+/// this image being available, set `wait_for_swapchain` when submitting a command buffer.
+///
+/// The window extent is the extent in pixels of the drawable window area. The area of the extent
+/// must be greater than zero.
+///
+/// On some window protocols querying the window extent can be surprisingly expensive, if it's
+/// available as an event on change you're typically better off caching the value from the event.
+pub fn acquireNextImage(self: *@This(), window_extent: Extent2D) AcquireNextImageResult {
     const zone = Zone.begin(.{
         .src = @src(),
         .color = gpu.global_options.blocking_zone_color,
     });
     defer zone.end();
-    assert(options.window_extent.width != 0 and options.window_extent.height != 0);
+    assert(window_extent.width != 0 and window_extent.height != 0);
     assert(self.in_frame);
-    return Backend.acquireNextImage(self, options);
+    return Backend.acquireNextImage(self, window_extent);
 }
 
 /// Will blocks until the next frame in flight's resources can be reclaimed.

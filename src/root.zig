@@ -1343,21 +1343,6 @@ pub const Device = struct {
     surface_format: ImageFormat,
 };
 
-pub const Swapchain = struct {
-    /// The max number of swapchain images.
-    ///
-    /// Most backend APIs don't actually provide a guarantee here, but in practice there are never
-    /// more than two or three, and setting an upper bound lets us conveniently store arrays of
-    /// these images and related data on the stack.
-    pub const max_swapchain_images = 8;
-
-    /// The swapchain images. Indexed by the result of `acquireNextImage`.
-    images: std.BoundedArray(gpu.Image(.color), max_swapchain_images),
-
-    /// The extent of the current swapchain image views.
-    extent: Extent2D,
-};
-
 pub const ImageBarrier = extern struct {
     backend: Backend.ImageBarrier,
 

@@ -16,11 +16,12 @@ pub const vk = @import("vulkan");
 
 const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
-const SwapchainState = enum {
-    optimal,
-    suboptimal,
-    out_of_date,
-};
+/// The max number of swapchain images.
+///
+/// Most backend APIs don't actually provide a guarantee here, but in practice there are never
+/// more than two or three, and setting an upper bound lets us conveniently store arrays of
+/// these images and related data on the stack.
+const max_swapchain_images = 8;
 
 // Context
 surface: vk.SurfaceKHR,
@@ -29,7 +30,9 @@ device: vk.DeviceProxy,
 instance: vk.InstanceProxy,
 physical_device: PhysicalDevice,
 swapchain: vk.SwapchainKHR,
-swapchain_state: SwapchainState = .out_of_date,
+recreate_swapchain: bool,
+swapchain_extent: gpu.Extent2D,
+swapchain_images: std.BoundedArray(gpu.Image(.color), max_swapchain_images),
 debug_messenger: vk.DebugUtilsMessengerEXT,
 pipeline_cache: vk.PipelineCache,
 
@@ -41,7 +44,7 @@ cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
 // Synchronization
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
-ready_for_present: [gpu.Swapchain.max_swapchain_images]vk.Semaphore,
+ready_for_present: [max_swapchain_images]vk.Semaphore,
 cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 
 // The current swapchain image index. Other APIs track this automatically, Vulkan appears to allow
@@ -647,7 +650,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         setName(debug_messenger, device, image_availables[i], .{ .str = "Image Available", .index = i });
     }
 
-    var ready_for_present: [gpu.Swapchain.max_swapchain_images]vk.Semaphore = undefined;
+    var ready_for_present: [max_swapchain_images]vk.Semaphore = undefined;
     for (&ready_for_present, 0..) |*semaphore, frame| {
         semaphore.* = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
         setName(debug_messenger, device, semaphore.*, .{
@@ -712,7 +715,9 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .instance = instance_proxy,
             .device = device,
             .swapchain = .null_handle,
-            .swapchain_state = .out_of_date,
+            .recreate_swapchain = true,
+            .swapchain_images = .{},
+            .swapchain_extent = .{ .width = 0, .height = 0 },
             .cmd_pools = cmd_pools,
             .image_availables = image_availables,
             .ready_for_present = ready_for_present,
@@ -1549,9 +1554,7 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Gx, options: Gx.AcquireNextImageOptions) Gx.AcquireNextImageResult {
-    var recreated = false;
-
+pub fn acquireNextImage(self: *Gx, window_extent: gpu.Extent2D) Gx.AcquireNextImageResult {
     // Make sure we haven't already acquired an image this frame
     assert(self.backend.image_index == null);
 
@@ -1563,21 +1566,43 @@ pub fn acquireNextImage(self: *Gx, options: Gx.AcquireNextImageOptions) Gx.Acqui
         });
         defer acquire_zone.end();
 
-        // Most platforms will consider extent mismatch suboptimal, but Wayland doesn't and silently
-        // scales the image instead
-        if (self.backend.swapchain_state == .optimal and !std.meta.eql(options.window_extent, self.swapchain.extent)) {
-            self.backend.swapchain_state = .suboptimal;
+        // Mark the swapchain as dirty if the extent has changed. Many platforms will consider this
+        // suboptimal, but this isn't guaranteed--Wayland for example appears to never or at least
+        // rarely report the swapchain as out of date or suboptimal.
+        if (!std.meta.eql(window_extent, self.backend.swapchain_extent)) {
+            self.backend.recreate_swapchain = true;
         }
 
-        const should_recreate = switch (self.backend.swapchain_state) {
-            .optimal => false,
-            .out_of_date => true,
-            .suboptimal => options.recreate_if_suboptimal,
-        };
-        if (should_recreate) {
-            recreateSwapchain(self, options.window_extent);
-            recreated = true;
+        // If the swapchain needs to be recreated, do so immediately. In theory in all except the
+        // case where the swapchain is out of date, you could defer this work until the user
+        // finishes resizing the window for a smoother experience.
+        //
+        // In practice, this is not viable.
+        //
+        // Empirically, under Wayland and under Windows drawing on a swapchain with the incorrect
+        // size results in the image being stretched to fill the window without regard for aspect
+        // ratio. This is almost certainly not what you want for any real application.
+        //
+        // You could attempt to compensate for this by adjusting your viewport, but this will break
+        // X11 which empirically does *not* stretch the image, but leaves it the image at actual
+        // size and pads the rest of the window with black.
+        //
+        // Theoretically you could use `VK_EXT_swapchain_maintenance1` to force the desired behavior
+        // in these cases, but again this is not viable in practice, as only 24% of Windows devices
+        // and 30% of Linux devices support it at the time of writing (https://vulkan.gpuinfo.org/)
+        // despite it having been available for years.
+        //
+        // If one was determined to elide the recreation, they would need to adjust the final stage
+        // of their renderer for each of these backends individually, since there's no one size fits
+        // all situation. I would be hesitant to do such a thing, though, as it's unclear to me if
+        // the observed behavior is even guaranteed.
+        //
+        // Instead, we just recreate the swapchain immediately. The only downside is a slightly
+        // lower framerate during the resize than would otherwise be possible.
+        if (self.backend.recreate_swapchain) {
+            recreateSwapchain(self, window_extent);
         }
+
         while (true) {
             break :b self.backend.device.acquireNextImageKHR(
                 self.backend.swapchain,
@@ -1586,8 +1611,7 @@ pub fn acquireNextImage(self: *Gx, options: Gx.AcquireNextImageOptions) Gx.Acqui
                 .null_handle,
             ) catch |err| switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    recreateSwapchain(self, options.window_extent);
-                    recreated = true;
+                    recreateSwapchain(self, window_extent);
                     continue;
                 },
                 error.OutOfHostMemory,
@@ -1602,12 +1626,11 @@ pub fn acquireNextImage(self: *Gx, options: Gx.AcquireNextImageOptions) Gx.Acqui
 
     // Save the index, we use this on end frame
     self.backend.image_index = acquire_result.image_index;
-    self.backend.swapchain_state = .optimal;
 
-    // Return the index to the caller
+    // Return the image to the caller
     return .{
-        .index = acquire_result.image_index,
-        .recreated = recreated,
+        .image = self.backend.swapchain_images.get(acquire_result.image_index),
+        .extent = self.backend.swapchain_extent,
     };
 }
 
@@ -2341,8 +2364,7 @@ pub fn endFrame(self: *Gx) void {
                 },
             ) catch |err| b: switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    self.backend.swapchain_state = .out_of_date;
-                    log.info("swapchain out of date", .{});
+                    self.backend.recreate_swapchain = true;
                     break :b .success;
                 },
                 error.OutOfHostMemory,
@@ -2352,8 +2374,8 @@ pub fn endFrame(self: *Gx) void {
                 error.DeviceLost,
                 => @panic(@errorName(err)),
             };
-            if (result == .suboptimal_khr and self.backend.swapchain_state == .optimal) {
-                self.backend.swapchain_state = .suboptimal;
+            if (result == .suboptimal_khr) {
+                self.backend.recreate_swapchain = true;
             }
         }
     } else {
@@ -2859,10 +2881,10 @@ fn findMemoryType(
 }
 
 fn destroySwapchainViews(gx: *Gx) void {
-    for (gx.swapchain.images.constSlice()) |i| {
+    for (gx.backend.swapchain_images.constSlice()) |i| {
         gx.backend.device.destroyImageView(i.view.asBackendType(), null);
     }
-    gx.swapchain.images.clear();
+    gx.backend.swapchain_images.clear();
 }
 
 fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
@@ -2873,14 +2895,20 @@ fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
     // Get the retired swapchain, if any
     const retired = self.backend.swapchain;
 
-    // We wait idle on every recreate so that we can delete the old swapchain after. Technically
-    // this is still incorrect, there is a spec bug that makes it impossible to do this
-    // correctly without an extension that isn't widely supported:
+    // The Vulkan spec has a bug that makes it impossible to know how long to wait before it's safe
+    // to delete the old swapchain:
     //
-    // https://github.com/KhronosGroup/Vulkan-Docs/issues/1678
+    // There's no way to signal a fence when the present operation is done with it, and wait idle is
+    // not guaranteed to wait until presentation is done. Khronos recommends using wait idle until a
+    // fix is available, so that's what we do here.
     //
-    // If this causes us issues, and the extension still isn't widely supported, we can queue up
-    // retired swapchains and wait a few seconds before deleting them or something.
+    // Theoretically a solution *is* now available in the form of `VK_EXT_swapchain_maintenance1`,
+    // but only 24% of Windows devices and 30% of Linux devices support it at the time of writing
+    // (https://vulkan.gpuinfo.org/) which leads me to believe that driver authors don't consider
+    // this issue urgent, likely because in actual implementations the 'obvious' but technically
+    // incorrect according to the spec solutions like using wait idle are fine.
+    //
+    // Reference: https://github.com/KhronosGroup/Vulkan-Docs/issues/1678
     if (retired != .null_handle) {
         self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
     }
@@ -2891,7 +2919,7 @@ fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
         self.backend.physical_device.device,
         self.backend.surface,
     ) catch |err| @panic(@errorName(err));
-    self.swapchain.extent = if (surface_capabilities.current_extent.width == std.math.maxInt(u32) and
+    self.backend.swapchain_extent = if (surface_capabilities.current_extent.width == std.math.maxInt(u32) and
         surface_capabilities.current_extent.height == std.math.maxInt(u32))
     e: {
         break :e .{
@@ -2920,7 +2948,10 @@ fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
         .min_image_count = min_image_count,
         .image_format = self.backend.physical_device.surface_format.format,
         .image_color_space = self.backend.physical_device.surface_format.color_space,
-        .image_extent = .{ .width = self.swapchain.extent.width, .height = self.swapchain.extent.height },
+        .image_extent = .{
+            .width = self.backend.swapchain_extent.width,
+            .height = self.backend.swapchain_extent.height,
+        },
         .image_array_layers = 1,
         .image_usage = .{ .color_attachment_bit = true },
         .pre_transform = surface_capabilities.current_transform,
@@ -2935,8 +2966,8 @@ fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
 
     self.backend.swapchain = self.backend.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, self.backend.swapchain, .{ .str = "Main" });
-    var image_handles: std.BoundedArray(vk.Image, gpu.Swapchain.max_swapchain_images) = .{};
-    var image_count: u32 = gpu.Swapchain.max_swapchain_images;
+    var image_handles: std.BoundedArray(vk.Image, max_swapchain_images) = .{};
+    var image_count: u32 = max_swapchain_images;
     const get_images_result = self.backend.device.getSwapchainImagesKHR(
         self.backend.swapchain,
         &image_count,
@@ -2944,8 +2975,8 @@ fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
     ) catch |err| @panic(@errorName(err));
     if (get_images_result != .success) @panic(@tagName(get_images_result));
     image_handles.len = image_count;
-    assert(self.swapchain.images.len == 0);
-    var views: std.BoundedArray(gpu.ImageView, gpu.Swapchain.max_swapchain_images) = .{};
+    assert(self.backend.swapchain_images.len == 0);
+    var views: std.BoundedArray(gpu.ImageView, max_swapchain_images) = .{};
     for (image_handles.constSlice(), 0..) |handle, i| {
         setName(self.backend.debug_messenger, self.backend.device, handle, .{ .str = "Swapchain", .index = i });
         const create_info: vk.ImageViewCreateInfo = .{
@@ -2969,7 +3000,7 @@ fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
         const view = self.backend.device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
         setName(self.backend.debug_messenger, self.backend.device, view, .{ .str = "Swapchain", .index = i });
         views.appendAssumeCapacity(.fromBackendType(view));
-        self.swapchain.images.appendAssumeCapacity(.{
+        self.backend.swapchain_images.appendAssumeCapacity(.{
             .handle = .fromBackendType(handle),
             .view = .fromBackendType(view),
         });
@@ -2978,6 +3009,8 @@ fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
     if (retired != .null_handle) {
         self.backend.device.destroySwapchainKHR(retired, null);
     }
+
+    self.backend.recreate_swapchain = false;
 }
 
 const PhysicalDevice = struct {
