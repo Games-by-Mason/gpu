@@ -2335,7 +2335,7 @@ pub fn endFrame(self: *Gx) void {
             ) catch |err| b: switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
                     self.backend.swapchain_state = .out_of_date;
-                    std.log.warn("out of date", .{});
+                    log.info("swapchain out of date", .{});
                     break :b .success;
                 },
                 error.OutOfHostMemory,

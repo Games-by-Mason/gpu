@@ -3,6 +3,8 @@
 const std = @import("std");
 const gpu = @import("../root.zig");
 
+const log = std.log.scoped(.gpu);
+
 const Allocator = std.mem.Allocator;
 const Gx = gpu.Gx;
 const ImageKind = gpu.ImageKind;
@@ -38,8 +40,8 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             fn init(self: @This(), pool: *Pool, gx: *Gx) void {
                 // Initialize the image
                 var info: ImageBumpAllocator(kind).AllocOptions = pool.info.items[@intFromEnum(self)];
-                const image = pool.allocator.alloc(gx, info);
                 info.image.extent = self.extent(pool);
+                const image = pool.allocator.alloc(gx, info);
                 pool.images.items[@intFromEnum(self)] = image;
             }
 
@@ -157,19 +159,20 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             self: *@This(),
             gx: *Gx,
             physical_extent: gpu.Extent2D,
-        ) error.OutOfBounds!void {
-            // Update the physical extent, or early out if it hasn't changed
-            if (self.physical_extent == physical_extent) return;
+        ) void {
+            log.info("Recreate render targets", .{});
+
+            // Update the physical extent
             self.physical_extent = physical_extent;
 
             // Destroy the existing render targets
             for (self.images.items) |image| {
                 image.deinit(gx);
             }
-            self.allocator.reset();
+            self.allocator.reset(gx);
 
             // Recreate the render targets
-            for (0..self.images.len) |i| {
+            for (0..self.images.items.len) |i| {
                 const handle: Handle = @enumFromInt(i);
                 handle.init(self, gx);
             }
