@@ -1562,6 +1562,13 @@ pub fn acquireNextImage(self: *Gx, options: Gx.AcquireNextImageOptions) Gx.Acqui
             .name = "acquire next image",
         });
         defer acquire_zone.end();
+
+        // Most platforms will consider extent mismatch suboptimal, but Wayland doesn't and silently
+        // scales the image instead
+        if (self.backend.swapchain_state == .optimal and !std.meta.eql(options.window_extent, self.swapchain.extent)) {
+            self.backend.swapchain_state = .suboptimal;
+        }
+
         const should_recreate = switch (self.backend.swapchain_state) {
             .optimal => false,
             .out_of_date => true,
