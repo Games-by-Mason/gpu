@@ -224,6 +224,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
                 }
             }
             self.full.clearRetainingCapacity();
+            self.offset = 0;
         }
     };
 }
