@@ -2887,10 +2887,14 @@ fn destroySwapchainViews(gx: *Gx) void {
     gx.backend.swapchain_images.clear();
 }
 
-fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
+fn recreateSwapchain(self: *Gx, extent: gpu.Extent2D) void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
-    log.info("recreating swapchain", .{});
+
+    // Breaking these logs up between info and debug allows nice log viewers to dedup the first line
+    // if debug logs are hidden
+    log.info("Recreating swapchain", .{});
+    log.debug("New swap extent: {}x{}", .{ extent.width, extent.height });
 
     // Get the retired swapchain, if any
     const retired = self.backend.swapchain;
@@ -2924,12 +2928,12 @@ fn recreateSwapchain(self: *Gx, framebuf_extent: gpu.Extent2D) void {
     e: {
         break :e .{
             .width = std.math.clamp(
-                framebuf_extent.width,
+                extent.width,
                 surface_capabilities.min_image_extent.width,
                 surface_capabilities.max_image_extent.width,
             ),
             .height = std.math.clamp(
-                framebuf_extent.height,
+                extent.height,
                 surface_capabilities.min_image_extent.height,
                 surface_capabilities.max_image_extent.height,
             ),

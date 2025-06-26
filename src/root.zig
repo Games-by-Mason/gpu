@@ -41,17 +41,29 @@ pub const Extent2D = extern struct {
     pub const zero: @This() = .{ .width = 0, .height = 0 };
     width: u32,
     height: u32,
+
+    pub fn eql(self: @This(), other: @This()) bool {
+        return std.meta.eql(self, other);
+    }
 };
 
 pub const Offset2D = extern struct {
     pub const zero: @This() = .{ .x = 0, .y = 0 };
     x: i32,
     y: i32,
+
+    pub fn eql(self: @This(), other: @This()) bool {
+        return std.meta.eql(self, other);
+    }
 };
 
 pub const Rect2D = extern struct {
     offset: Offset2D,
     extent: Extent2D,
+
+    pub fn eql(self: @This(), other: @This()) bool {
+        return std.meta.eql(self, other);
+    }
 };
 
 pub const Viewport = extern struct {
@@ -61,6 +73,10 @@ pub const Viewport = extern struct {
     height: f32,
     min_depth: f32,
     max_depth: f32,
+
+    pub fn eql(self: @This(), other: @This()) bool {
+        return std.meta.eql(self, other);
+    }
 };
 
 pub const MemoryRequirements = struct {

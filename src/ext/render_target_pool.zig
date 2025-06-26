@@ -77,6 +77,7 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             }
         };
 
+        name: [:0]const u8,
         physical_extent: gpu.Extent2D,
         virtual_extent: gpu.Extent2D,
         info: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions),
@@ -115,6 +116,7 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             errdefer info.deinit(gpa);
 
             return .{
+                .name = options.allocator.name,
                 .physical_extent = options.physical_extent,
                 .virtual_extent = options.virtual_extent,
                 .images = images,
@@ -160,7 +162,11 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             gx: *Gx,
             physical_extent: gpu.Extent2D,
         ) void {
-            log.info("Recreate render targets", .{});
+            log.info("Recreating Render Target Pool '{s}' with physical extent {}x{}", .{
+                self.name,
+                physical_extent.width,
+                physical_extent.height,
+            });
 
             // Update the physical extent
             self.physical_extent = physical_extent;
