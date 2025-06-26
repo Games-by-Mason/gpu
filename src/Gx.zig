@@ -120,6 +120,8 @@ pub const Options = struct {
     /// The surface format request. This request will resolve to a format supported by the current
     /// hardware, you can check the result at `device.surface_format`.
     surface_format: SurfaceFormat,
+    /// The initial surface extent.
+    surface_extent: Extent2D,
     /// Backend specific options.
     backend: Backend.Options,
 };
@@ -204,15 +206,15 @@ pub const AcquireNextImageResult = struct {
 ///
 /// On some window protocols querying the window extent can be surprisingly expensive, if it's
 /// available as an event on change you're typically better off caching the value from the event.
-pub fn acquireNextImage(self: *@This(), window_extent: Extent2D) AcquireNextImageResult {
+pub fn acquireNextImage(self: *@This(), surface_extent: Extent2D) AcquireNextImageResult {
     const zone = Zone.begin(.{
         .src = @src(),
         .color = gpu.global_options.blocking_zone_color,
     });
     defer zone.end();
-    assert(window_extent.width != 0 and window_extent.height != 0);
+    assert(surface_extent.width != 0 and surface_extent.height != 0);
     assert(self.in_frame);
-    return Backend.acquireNextImage(self, window_extent);
+    return Backend.acquireNextImage(self, surface_extent);
 }
 
 /// Will blocks until the next frame in flight's resources can be reclaimed.

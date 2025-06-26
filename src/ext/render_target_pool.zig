@@ -103,6 +103,12 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             var allocator: ImageBumpAllocator(kind) = try .init(gpa, gx, options.allocator);
             errdefer allocator.deinit(gpa, gx);
 
+            log.debug("Initializing render target pool '{s}' with physical extent {}x{}", .{
+                options.allocator.name,
+                options.physical_extent.width,
+                options.physical_extent.height,
+            });
+
             var images: std.ArrayListUnmanaged(Image(kind)) = try .initCapacity(
                 gpa,
                 options.capacity,
@@ -162,7 +168,7 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             gx: *Gx,
             physical_extent: gpu.Extent2D,
         ) void {
-            log.info("Recreating Render Target Pool '{s}' with physical extent {}x{}", .{
+            log.info("Recreating render target pool '{s}' with physical extent {}x{}", .{
                 self.name,
                 physical_extent.width,
                 physical_extent.height,

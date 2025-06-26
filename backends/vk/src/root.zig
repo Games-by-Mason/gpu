@@ -706,7 +706,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         .name = graphics_queue_name,
     });
 
-    return .{
+    // Create the backend result
+    var result: btypes.BackendInitResult = .{
         .backend = .{
             .surface = surface,
             .base_wrapper = base_wrapper,
@@ -715,7 +716,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .instance = instance_proxy,
             .device = device,
             .swapchain = .null_handle,
-            .recreate_swapchain = true,
+            .recreate_swapchain = false,
             .swapchain_images = .{},
             .swapchain_extent = .{ .width = 0, .height = 0 },
             .cmd_pools = cmd_pools,
@@ -738,6 +739,11 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .surface_format = .fromBackendType(best_physical_device.surface_format.format),
         },
     };
+
+    // Set up the swapchain
+    result.backend.setSwapchainExtent(options.surface_extent);
+
+    return result;
 }
 
 pub fn deinit(self: *Gx, gpa: Allocator) void {
@@ -766,7 +772,7 @@ pub fn deinit(self: *Gx, gpa: Allocator) void {
     }
 
     // Destroy swapchain state
-    destroySwapchainViews(self);
+    destroySwapchainViews(&self.backend);
     self.backend.device.destroySwapchainKHR(self.backend.swapchain, null);
 
     // Destroy device state
@@ -1554,7 +1560,7 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
 }
 
-pub fn acquireNextImage(self: *Gx, window_extent: gpu.Extent2D) Gx.AcquireNextImageResult {
+pub fn acquireNextImage(self: *Gx, surface_extent: gpu.Extent2D) Gx.AcquireNextImageResult {
     // Make sure we haven't already acquired an image this frame
     assert(self.backend.image_index == null);
 
@@ -1569,7 +1575,7 @@ pub fn acquireNextImage(self: *Gx, window_extent: gpu.Extent2D) Gx.AcquireNextIm
         // Mark the swapchain as dirty if the extent has changed. Many platforms will consider this
         // suboptimal, but this isn't guaranteed--Wayland for example appears to never or at least
         // rarely report the swapchain as out of date or suboptimal.
-        if (!std.meta.eql(window_extent, self.backend.swapchain_extent)) {
+        if (!std.meta.eql(surface_extent, self.backend.swapchain_extent)) {
             self.backend.recreate_swapchain = true;
         }
 
@@ -1600,7 +1606,7 @@ pub fn acquireNextImage(self: *Gx, window_extent: gpu.Extent2D) Gx.AcquireNextIm
         // Instead, we just recreate the swapchain immediately. The only downside is a slightly
         // lower framerate during the resize than would otherwise be possible.
         if (self.backend.recreate_swapchain) {
-            recreateSwapchain(self, window_extent);
+            setSwapchainExtent(&self.backend, surface_extent);
         }
 
         while (true) {
@@ -1611,7 +1617,7 @@ pub fn acquireNextImage(self: *Gx, window_extent: gpu.Extent2D) Gx.AcquireNextIm
                 .null_handle,
             ) catch |err| switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    recreateSwapchain(self, window_extent);
+                    setSwapchainExtent(&self.backend, surface_extent);
                     continue;
                 },
                 error.OutOfHostMemory,
@@ -2880,24 +2886,24 @@ fn findMemoryType(
     return null;
 }
 
-fn destroySwapchainViews(gx: *Gx) void {
-    for (gx.backend.swapchain_images.constSlice()) |i| {
-        gx.backend.device.destroyImageView(i.view.asBackendType(), null);
+fn destroySwapchainViews(self: *@This()) void {
+    for (self.swapchain_images.constSlice()) |i| {
+        self.device.destroyImageView(i.view.asBackendType(), null);
     }
-    gx.backend.swapchain_images.clear();
+    self.swapchain_images.clear();
 }
 
-fn recreateSwapchain(self: *Gx, extent: gpu.Extent2D) void {
+fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
 
+    // Get the retired swapchain, if any
+    const retired = self.swapchain;
+
     // Breaking these logs up between info and debug allows nice log viewers to dedup the first line
     // if debug logs are hidden
-    log.info("Recreating swapchain", .{});
+    if (retired != .null_handle) log.info("Recreating swapchain", .{});
     log.debug("New swap extent: {}x{}", .{ extent.width, extent.height });
-
-    // Get the retired swapchain, if any
-    const retired = self.backend.swapchain;
 
     // The Vulkan spec has a bug that makes it impossible to know how long to wait before it's safe
     // to delete the old swapchain:
@@ -2914,16 +2920,16 @@ fn recreateSwapchain(self: *Gx, extent: gpu.Extent2D) void {
     //
     // Reference: https://github.com/KhronosGroup/Vulkan-Docs/issues/1678
     if (retired != .null_handle) {
-        self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
+        self.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
     }
 
     destroySwapchainViews(self);
 
-    const surface_capabilities = self.backend.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
-        self.backend.physical_device.device,
-        self.backend.surface,
+    const surface_capabilities = self.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
+        self.physical_device.device,
+        self.surface,
     ) catch |err| @panic(@errorName(err));
-    self.backend.swapchain_extent = if (surface_capabilities.current_extent.width == std.math.maxInt(u32) and
+    self.swapchain_extent = if (surface_capabilities.current_extent.width == std.math.maxInt(u32) and
         surface_capabilities.current_extent.height == std.math.maxInt(u32))
     e: {
         break :e .{
@@ -2948,19 +2954,19 @@ fn recreateSwapchain(self: *Gx, extent: gpu.Extent2D) void {
     } else surface_capabilities.max_image_count;
     const min_image_count = @min(max_images, surface_capabilities.min_image_count + 1);
     var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
-        .surface = self.backend.surface,
+        .surface = self.surface,
         .min_image_count = min_image_count,
-        .image_format = self.backend.physical_device.surface_format.format,
-        .image_color_space = self.backend.physical_device.surface_format.color_space,
+        .image_format = self.physical_device.surface_format.format,
+        .image_color_space = self.physical_device.surface_format.color_space,
         .image_extent = .{
-            .width = self.backend.swapchain_extent.width,
-            .height = self.backend.swapchain_extent.height,
+            .width = self.swapchain_extent.width,
+            .height = self.swapchain_extent.height,
         },
         .image_array_layers = 1,
         .image_usage = .{ .color_attachment_bit = true },
         .pre_transform = surface_capabilities.current_transform,
-        .composite_alpha = self.backend.physical_device.composite_alpha,
-        .present_mode = self.backend.physical_device.present_mode,
+        .composite_alpha = self.physical_device.composite_alpha,
+        .present_mode = self.physical_device.present_mode,
         .clipped = vk.TRUE,
         .image_sharing_mode = .exclusive,
         .p_queue_family_indices = null,
@@ -2968,25 +2974,25 @@ fn recreateSwapchain(self: *Gx, extent: gpu.Extent2D) void {
         .old_swapchain = retired,
     };
 
-    self.backend.swapchain = self.backend.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_messenger, self.backend.device, self.backend.swapchain, .{ .str = "Main" });
+    self.swapchain = self.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
+    setName(self.debug_messenger, self.device, self.swapchain, .{ .str = "Main" });
     var image_handles: std.BoundedArray(vk.Image, max_swapchain_images) = .{};
     var image_count: u32 = max_swapchain_images;
-    const get_images_result = self.backend.device.getSwapchainImagesKHR(
-        self.backend.swapchain,
+    const get_images_result = self.device.getSwapchainImagesKHR(
+        self.swapchain,
         &image_count,
         &image_handles.buffer,
     ) catch |err| @panic(@errorName(err));
     if (get_images_result != .success) @panic(@tagName(get_images_result));
     image_handles.len = image_count;
-    assert(self.backend.swapchain_images.len == 0);
+    assert(self.swapchain_images.len == 0);
     var views: std.BoundedArray(gpu.ImageView, max_swapchain_images) = .{};
     for (image_handles.constSlice(), 0..) |handle, i| {
-        setName(self.backend.debug_messenger, self.backend.device, handle, .{ .str = "Swapchain", .index = i });
+        setName(self.debug_messenger, self.device, handle, .{ .str = "Swapchain", .index = i });
         const create_info: vk.ImageViewCreateInfo = .{
             .image = handle,
             .view_type = .@"2d",
-            .format = self.backend.physical_device.surface_format.format,
+            .format = self.physical_device.surface_format.format,
             .subresource_range = .{
                 .aspect_mask = .{ .color_bit = true },
                 .base_mip_level = 0,
@@ -3001,20 +3007,20 @@ fn recreateSwapchain(self: *Gx, extent: gpu.Extent2D) void {
                 .a = .identity,
             },
         };
-        const view = self.backend.device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
-        setName(self.backend.debug_messenger, self.backend.device, view, .{ .str = "Swapchain", .index = i });
+        const view = self.device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
+        setName(self.debug_messenger, self.device, view, .{ .str = "Swapchain", .index = i });
         views.appendAssumeCapacity(.fromBackendType(view));
-        self.backend.swapchain_images.appendAssumeCapacity(.{
+        self.swapchain_images.appendAssumeCapacity(.{
             .handle = .fromBackendType(handle),
             .view = .fromBackendType(view),
         });
     }
 
     if (retired != .null_handle) {
-        self.backend.device.destroySwapchainKHR(retired, null);
+        self.device.destroySwapchainKHR(retired, null);
     }
 
-    self.backend.recreate_swapchain = false;
+    self.recreate_swapchain = false;
 }
 
 const PhysicalDevice = struct {
