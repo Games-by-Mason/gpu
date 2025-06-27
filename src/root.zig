@@ -1115,14 +1115,15 @@ pub const Pipeline = struct {
     };
 };
 
+pub const ImageFilter = enum {
+    nearest,
+    linear,
+};
+
 pub const Sampler = enum(u64) {
     _,
 
     pub const Options = struct {
-        pub const Filter = enum {
-            nearest,
-            linear,
-        };
         pub const AddressMode = enum {
             repeat,
             mirrored_repeat,
@@ -1162,9 +1163,9 @@ pub const Sampler = enum(u64) {
             int_opaque_white,
         };
 
-        mag_filter: Filter,
-        min_filter: Filter,
-        mipmap_mode: Filter,
+        mag_filter: ImageFilter,
+        min_filter: ImageFilter,
+        mipmap_mode: ImageFilter,
         address_mode: AddressModes,
         mip_lod_bias: f32,
         max_anisotropy: enum(u8) {
@@ -1359,25 +1360,25 @@ pub const Device = struct {
     surface_format: ImageFormat,
 };
 
+pub const ImageRange = struct {
+    pub const first: @This() = .{
+        .base_mip_level = 0,
+        .mip_levels = 1,
+        .base_array_layer = 0,
+        .array_layers = 1,
+    };
+    base_mip_level: u32,
+    mip_levels: u32,
+    base_array_layer: u32,
+    array_layers: u32,
+};
+
 pub const ImageBarrier = extern struct {
     backend: Backend.ImageBarrier,
 
-    pub const Range = struct {
-        pub const first: @This() = .{
-            .base_mip_level = 0,
-            .mip_levels = 1,
-            .base_array_layer = 0,
-            .array_layers = 1,
-        };
-        base_mip_level: u32,
-        mip_levels: u32,
-        base_array_layer: u32,
-        array_layers: u32,
-    };
-
     pub const UndefinedToTransferDstOptions = struct {
         handle: ImageHandle,
-        range: Range,
+        range: ImageRange,
         aspect: ImageAspect,
     };
 
@@ -1387,24 +1388,16 @@ pub const ImageBarrier = extern struct {
 
     pub const UndefinedToColorAttachmentOptions = struct {
         handle: ImageHandle,
-        range: Range,
+        range: ImageRange,
     };
 
     pub fn undefinedToColorAttachment(options: UndefinedToColorAttachmentOptions) @This() {
         return Backend.imageBarrierUndefinedToColorAttachment(options);
     }
 
-    pub const ColorAttachmentToPresentOptions = struct {
-        handle: ImageHandle,
-    };
-
-    pub fn colorAttachmentToPresent(options: ColorAttachmentToPresentOptions) @This() {
-        return Backend.imageBarrierColorAttachmentToPresent(options);
-    }
-
     pub const UndefinedToColorAttachmentAfterReadOptions = struct {
         handle: ImageHandle,
-        range: Range,
+        range: ImageRange,
         src_stages: ShaderStages,
     };
 
@@ -1414,7 +1407,7 @@ pub const ImageBarrier = extern struct {
 
     pub const TransferDstToReadOnlyOptions = struct {
         handle: ImageHandle,
-        range: Range,
+        range: ImageRange,
         dst_stages: ShaderStages,
         aspect: ImageAspect,
     };
@@ -1425,7 +1418,7 @@ pub const ImageBarrier = extern struct {
 
     pub const ColorAttachmentToReadOnlyOptions = struct {
         handle: ImageHandle,
-        range: Range,
+        range: ImageRange,
         dst_stages: ShaderStages,
     };
 
@@ -1435,7 +1428,7 @@ pub const ImageBarrier = extern struct {
 
     pub const ColorAttachmentToGeneralOptions = struct {
         handle: ImageHandle,
-        range: Range,
+        range: ImageRange,
         dst_stages: ShaderStages,
     };
 
@@ -1445,7 +1438,7 @@ pub const ImageBarrier = extern struct {
 
     pub const GeneralToReadOnlyOptions = struct {
         handle: ImageHandle,
-        range: Range,
+        range: ImageRange,
         src_stages: ShaderStages,
         dst_stages: ShaderStages,
         aspect: ImageAspect,
@@ -1453,6 +1446,38 @@ pub const ImageBarrier = extern struct {
 
     pub fn generalWriteToReadOnly(options: GeneralToReadOnlyOptions) @This() {
         return Backend.imageBarrierGeneralToReadOnly(options);
+    }
+
+    pub const ColorAttachmentToTransferSrcOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+    };
+
+    pub fn colorAttachmentToTransferSrc(options: ColorAttachmentToTransferSrcOptions) @This() {
+        return Backend.imageBarrierColorAttachmentToTransferSrc(options);
+    }
+
+    pub const ColorAttachmentToPresentBlitSrcOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+    };
+
+    /// This may not be a "real" layout, for example in the Vulkan backend this currently uses the
+    /// transfer source layout but with a specific flag/access setup.
+    pub fn colorAttachmentToPresentBlitSrc(options: ColorAttachmentToPresentBlitSrcOptions) @This() {
+        return Backend.imageBarrierColorAttachmentToPresentBlitSrc(options);
+    }
+
+    pub const UndefinedToColorAttachmentAfterPresentBlitOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+    };
+
+    /// See `colorAttachmentToPresentBlitSrc`, similar disclaimer applies here.
+    pub fn undefinedToColorAttachmentAfterPresentBlit(
+        options: UndefinedToColorAttachmentAfterPresentBlitOptions,
+    ) @This() {
+        return Backend.imageBarrierUndefinedToColorAttachmentAfterPresentBlit(options);
     }
 
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;
@@ -1605,15 +1630,11 @@ pub const CmdBuf = enum(u64) {
         Backend.cmdBufSetScissor(gx, self, scissor);
     }
 
-    pub const SubmitOptions = struct {
-        wait_for_swapchain: bool = false,
-    };
-
-    pub fn submit(self: @This(), gx: *Gx, options: SubmitOptions) void {
+    pub fn submit(self: @This(), gx: *Gx) void {
         const zone = Zone.begin(.{ .src = @src() });
         defer zone.end();
         assert(gx.in_frame);
-        Backend.cmdBufSubmit(gx, self, options);
+        Backend.cmdBufSubmit(gx, self);
     }
 
     pub fn bindPipeline(

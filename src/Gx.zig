@@ -16,6 +16,7 @@ const ImageView = gpu.ImageView;
 const Sampler = gpu.Sampler;
 const DescSet = gpu.DescSet;
 const Device = gpu.Device;
+const Image = gpu.Image;
 
 const Ctx = @This();
 
@@ -172,18 +173,47 @@ pub fn getBackendConst(self: *const @This(), T: type) *const T {
     return &self.backend;
 }
 
-/// Ends the current frame. If an image was acquired with `acquireNextImage`, it will be presented.
+/// Options for `endFrame`.
+pub const EndFrameOptions = struct {
+    pub const Present = struct {
+        /// The image to present. Must be in the "present blit" layout.
+        image: gpu.ImageHandle,
+        /// The extent of the source image to present.
+        src_extent: Extent2D,
+        /// A hint for the extent of the surface to present to, on PC you typically pass the window
+        /// size.
+        ///
+        /// Note that on some window protocols querying the window extent can be surprisingly
+        /// expensive, if it's available as an event on change you're typically better off caching
+        /// the value from the event.
+        surface_extent: Extent2D,
+        /// The range of the source image to present.
+        range: gpu.ImageRange,
+        /// The filter to use when blitting the source to the swapchain.
+        filter: gpu.ImageFilter,
+    };
+
+    /// What to present if we're rendering this frame. May be set to null e.g. on setup frames.
+    present: ?Present,
+};
+
+/// Ends the current frame.
 ///
 /// Drivers may sometimes block here instead of on `acquireNextImage`.
-pub fn endFrame(self: *@This()) void {
+pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
     const zone = Zone.begin(.{ .src = @src() });
     defer zone.end();
+    if (options.present) |present| {
+        assert(present.src_extent.width != 0 and present.src_extent.height != 0);
+        assert(present.surface_extent.width != 0 and present.surface_extent.height != 0);
+        assert(self.in_frame);
+    }
     const blocking_zone = Zone.begin(.{
         .src = @src(),
         .color = gpu.global_options.blocking_zone_color,
     });
     defer blocking_zone.end();
-    Backend.endFrame(self);
+    Backend.endFrame(self, options);
     const Frame = @TypeOf(self.frame);
     const FramesInFlight = @TypeOf(self.frames_in_flight);
     comptime assert(std.math.maxInt(FramesInFlight) < std.math.maxInt(Frame));
@@ -197,25 +227,6 @@ pub const AcquireNextImageResult = struct {
     image: gpu.Image(.color),
     extent: Extent2D,
 };
-
-/// Acquires the next swapchain image, blocking the CPU if necessary. To cause the GPU to wait on
-/// this image being available, set `wait_for_swapchain` when submitting a command buffer.
-///
-/// The window extent is the extent in pixels of the drawable window area. The area of the extent
-/// must be greater than zero.
-///
-/// On some window protocols querying the window extent can be surprisingly expensive, if it's
-/// available as an event on change you're typically better off caching the value from the event.
-pub fn acquireNextImage(self: *@This(), surface_extent: Extent2D) AcquireNextImageResult {
-    const zone = Zone.begin(.{
-        .src = @src(),
-        .color = gpu.global_options.blocking_zone_color,
-    });
-    defer zone.end();
-    assert(surface_extent.width != 0 and surface_extent.height != 0);
-    assert(self.in_frame);
-    return Backend.acquireNextImage(self, surface_extent);
-}
 
 /// Will blocks until the next frame in flight's resources can be reclaimed.
 pub fn beginFrame(self: *@This()) void {

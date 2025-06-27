@@ -32,7 +32,8 @@ physical_device: PhysicalDevice,
 swapchain: vk.SwapchainKHR,
 recreate_swapchain: bool,
 swapchain_extent: gpu.Extent2D,
-swapchain_images: std.BoundedArray(gpu.Image(.color), max_swapchain_images),
+swapchain_images: std.BoundedArray(vk.Image, max_swapchain_images),
+swapchain_views: std.BoundedArray(vk.ImageView, max_swapchain_images),
 debug_messenger: vk.DebugUtilsMessengerEXT,
 pipeline_cache: vk.PipelineCache,
 
@@ -46,11 +47,6 @@ cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
 ready_for_present: [max_swapchain_images]vk.Semaphore,
 cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
-
-// The current swapchain image index. Other APIs track this automatically, Vulkan appears to allow
-// you to actually present them out of order, but we never want to do this and it wouldn't map to
-// other APIs, so we track it ourselves here.
-image_index: ?u32 = null,
 
 // Tracy info
 tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
@@ -718,6 +714,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .swapchain = .null_handle,
             .recreate_swapchain = false,
             .swapchain_images = .{},
+            .swapchain_views = .{},
             .swapchain_extent = .{ .width = 0, .height = 0 },
             .cmd_pools = cmd_pools,
             .image_availables = image_availables,
@@ -772,7 +769,7 @@ pub fn deinit(self: *Gx, gpa: Allocator) void {
     }
 
     // Destroy swapchain state
-    destroySwapchainViews(&self.backend);
+    destroySwapchainViewsAndResetImages(&self.backend);
     self.backend.device.destroySwapchainKHR(self.backend.swapchain, null);
 
     // Destroy device state
@@ -1269,28 +1266,21 @@ pub fn cmdBufBindDescSet(
     );
 }
 
-pub fn cmdBufSubmit(
-    self: *Gx,
-    cb: gpu.CmdBuf,
-    options: gpu.CmdBuf.SubmitOptions,
-) void {
+fn endCmdBuf(self: *Gx, cb: gpu.CmdBuf) void {
     cb.endZone(self);
     self.backend.device.endCommandBuffer(cb.asBackendType()) catch |err| @panic(@errorName(err));
+}
 
-    var wait_semaphores: std.BoundedArray(vk.Semaphore, 1) = .{};
-    var wait_dst_stage_masks: std.BoundedArray(vk.PipelineStageFlags, 1) = .{};
-    if (options.wait_for_swapchain) {
-        wait_semaphores.appendAssumeCapacity(self.backend.image_availables[self.frame]);
-        wait_dst_stage_masks.appendAssumeCapacity(.{ .top_of_pipe_bit = true });
-    }
+pub fn cmdBufSubmit(self: *Gx, cb: gpu.CmdBuf) void {
+    endCmdBuf(self, cb);
 
     const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
     defer queue_submit_zone.end();
     const cbs = [_]vk.CommandBuffer{cb.asBackendType()};
     const submit_infos = [_]vk.SubmitInfo{.{
-        .wait_semaphore_count = @intCast(wait_semaphores.len),
-        .p_wait_semaphores = &wait_semaphores.buffer,
-        .p_wait_dst_stage_mask = &wait_dst_stage_masks.buffer,
+        .wait_semaphore_count = 0,
+        .p_wait_semaphores = &.{},
+        .p_wait_dst_stage_mask = &.{},
         .command_buffer_count = cbs.len,
         .p_command_buffers = &cbs,
         .signal_semaphore_count = 0,
@@ -1558,86 +1548,6 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     }
 
     self.backend.device.updateDescriptorSets(@intCast(write_sets.len), &write_sets.buffer, 0, null);
-}
-
-pub fn acquireNextImage(self: *Gx, surface_extent: gpu.Extent2D) Gx.AcquireNextImageResult {
-    // Make sure we haven't already acquired an image this frame
-    assert(self.backend.image_index == null);
-
-    // Acquire the image
-    const acquire_result = b: {
-        const acquire_zone = Zone.begin(.{
-            .src = @src(),
-            .name = "acquire next image",
-        });
-        defer acquire_zone.end();
-
-        // Mark the swapchain as dirty if the extent has changed. Many platforms will consider this
-        // suboptimal, but this isn't guaranteed--Wayland for example appears to never or at least
-        // rarely report the swapchain as out of date or suboptimal.
-        if (!std.meta.eql(surface_extent, self.backend.swapchain_extent)) {
-            self.backend.recreate_swapchain = true;
-        }
-
-        // If the swapchain needs to be recreated, do so immediately. In theory in all except the
-        // case where the swapchain is out of date, you could defer this work until the user
-        // finishes resizing the window for a smoother experience.
-        //
-        // In practice, this is not viable.
-        //
-        // Empirically, under Wayland and under Windows drawing on a swapchain with the incorrect
-        // size results in the image being stretched to fill the window without regard for aspect
-        // ratio. This is almost certainly not what you want for any real application.
-        //
-        // You could attempt to compensate for this by adjusting your viewport, but this will break
-        // X11 which empirically does *not* stretch the image, but leaves it the image at actual
-        // size and pads the rest of the window with black.
-        //
-        // Theoretically you could use `VK_EXT_swapchain_maintenance1` to force the desired behavior
-        // in these cases, but again this is not viable in practice, as only 24% of Windows devices
-        // and 30% of Linux devices support it at the time of writing (https://vulkan.gpuinfo.org/)
-        // despite it having been available for years.
-        //
-        // If one was determined to elide the recreation, they would need to adjust the final stage
-        // of their renderer for each of these backends individually, since there's no one size fits
-        // all situation. I would be hesitant to do such a thing, though, as it's unclear to me if
-        // the observed behavior is even guaranteed.
-        //
-        // Instead, we just recreate the swapchain immediately. The only downside is a slightly
-        // lower framerate during the resize than would otherwise be possible.
-        if (self.backend.recreate_swapchain) {
-            setSwapchainExtent(&self.backend, surface_extent);
-        }
-
-        while (true) {
-            break :b self.backend.device.acquireNextImageKHR(
-                self.backend.swapchain,
-                std.math.maxInt(u64),
-                self.backend.image_availables[self.frame],
-                .null_handle,
-            ) catch |err| switch (err) {
-                error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    setSwapchainExtent(&self.backend, surface_extent);
-                    continue;
-                },
-                error.OutOfHostMemory,
-                error.OutOfDeviceMemory,
-                error.Unknown,
-                error.SurfaceLostKHR,
-                error.DeviceLost,
-                => @panic(@errorName(err)),
-            };
-        }
-    };
-
-    // Save the index, we use this on end frame
-    self.backend.image_index = acquire_result.image_index;
-
-    // Return the image to the caller
-    return .{
-        .image = self.backend.swapchain_images.get(acquire_result.image_index),
-        .extent = self.backend.swapchain_extent,
-    };
 }
 
 pub fn beginFrame(self: *Gx) void {
@@ -2330,63 +2240,13 @@ pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeC
     }
 }
 
-pub fn endFrame(self: *Gx) void {
-    if (self.backend.image_index) |image_index| {
-        // We acquired a swapchain image this frame, present it.
-        {
-            // Signal the ready for present semaphore when the graphics queue finishes executing
-            const transition_zone = Zone.begin(.{ .name = "ready for present", .src = @src() });
-            defer transition_zone.end();
-            self.backend.device.queueSubmit(
-                self.backend.queue,
-                1,
-                &.{.{
-                    .wait_semaphore_count = 0,
-                    .p_wait_semaphores = &.{},
-                    .p_wait_dst_stage_mask = &.{},
-                    .command_buffer_count = 0,
-                    .p_command_buffers = &.{},
-                    .signal_semaphore_count = 1,
-                    .p_signal_semaphores = &.{self.backend.ready_for_present[image_index]},
-                    .p_next = null,
-                }},
-                self.backend.cmd_pool_ready[self.frame],
-            ) catch |err| @panic(@errorName(err));
-        }
-
-        {
-            // Present the image
-            const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
-            defer queue_present_zone.end();
-            const result = self.backend.device.queuePresentKHR(
-                self.backend.queue,
-                &.{
-                    .wait_semaphore_count = 1,
-                    .p_wait_semaphores = &.{self.backend.ready_for_present[image_index]},
-                    .swapchain_count = 1,
-                    .p_swapchains = &.{self.backend.swapchain},
-                    .p_image_indices = &.{image_index},
-                    .p_results = null,
-                },
-            ) catch |err| b: switch (err) {
-                error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    self.backend.recreate_swapchain = true;
-                    break :b .success;
-                },
-                error.OutOfHostMemory,
-                error.OutOfDeviceMemory,
-                error.Unknown,
-                error.SurfaceLostKHR,
-                error.DeviceLost,
-                => @panic(@errorName(err)),
-            };
-            if (result == .suboptimal_khr) {
-                self.backend.recreate_swapchain = true;
-            }
-        }
-    } else {
-        // We aren't presenting, just wrap up this command pool submission by signaling the fence
-        // for this frame and then early out.
+pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
+    // Check if we're presenting an image this frame
+    const present = options.present orelse {
+        // If not, just wrap up the command pool by signaling the fence for this frame and then
+        // early out.
+        const end_zone = Zone.begin(.{ .name = "end", .src = @src() });
+        defer end_zone.end();
         self.backend.device.queueSubmit(
             self.backend.queue,
             1,
@@ -2402,10 +2262,240 @@ pub fn endFrame(self: *Gx) void {
             }},
             self.backend.cmd_pool_ready[self.frame],
         ) catch |err| @panic(@errorName(err));
+        return;
+    };
+
+    // Acquire the next swapchain image
+    const image_index = b: {
+        const acquire_zone = Zone.begin(.{ .name = "acquire", .src = @src() });
+        defer acquire_zone.end();
+
+        // Mark the swapchain as dirty if the extent has changed. Many platforms will consider this
+        // sub-optimal, but this isn't guaranteed. Wayland for example appears to never, or at least
+        // rarely, report the swapchain as out of date or suboptimal.
+        if (!std.meta.eql(present.surface_extent, self.backend.swapchain_extent)) {
+            self.backend.recreate_swapchain = true;
+        }
+
+        // If the swapchain needs to be recreated, do so immediately. In theory in all except the
+        // case where the swapchain is out of date, you could defer this work until the user
+        // finishes resizing the window for a smoother experience.
+        //
+        // In practice, this is not viable.
+        //
+        // Empirically, under Wayland and under Windows drawing on a swapchain with the incorrect
+        // size results in the image being stretched to fill the window without regard for aspect
+        // ratio. This is almost certainly not what you want for any real application.
+        //
+        // You could attempt to compensate for this by adjusting your viewport, but this will break
+        // X11 which empirically does *not* stretch the image, but leaves it the image at actual
+        // size and pads the rest of the window with black.
+        //
+        // Theoretically you could use `VK_EXT_swapchain_maintenance1` to force the desired behavior
+        // in these cases, but again this is not viable in practice, as only 24% of Windows devices
+        // and 30% of Linux devices support it at the time of writing (https://vulkan.gpuinfo.org/)
+        // despite it having been available for years.
+        //
+        // If one was determined to elide the recreation, they would need to adjust the final stage
+        // of their renderer for each of these backends individually, since there's no one size fits
+        // all situation. I would be hesitant to do such a thing, though, as it's unclear to me if
+        // the observed behavior is even guaranteed.
+        //
+        // Instead, we just recreate the swapchain immediately. The only downside is a slightly
+        // lower framerate during the resize than would otherwise be possible.
+        if (self.backend.recreate_swapchain) {
+            setSwapchainExtent(&self.backend, present.surface_extent);
+        }
+
+        // Actually acquire the image. Drivers typically block either here or on present if the
+        // image isn't yet available.
+        const blocking_zone = Zone.begin(.{
+            .src = @src(),
+            .color = gpu.global_options.blocking_zone_color,
+        });
+        defer blocking_zone.end();
+        while (true) {
+            const acquire_result = self.backend.device.acquireNextImageKHR(
+                self.backend.swapchain,
+                std.math.maxInt(u64),
+                self.backend.image_availables[self.frame],
+                .null_handle,
+            ) catch |err| switch (err) {
+                error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
+                    setSwapchainExtent(&self.backend, present.surface_extent);
+                    continue;
+                },
+                error.OutOfHostMemory,
+                error.OutOfDeviceMemory,
+                error.Unknown,
+                error.SurfaceLostKHR,
+                error.DeviceLost,
+                => @panic(@errorName(err)),
+            };
+            break :b acquire_result.image_index;
+        }
+    };
+
+    const swapchain_image = self.backend.swapchain_images.get(image_index);
+
+    // Blit the image the caller wants to present to the swapchain.
+    //
+    // At first glance this may appear wasteful--why not write directly to the swapchain? In
+    // practice, especially on PC, you don't have much control over the swapchain resolution, but
+    // you very much care about your render resolution. This means that you really want to be
+    // rendering to your own buffer, and then copying it to the swapchain at the end.
+    //
+    // Furthermore, on some backends (like DX12) you can't write to the swapchain from compute
+    // shaders, which means you'd end up needing this extra copy anyway.
+    //
+    // In practice this is *very* cheap, and also allows us to defer acquiring the swapchain image/
+    // waiting on the present semaphore as long as possible, so is likely a performance win in
+    // practice due to increased pipelining.
+    //
+    // Additionally, this allows us to present a simpler API to the caller: they can just provide us
+    // with an image, instead of needing to worry about synchronization around the swapchain image.
+    // Assuming the proper layout transitions, the rest can be handled automatically by us.
+    {
+        const blit_zone = Zone.begin(.{ .name = "blit", .src = @src() });
+        defer blit_zone.end();
+
+        // Create the command buffer
+        const cb: gpu.CmdBuf = .init(self, .{ .src = @src(), .name = "blit to swapchain" });
+
+        // Transition the swapchain image to transfer destination
+        cb.barriers(self, .{
+            .image = &.{
+                .undefinedToTransferDst(.{
+                    .handle = .fromBackendType(swapchain_image),
+                    .range = .first,
+                    .aspect = .{ .color = true },
+                }),
+            },
+        });
+
+        // Perform the blit
+        self.backend.device.cmdBlitImage(
+            cb.asBackendType(),
+            present.image.asBackendType(),
+            .transfer_src_optimal,
+            swapchain_image,
+            .transfer_dst_optimal,
+            1,
+            &.{.{
+                .src_subresource = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .mip_level = 0,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+                .src_offsets = .{
+                    .{
+                        .x = 0,
+                        .y = 0,
+                        .z = 0,
+                    },
+                    .{
+                        .x = @intCast(present.src_extent.width),
+                        .y = @intCast(present.src_extent.height),
+                        .z = 1,
+                    },
+                },
+                .dst_subresource = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .mip_level = 0,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+                .dst_offsets = .{
+                    .{
+                        .x = 0,
+                        .y = 0,
+                        .z = 0,
+                    },
+                    .{
+                        .x = @intCast(self.backend.swapchain_extent.width),
+                        .y = @intCast(self.backend.swapchain_extent.height),
+                        .z = 1,
+                    },
+                },
+            }},
+            filterToVk(present.filter),
+        );
+
+        // Transition the swapchain image to present source
+        self.backend.device.cmdPipelineBarrier2(cb.asBackendType(), &.{
+            .dependency_flags = .{},
+            .memory_barrier_count = 0,
+            .p_memory_barriers = &.{},
+            .buffer_memory_barrier_count = 0,
+            .p_buffer_memory_barriers = &.{},
+            .image_memory_barrier_count = 1,
+            .p_image_memory_barriers = &.{.{
+                .src_stage_mask = .{ .blit_bit = true },
+                .src_access_mask = .{ .transfer_write_bit = true },
+                .dst_stage_mask = .{ .bottom_of_pipe_bit = true },
+                .dst_access_mask = .{},
+                .old_layout = .transfer_dst_optimal,
+                .new_layout = .present_src_khr,
+                .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                .image = swapchain_image,
+                .subresource_range = rangeToVk(present.range, .{ .color = true }),
+            }},
+        });
+
+        // End the command buffer, we use our wrapper that also ends the GPU zone we created
+        endCmdBuf(self, cb);
+
+        // Submit the command buffer, making sure to wait on the present semaphore for this
+        // swapchain, image and to signal the command pool ready semaphore for this frame in flight.
+        self.backend.device.queueSubmit(
+            self.backend.queue,
+            1,
+            &.{.{
+                .wait_semaphore_count = 1,
+                .p_wait_semaphores = &.{self.backend.image_availables[self.frame]},
+                .p_wait_dst_stage_mask = &.{.{ .top_of_pipe_bit = true }},
+                .command_buffer_count = 1,
+                .p_command_buffers = &.{cb.asBackendType()},
+                .signal_semaphore_count = 1,
+                .p_signal_semaphores = &.{self.backend.ready_for_present[image_index]},
+                .p_next = null,
+            }},
+            self.backend.cmd_pool_ready[self.frame],
+        ) catch |err| @panic(@errorName(err));
     }
 
-    // Clear the image index
-    self.backend.image_index = null;
+    // Actually present the image
+    {
+        const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
+        defer queue_present_zone.end();
+        const result = self.backend.device.queuePresentKHR(
+            self.backend.queue,
+            &.{
+                .wait_semaphore_count = 1,
+                .p_wait_semaphores = &.{self.backend.ready_for_present[image_index]},
+                .swapchain_count = 1,
+                .p_swapchains = &.{self.backend.swapchain},
+                .p_image_indices = &.{image_index},
+                .p_results = null,
+            },
+        ) catch |err| b: switch (err) {
+            error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
+                self.backend.recreate_swapchain = true;
+                break :b .success;
+            },
+            error.OutOfHostMemory,
+            error.OutOfDeviceMemory,
+            error.Unknown,
+            error.SurfaceLostKHR,
+            error.DeviceLost,
+            => @panic(@errorName(err)),
+        };
+        if (result == .suboptimal_khr) {
+            self.backend.recreate_swapchain = true;
+        }
+    }
 }
 
 pub fn samplerCreate(
@@ -2508,7 +2598,7 @@ fn shaderStagesToVkPipelineStages(stages: gpu.ShaderStages) vk.PipelineStageFlag
     };
 }
 
-fn rangeToVk(range: gpu.ImageBarrier.Range, aspect: gpu.ImageAspect) vk.ImageSubresourceRange {
+fn rangeToVk(range: gpu.ImageRange, aspect: gpu.ImageAspect) vk.ImageSubresourceRange {
     return .{
         .aspect_mask = aspectToVk(aspect),
         .base_mip_level = range.base_mip_level,
@@ -2521,18 +2611,20 @@ fn rangeToVk(range: gpu.ImageBarrier.Range, aspect: gpu.ImageAspect) vk.ImageSub
 pub fn imageBarrierUndefinedToTransferDst(
     options: gpu.ImageBarrier.UndefinedToTransferDstOptions,
 ) gpu.ImageBarrier {
-    return .{ .backend = .{
-        .src_stage_mask = .{ .top_of_pipe_bit = true },
-        .src_access_mask = .{},
-        .dst_stage_mask = .{ .all_transfer_bit = true },
-        .dst_access_mask = .{ .transfer_write_bit = true },
-        .old_layout = .undefined,
-        .new_layout = .transfer_dst_optimal,
-        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, options.aspect),
-    } };
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .top_of_pipe_bit = true },
+            .src_access_mask = .{},
+            .dst_stage_mask = .{ .all_transfer_bit = true },
+            .dst_access_mask = .{ .transfer_write_bit = true },
+            .old_layout = .undefined,
+            .new_layout = .transfer_dst_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, options.aspect),
+        },
+    };
 }
 
 pub fn imageBarrierUndefinedToColorAttachment(
@@ -2549,29 +2641,6 @@ pub fn imageBarrierUndefinedToColorAttachment(
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
         .subresource_range = rangeToVk(options.range, .{ .color = true }),
-    } };
-}
-
-pub fn imageBarrierColorAttachmentToPresent(
-    options: gpu.ImageBarrier.ColorAttachmentToPresentOptions,
-) gpu.ImageBarrier {
-    return .{ .backend = .{
-        .src_stage_mask = .{ .color_attachment_output_bit = true },
-        .src_access_mask = .{ .color_attachment_write_bit = true },
-        .dst_stage_mask = .{ .bottom_of_pipe_bit = true },
-        .dst_access_mask = .{},
-        .old_layout = .attachment_optimal,
-        .new_layout = .present_src_khr,
-        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.handle.asBackendType(),
-        .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
     } };
 }
 
@@ -2666,6 +2735,59 @@ pub fn imageBarrierGeneralToReadOnly(
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = options.handle.asBackendType(),
             .subresource_range = rangeToVk(options.range, options.aspect),
+        },
+    };
+}
+
+pub fn imageBarrierColorAttachmentToTransferSrc(
+    options: gpu.ImageBarrier.ColorAttachmentToTransferSrcOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = .{ .color_attachment_output_bit = true },
+        .src_access_mask = .{ .color_attachment_write_bit = true },
+        .dst_stage_mask = .{ .transfer_read_bit = true },
+        .dst_access_mask = .{ .transfer_read_bit = true },
+        .old_layout = .attachment_optimal,
+        .new_layout = .transfer_src_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
+    } };
+}
+
+pub fn imageBarrierColorAttachmentToPresentBlitSrc(
+    options: gpu.ImageBarrier.ColorAttachmentToPresentBlitSrcOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = .{ .color_attachment_output_bit = true },
+        .src_access_mask = .{ .color_attachment_write_bit = true },
+        .dst_stage_mask = .{ .blit_bit = true },
+        .dst_access_mask = .{ .transfer_read_bit = true },
+        .old_layout = .attachment_optimal,
+        .new_layout = .transfer_src_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
+    } };
+}
+
+pub fn imageBarrierUndefinedToColorAttachmentAfterPresentBlit(
+    options: gpu.ImageBarrier.UndefinedToColorAttachmentAfterPresentBlitOptions,
+) gpu.ImageBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .blit_bit = true },
+            .src_access_mask = .{ .transfer_read_bit = true },
+            .dst_stage_mask = .{ .color_attachment_output_bit = true },
+            .dst_access_mask = .{ .color_attachment_write_bit = true },
+            .old_layout = .undefined,
+            .new_layout = .attachment_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, .{ .color = true }),
         },
     };
 }
@@ -2821,7 +2943,7 @@ fn aspectToVk(self: gpu.ImageAspect) vk.ImageAspectFlags {
     };
 }
 
-fn filterToVk(filter: gpu.Sampler.Options.Filter) vk.Filter {
+fn filterToVk(filter: gpu.ImageFilter) vk.Filter {
     return switch (filter) {
         .nearest => .nearest,
         .linear => .linear,
@@ -2886,10 +3008,11 @@ fn findMemoryType(
     return null;
 }
 
-fn destroySwapchainViews(self: *@This()) void {
-    for (self.swapchain_images.constSlice()) |i| {
-        self.device.destroyImageView(i.view.asBackendType(), null);
+fn destroySwapchainViewsAndResetImages(self: *@This()) void {
+    for (self.swapchain_views.constSlice()) |view| {
+        self.device.destroyImageView(view, null);
     }
+    self.swapchain_views.clear();
     self.swapchain_images.clear();
 }
 
@@ -2923,7 +3046,7 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
         self.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
     }
 
-    destroySwapchainViews(self);
+    destroySwapchainViewsAndResetImages(self);
 
     const surface_capabilities = self.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
         self.physical_device.device,
@@ -2963,7 +3086,16 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
             .height = self.swapchain_extent.height,
         },
         .image_array_layers = 1,
-        .image_usage = .{ .color_attachment_bit = true },
+        .image_usage = .{
+            // We're going to be blitting to the swapchain image, so we need to set the transfer bit
+            .transfer_dst_bit = true,
+            // One would expect that we don't need to set any other usages, however, we need to set
+            // at least one of the following usage flags to be able to create an image view. Since
+            // color attachment is a typical bit to set here, it seems the safest:
+            //
+            // https://docs.vulkan.org/spec/latest/chapters/resources.html#valid-imageview-imageusage
+            .color_attachment_bit = true,
+        },
         .pre_transform = surface_capabilities.current_transform,
         .composite_alpha = self.physical_device.composite_alpha,
         .present_mode = self.physical_device.present_mode,
@@ -2976,18 +3108,17 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
 
     self.swapchain = self.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
     setName(self.debug_messenger, self.device, self.swapchain, .{ .str = "Main" });
-    var image_handles: std.BoundedArray(vk.Image, max_swapchain_images) = .{};
+    assert(self.swapchain_images.len == 0);
+    assert(self.swapchain_views.len == 0);
     var image_count: u32 = max_swapchain_images;
     const get_images_result = self.device.getSwapchainImagesKHR(
         self.swapchain,
         &image_count,
-        &image_handles.buffer,
+        &self.swapchain_images.buffer,
     ) catch |err| @panic(@errorName(err));
+    self.swapchain_images.len = image_count;
     if (get_images_result != .success) @panic(@tagName(get_images_result));
-    image_handles.len = image_count;
-    assert(self.swapchain_images.len == 0);
-    var views: std.BoundedArray(gpu.ImageView, max_swapchain_images) = .{};
-    for (image_handles.constSlice(), 0..) |handle, i| {
+    for (self.swapchain_images.constSlice(), 0..) |handle, i| {
         setName(self.debug_messenger, self.device, handle, .{ .str = "Swapchain", .index = i });
         const create_info: vk.ImageViewCreateInfo = .{
             .image = handle,
@@ -3009,11 +3140,7 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
         };
         const view = self.device.createImageView(&create_info, null) catch |err| @panic(@errorName(err));
         setName(self.debug_messenger, self.device, view, .{ .str = "Swapchain", .index = i });
-        views.appendAssumeCapacity(.fromBackendType(view));
-        self.swapchain_images.appendAssumeCapacity(.{
-            .handle = .fromBackendType(handle),
-            .view = .fromBackendType(view),
-        });
+        self.swapchain_views.appendAssumeCapacity(view);
     }
 
     if (retired != .null_handle) {
@@ -3210,36 +3337,36 @@ inline fn setName(
 ) void {
     if (debug_messenger == .null_handle) return;
 
-    const type_name, const object_type = switch (@TypeOf(object)) {
-        vk.Buffer => .{ "Buffer", .buffer },
-        vk.CommandBuffer => .{ "Command Buffer", .command_buffer },
-        vk.CommandPool => .{ "Command Pool", .command_pool },
-        vk.DescriptorPool => .{ "Descriptor Pool", .descriptor_pool },
-        vk.DescriptorSet => .{ "Descriptor Set", .descriptor_set },
-        vk.DescriptorSetLayout => .{ "Descriptor Set Layout", .descriptor_set_layout },
-        vk.DeviceMemory => .{ "Device Memory", .device_memory },
-        vk.Fence => .{ "Fence", .fence },
-        vk.Image => .{ "Image", .image },
-        vk.ImageView => .{ "Image View", .image_view },
-        vk.Pipeline => .{ "Pipeline", .pipeline },
-        vk.PipelineLayout => .{ "Pipeline Layout", .pipeline_layout },
-        vk.QueryPool => .{ "Query Pool", .query_pool },
-        vk.Queue => .{ "Queue", .queue },
-        vk.Sampler => .{ "Sampler", .sampler },
-        vk.Semaphore => .{ "Semaphore", .semaphore },
-        vk.ShaderModule => .{ "Shader Module", .shader_module },
-        vk.SwapchainKHR => .{ "Swapchain", .swapchain_khr },
+    const object_type = switch (@TypeOf(object)) {
+        vk.Buffer => .buffer,
+        vk.CommandBuffer => .command_buffer,
+        vk.CommandPool => .command_pool,
+        vk.DescriptorPool => .descriptor_pool,
+        vk.DescriptorSet => .descriptor_set,
+        vk.DescriptorSetLayout => .descriptor_set_layout,
+        vk.DeviceMemory => .device_memory,
+        vk.Fence => .fence,
+        vk.Image => .image,
+        vk.ImageView => .image_view,
+        vk.Pipeline => .pipeline,
+        vk.PipelineLayout => .pipeline_layout,
+        vk.QueryPool => .query_pool,
+        vk.Queue => .queue,
+        vk.Sampler => .sampler,
+        vk.Semaphore => .semaphore,
+        vk.ShaderModule => .shader_module,
+        vk.SwapchainKHR => .swapchain_khr,
         else => @compileError("unexpected type: " ++ @typeName(@TypeOf(object))),
     };
 
     var buf: [64:0]u8 = undefined;
     buf[buf.len] = 0;
     const name: [:0]const u8 = if (debug_name.index) |i| b: {
-        break :b std.fmt.bufPrintZ(&buf, "{s} - {s} {}", .{ type_name, debug_name.str, i }) catch |err| switch (err) {
+        break :b std.fmt.bufPrintZ(&buf, "{s} {}", .{ debug_name.str, i }) catch |err| switch (err) {
             error.NoSpaceLeft => buf[0..],
         };
     } else b: {
-        break :b std.fmt.bufPrintZ(&buf, "{s} - {s}", .{ type_name, debug_name.str }) catch |err| switch (err) {
+        break :b std.fmt.bufPrintZ(&buf, "{s}", .{debug_name.str}) catch |err| switch (err) {
             error.NoSpaceLeft => buf[0..],
         };
     };
