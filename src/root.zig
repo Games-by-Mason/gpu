@@ -800,11 +800,6 @@ pub fn Image(kind: ImageKind) type {
 pub const ImageView = enum(u64) {
     _,
 
-    pub const Sized2D = struct {
-        view: ImageView,
-        extent: Extent2D,
-    };
-
     pub inline fn fromBackendType(value: Backend.ImageView) @This() {
         comptime assert(@sizeOf(Backend.ImageView) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(value));

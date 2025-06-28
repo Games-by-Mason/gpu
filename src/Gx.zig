@@ -175,6 +175,27 @@ pub fn getBackendConst(self: *const @This(), T: type) *const T {
 
 /// Options for `endFrame`.
 pub const EndFrameOptions = struct {
+    // At the end of the frame, if provided, an image is blitted to the swapchain.
+    //
+    // At first glance this may appear wasteful--why not write directly to the swapchain? In
+    // practice, especially on PC, you don't have much control over the swapchain resolution, but
+    // you very much care about your render resolution. This means that you really want to be
+    // rendering to your own buffer, and then copying it to the swapchain at the end.
+    //
+    // Furthermore, on some backends (like DX12) you can't write to the swapchain from compute
+    // shaders, which means you'd end up needing this extra copy anyway.
+    //
+    // In practice this is *very* cheap, and also allows us to defer acquiring the swapchain image/
+    // waiting on the present semaphore as long as possible, so is likely a performance win in
+    // practice due to increased pipelining.
+    //
+    // Additionally, this allows us to present a simpler API to the caller: they can just provide us
+    // with an image, instead of needing to worry about synchronization around the swapchain image.
+    // Assuming the proper layout transitions, the rest can be handled automatically by us.
+    //
+    // The main downside to this approach is slightly increased memory usage. This library is
+    // designed for desktop and console, though, and so this very marginal increase is not expected
+    // to be a problem.
     pub const Present = struct {
         /// The image to present. Must be in the "present blit" layout.
         image: gpu.ImageHandle,

@@ -27,7 +27,8 @@ const ImageBumpAllocator = gpu.ext.ImageBumpAllocator;
 ///
 /// For example, you may set up the pool to have a virtual extent of 1920x1080 and a physical extent
 /// of 1920x1080. Under this, a 960x540 image will be half window sized. However, if the physical
-/// extent later changes to 3840x2160, the image will also double in size.
+/// extent later changes to 3840x2160, the image will double in size to stay at half of the physical
+/// extent.
 pub fn RenderTargetPool(kind: ImageKind) type {
     return struct {
         const Pool = @This();
@@ -40,40 +41,28 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             fn init(self: @This(), pool: *Pool, gx: *Gx) void {
                 // Initialize the image
                 var info: ImageBumpAllocator(kind).AllocOptions = pool.info.items[@intFromEnum(self)];
-                info.image.extent = self.extent(pool);
-                const image = pool.allocator.alloc(gx, info);
-                pool.images.items[@intFromEnum(self)] = image;
+                const scaled = self.extent(pool);
+                info.image.extent.width = scaled.width;
+                info.image.extent.height = scaled.height;
+                pool.images.items[@intFromEnum(self)] = pool.allocator.alloc(gx, info);
             }
 
-            /// Returns the extent of this handle.
-            fn extent(self: @This(), pool: *const Pool) gpu.ImageExtent {
+            /// Returns the 2D extent of this handle.
+            pub fn extent(self: @This(), pool: *const Pool) gpu.Extent2D {
                 const info: ImageBumpAllocator(kind).AllocOptions = pool.info.items[@intFromEnum(self)];
                 const x_scale: f32 = @as(f32, @floatFromInt(pool.physical_extent.width)) / @as(f32, @floatFromInt(pool.virtual_extent.width));
                 const y_scale: f32 = @as(f32, @floatFromInt(pool.physical_extent.height)) / @as(f32, @floatFromInt(pool.virtual_extent.height));
                 return .{
                     .width = @intFromFloat(x_scale * @as(f32, @floatFromInt(info.image.extent.width))),
                     .height = @intFromFloat(y_scale * @as(f32, @floatFromInt(info.image.extent.height))),
-                    .depth = info.image.extent.depth,
                 };
             }
 
-            /// Gets a the image for this handle. This image will be invalidated on `recreate`, you
-            /// shouldn't store or free it.
-            pub fn get(self: @This(), pool: *const Pool) gpu.Image(kind) {
+            /// Returns the current image for this handle. Owned by the pool and shouldn't be freed.
+            /// Will be invalidated on `recreate`, store the handle instead if this is an issue.
+            /// you shouldn't store or free it.
+            pub fn image(self: @This(), pool: *const Pool) gpu.Image(kind) {
                 return pool.images.items[@intFromEnum(self)];
-            }
-
-            /// Gets a sized image view for this handle. This view will be invalidated on
-            /// `recreate`, you shouldn't store it.
-            pub fn getSizedView(self: @This(), pool: *const Pool) gpu.ImageView.Sized2D {
-                const scaled = self.extent(pool);
-                return .{
-                    .extent = .{
-                        .width = scaled.width,
-                        .height = scaled.height,
-                    },
-                    .view = self.get(pool).view,
-                };
             }
         };
 

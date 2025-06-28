@@ -2339,22 +2339,6 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
     const swapchain_image = self.backend.swapchain_images.get(image_index);
 
     // Blit the image the caller wants to present to the swapchain.
-    //
-    // At first glance this may appear wasteful--why not write directly to the swapchain? In
-    // practice, especially on PC, you don't have much control over the swapchain resolution, but
-    // you very much care about your render resolution. This means that you really want to be
-    // rendering to your own buffer, and then copying it to the swapchain at the end.
-    //
-    // Furthermore, on some backends (like DX12) you can't write to the swapchain from compute
-    // shaders, which means you'd end up needing this extra copy anyway.
-    //
-    // In practice this is *very* cheap, and also allows us to defer acquiring the swapchain image/
-    // waiting on the present semaphore as long as possible, so is likely a performance win in
-    // practice due to increased pipelining.
-    //
-    // Additionally, this allows us to present a simpler API to the caller: they can just provide us
-    // with an image, instead of needing to worry about synchronization around the swapchain image.
-    // Assuming the proper layout transitions, the rest can be handled automatically by us.
     {
         const blit_zone = Zone.begin(.{ .name = "blit", .src = @src() });
         defer blit_zone.end();
