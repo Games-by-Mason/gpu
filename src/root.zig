@@ -1247,6 +1247,7 @@ pub const DescPool = enum(u64) {
 pub const DescSet = enum(u64) {
     _,
 
+    /// A descriptor set update, can be submitted to `Gx.updateDescSets`.
     pub const Update = struct {
         pub const Value = union(enum) {
             pub const Tag: type = @typeInfo(@This()).@"union".tag_type.?;
@@ -1300,13 +1301,6 @@ pub const DescSet = enum(u64) {
     pub inline fn asBackendType(self: @This()) Backend.DescSet {
         comptime assert(@sizeOf(Backend.DescSet) == @sizeOf(@This()));
         return @enumFromInt(@intFromEnum(self));
-    }
-
-    /// Submit descriptor set update commands. Fastest when sorted. Copy commands not currently
-    /// supported.
-    pub fn update(gx: *Gx, cmds: []const Update) void {
-        if (cmds.len == 0) return;
-        Backend.descSetsUpdate(gx, cmds);
     }
 };
 

@@ -270,6 +270,13 @@ pub fn submit(self: *@This(), cbs: []const gpu.CmdBuf) void {
     Backend.submit(self, cbs);
 }
 
+/// Submit descriptor set update commands. Fastest when sorted. Copy commands not currently
+/// supported.
+pub fn updateDescSets(self: *@This(), updates: []const DescSet.Update) void {
+    if (updates.len == 0) return;
+    Backend.descSetsUpdate(self, updates);
+}
+
 /// Waits until the device is idle. Not recommended for common use, but may be useful for debugging
 /// synchronization issues, or waiting until it's safe to exit in debug mode. In release mode you
 /// should probably be using `std.process.cleanExit`.
