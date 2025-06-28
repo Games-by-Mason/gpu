@@ -1432,14 +1432,20 @@ pub const ImageBarrier = extern struct {
     }
 
     pub const GeneralToReadOnlyOptions = struct {
+        pub const Access = packed struct {
+            read: bool = false,
+            write: bool = false,
+        };
+
         handle: ImageHandle,
         range: ImageRange,
         src_stages: ShaderStages,
+        src_access: Access,
         dst_stages: ShaderStages,
         aspect: ImageAspect,
     };
 
-    pub fn generalWriteToReadOnly(options: GeneralToReadOnlyOptions) @This() {
+    pub fn generalToReadOnly(options: GeneralToReadOnlyOptions) @This() {
         return Backend.imageBarrierGeneralToReadOnly(options);
     }
 

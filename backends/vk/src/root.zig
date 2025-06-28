@@ -2713,8 +2713,8 @@ pub fn imageBarrierGeneralToReadOnly(
         .backend = .{
             .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
             .src_access_mask = .{
-                .shader_read_bit = true,
-                .shader_write_bit = true,
+                .shader_read_bit = options.src_access.read,
+                .shader_write_bit = options.src_access.write,
             },
             .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
             .dst_access_mask = .{ .shader_read_bit = true },

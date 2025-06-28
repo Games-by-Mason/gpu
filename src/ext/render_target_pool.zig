@@ -74,9 +74,6 @@ pub fn RenderTargetPool(kind: ImageKind) type {
         info: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions),
         images: std.ArrayListUnmanaged(gpu.Image(kind)),
         allocator: ImageBumpAllocator(kind),
-        desc_sets: [gpu.global_options.max_frames_in_flight]gpu.DescSet,
-        storage_binding: ?u32,
-        sampled_binding: ?u32,
 
         /// Options for `init`.
         pub const Options = struct {
@@ -84,9 +81,6 @@ pub fn RenderTargetPool(kind: ImageKind) type {
             physical_extent: gpu.Extent2D,
             capacity: u8,
             allocator: ImageBumpAllocator(kind).Options,
-            desc_sets: [gpu.global_options.max_frames_in_flight]gpu.DescSet,
-            storage_binding: ?u32,
-            sampled_binding: ?u32,
         };
 
         /// Initialize a render target pool.
@@ -119,17 +113,13 @@ pub fn RenderTargetPool(kind: ImageKind) type {
                 .images = images,
                 .info = info,
                 .allocator = allocator,
-                .desc_sets = options.desc_sets,
-                .storage_binding = options.storage_binding,
-                .sampled_binding = options.sampled_binding,
             };
         }
 
         /// Destroy the render target pool and all owned images.
         pub fn deinit(self: *@This(), gpa: Allocator, gx: *Gx) void {
-            for (self.images.items) |image| {
-                image.deinit(gx);
-            }
+            self.info.deinit(gpa);
+            for (self.images.items) |image| image.deinit(gx);
             self.images.deinit(gpa);
             self.allocator.deinit(gpa, gx);
             self.* = undefined;
