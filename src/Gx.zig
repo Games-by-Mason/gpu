@@ -198,7 +198,7 @@ pub const EndFrameOptions = struct {
     // to be a problem.
     pub const Present = struct {
         /// The image to present. Must be in the "present blit" layout.
-        image: gpu.ImageHandle,
+        handle: gpu.ImageHandle,
         /// The extent of the source image to present.
         src_extent: Extent2D,
         /// A hint for the extent of the surface to present to, on PC you typically pass the window

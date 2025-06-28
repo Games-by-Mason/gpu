@@ -2365,7 +2365,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         // Perform the blit
         self.backend.device.cmdBlitImage(
             cb.asBackendType(),
-            present.image.asBackendType(),
+            present.handle.asBackendType(),
             .transfer_src_optimal,
             swapchain_image,
             .transfer_dst_optimal,
@@ -2633,23 +2633,6 @@ pub fn imageBarrierUndefinedToColorAttachment(
     } };
 }
 
-pub fn imageBarrierUndefinedToColorAttachmentAfterRead(
-    options: gpu.ImageBarrier.UndefinedToColorAttachmentAfterReadOptions,
-) gpu.ImageBarrier {
-    return .{ .backend = .{
-        .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
-        .src_access_mask = .{ .shader_read_bit = true },
-        .dst_stage_mask = .{ .color_attachment_output_bit = true },
-        .dst_access_mask = .{ .color_attachment_write_bit = true },
-        .old_layout = .undefined,
-        .new_layout = .attachment_optimal,
-        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-        .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, .{ .color = true }),
-    } };
-}
-
 pub fn imageBarrierTransferDstToReadOnly(
     options: gpu.ImageBarrier.TransferDstToReadOnlyOptions,
 ) gpu.ImageBarrier {
@@ -2768,7 +2751,7 @@ pub fn imageBarrierUndefinedToColorAttachmentAfterPresentBlit(
     return .{
         .backend = .{
             .src_stage_mask = .{ .blit_bit = true },
-            .src_access_mask = .{ .transfer_read_bit = true },
+            .src_access_mask = .{},
             .dst_stage_mask = .{ .color_attachment_output_bit = true },
             .dst_access_mask = .{ .color_attachment_write_bit = true },
             .old_layout = .undefined,

@@ -1390,16 +1390,6 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierUndefinedToColorAttachment(options);
     }
 
-    pub const UndefinedToColorAttachmentAfterReadOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        src_stages: ShaderStages,
-    };
-
-    pub fn undefinedToColorAttachmentAfterRead(options: UndefinedToColorAttachmentAfterReadOptions) @This() {
-        return Backend.imageBarrierUndefinedToColorAttachmentAfterRead(options);
-    }
-
     pub const TransferDstToReadOnlyOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
