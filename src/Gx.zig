@@ -262,6 +262,14 @@ pub fn beginFrame(self: *@This()) void {
     self.tracy_queries[self.frame] = 0;
 }
 
+/// Submits the given command buffers to the GPU in order.
+pub fn submit(self: *@This(), cbs: []const gpu.CmdBuf) void {
+    const zone = Zone.begin(.{ .src = @src() });
+    defer zone.end();
+    assert(self.in_frame);
+    Backend.submit(self, cbs);
+}
+
 /// Waits until the device is idle. Not recommended for common use, but may be useful for debugging
 /// synchronization issues, or waiting until it's safe to exit in debug mode. In release mode you
 /// should probably be using `std.process.cleanExit`.

@@ -1625,11 +1625,11 @@ pub const CmdBuf = enum(u64) {
         Backend.cmdBufSetScissor(gx, self, scissor);
     }
 
-    pub fn submit(self: @This(), gx: *Gx) void {
+    pub fn end(self: @This(), gx: *Gx) void {
         const zone = Zone.begin(.{ .src = @src() });
         defer zone.end();
         assert(gx.in_frame);
-        Backend.cmdBufSubmit(gx, self);
+        Backend.cmdBufEnd(gx, self);
     }
 
     pub fn bindPipeline(

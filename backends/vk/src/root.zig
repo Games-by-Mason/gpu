@@ -1274,23 +1274,20 @@ pub fn cmdBufBindDescSet(
     );
 }
 
-fn endCmdBuf(self: *Gx, cb: gpu.CmdBuf) void {
+pub fn cmdBufEnd(self: *Gx, cb: gpu.CmdBuf) void {
     cb.endZone(self);
     self.backend.device.endCommandBuffer(cb.asBackendType()) catch |err| @panic(@errorName(err));
 }
 
-pub fn cmdBufSubmit(self: *Gx, cb: gpu.CmdBuf) void {
-    endCmdBuf(self, cb);
-
+pub fn submit(self: *Gx, cbs: []const gpu.CmdBuf) void {
     const queue_submit_zone = Zone.begin(.{ .name = "queue submit", .src = @src() });
     defer queue_submit_zone.end();
-    const cbs = [_]vk.CommandBuffer{cb.asBackendType()};
     const submit_infos = [_]vk.SubmitInfo{.{
         .wait_semaphore_count = 0,
         .p_wait_semaphores = &.{},
         .p_wait_dst_stage_mask = &.{},
-        .command_buffer_count = cbs.len,
-        .p_command_buffers = &cbs,
+        .command_buffer_count = @intCast(cbs.len),
+        .p_command_buffers = @ptrCast(cbs),
         .signal_semaphore_count = 0,
         .p_signal_semaphores = &.{},
         .p_next = null,
@@ -2437,7 +2434,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         });
 
         // End the command buffer, we use our wrapper that also ends the GPU zone we created
-        endCmdBuf(self, cb);
+        cmdBufEnd(self, cb);
 
         // Submit the command buffer, making sure to wait on the present semaphore for this
         // swapchain, image and to signal the command pool ready semaphore for this frame in flight.
