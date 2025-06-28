@@ -1093,7 +1093,7 @@ pub fn cmdBufBeginZone(self: *Gx, cb: gpu.CmdBuf, loc: *const tracy.SourceLocati
         });
         self.backend.device.cmdWriteTimestamp(
             cb.asBackendType(),
-            .{ .top_of_pipe_bit = true },
+            .{ .bottom_of_pipe_bit = true },
             self.backend.tracy_query_pools[self.frame],
             query_id.index,
         );
