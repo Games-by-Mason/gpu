@@ -15,10 +15,11 @@ const ImageBumpAllocator = gpu.ext.ImageBumpAllocator;
 /// A pool for managing render targets.
 ///
 /// A render target is just an image. However, the size of a render target typically depends on the
-/// window size. Most render targets are sized the same as the window, some may be a fraction of
-/// the window size (e.g. a blur) or at a multiple of the window size (e.g. super sampling.)
+/// surface size, which on PC typically depends on the window size. This may be a direct
+/// relationship (e.g. a full resolution color buffer), or an indirect one (e.g. a quarter
+/// resolution blur buffer, or a game rendered at half resolution.)
 ///
-/// In practice this becomes difficult to manage: the window size can change at runtime, which
+/// In practice this becomes difficult to manage: on PC the window size can change at runtime, which
 /// necessitates destroying and recreating all render targets to resize them.
 ///
 /// This abstraction allows specifying render target images according to a virtual coordinate
@@ -26,13 +27,15 @@ const ImageBumpAllocator = gpu.ext.ImageBumpAllocator;
 /// then manages recreating of the render targets for you.
 ///
 /// For example, you may set up the pool to have a virtual extent of 1920x1080 and a physical extent
-/// of 1920x1080. Under this, a 960x540 image will be half window sized. However, if the physical
-/// extent later changes to 3840x2160, the image will also double in size.
+/// of 1920x1080. Under this setup, a 1920x1080 is surface sized, a 960x540 image is half surface
+/// sized. Virtual coordinates were chosen over floats ranging from 0 to 1 as this avoids needing to
+/// create entirely new option structs for image creation.
 pub fn RenderTargetPool(kind: ImageKind) type {
     return struct {
         const Pool = @This();
 
-        /// A persistent render target handle.
+        /// A persistent render target handle. Store this frame to frame instead of storing the
+        /// actual images which are transient.
         pub const Handle = enum(u32) {
             _,
 
@@ -160,9 +163,10 @@ pub fn RenderTargetPool(kind: ImageKind) type {
         }
 
         /// Updates the physical extent, recreating all render targets if needed. You must ensure
-        /// that the render targets are not in use before calling this. The recommended approach is
-        /// to use `waitIdle`, recreating render targets is an allocation and as such may take a
-        /// moment anyway.
+        /// that the render targets are not in use before calling this, the recommended approach is
+        /// to use `waitIdle` since recreating render targets may take a moment anyway.
+        ///
+        /// See also `suboptimal`.
         pub fn recreate(
             self: *@This(),
             gx: *Gx,
@@ -188,6 +192,42 @@ pub fn RenderTargetPool(kind: ImageKind) type {
                 const handle: Handle = @enumFromInt(i);
                 handle.init(self, gx);
             }
+        }
+
+        /// Returns true if you should recreate the render targets for the best resizing experience.
+        /// This is not required for correctness, it is a convenient way to balance keeping the
+        /// render targets sized relative to the surface with maintaining a smooth resize
+        /// experience. Recommended usage is to call at the end of your frame after presentation
+        /// since this minimizes the latency introduced when recreate is necessary.
+        pub fn suboptimal(
+            self: *@This(),
+            /// This should be a timer that's reset every time the surface is resized.
+            resize_timer: *std.time.Timer,
+            surface_extent: gpu.Extent2D,
+        ) bool {
+            // Early out if the extent hasn't changed.
+            if (self.physical_extent.eql(surface_extent)) return false;
+
+            // Early out if the extent is 0 sized.
+            if (surface_extent.width == 0 or surface_extent.height == 0) return false;
+
+            // Early out if the window was recently resized since we may be still be in an active
+            // resize and should let it complete, unless the new size is dramatically larger than
+            // the current one. We use a dedicated timer here rather than allow relying on the in
+            // game delta time, since on some platforms (e.g. Windows) the OS takes over control
+            // flow during resizes, which is likely to pause the in game delta time.
+            const scale = @max(
+                surface_extent.width / self.physical_extent.width,
+                surface_extent.height / self.physical_extent.height,
+            );
+            const needs_recreate = scale > 8 or resize_timer.read() > 100000000;
+            if (!needs_recreate) return false;
+
+            // The render target pool should be recreated. We don't do the actual recreate here
+            // since we need to wait for the GPU to idle first, and there may be multiple render
+            // target pools (e.g. one for depth) so we don't want to do the wait internally and end
+            // up with a redundant wait.
+            return true;
         }
     };
 }
