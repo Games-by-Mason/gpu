@@ -427,40 +427,48 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             defer gpa.free(surface_formats);
             for (surface_formats) |surface_format| {
                 var format_rank: u8 = 0;
-                // Regardless of our surface format, the output color space should be srgb.
-                if (surface_format.color_space == .srgb_nonlinear_khr) {
-                    // We require at least three channels of whichever color space is requested
-                    switch (options.surface_format) {
-                        .unorm4x8 => switch (surface_format.format) {
-                            // 100% of Windows devices on vulkan.gpuinfo.org support this format and
-                            // color space.
-                            .b8g8r8a8_unorm => format_rank += 3,
-                            // Some fallbacks since support on Linux is more varied, at least
-                            // according to the database. I suspect that in practice any machine
-                            // capable of running games won't need these fallbacks.
-                            .r8g8b8a8_unorm => format_rank += 2,
-                            .r8g8b8_unorm,
-                            .b8g8r8_unorm,
-                            .a8b8g8r8_unorm_pack32,
-                            => format_rank += 1,
-                            else => {},
-                        },
-                        .srgb4x8 => switch (surface_format.format) {
-                            // 99.89% of Windows devices on vulkan.gpuinfo.org support this format
-                            // and color space.
-                            .b8g8r8a8_srgb => format_rank += 3,
-                            // These should cover the remaining devices. I doubt hardware capable of
-                            // running games exists that doesn't support at least one SRGB surface
-                            // format, if it does then you need to fall back to a linear swapchain
-                            // format and do the conversion yourselves.
-                            .r8g8b8a8_srgb => format_rank += 2,
-                            .r8g8b8_srgb,
-                            .b8g8r8_srgb,
-                            .a8b8g8r8_srgb_pack32,
-                            => format_rank += 1,
-                            else => {},
-                        },
-                    }
+
+                // Regardless of our surface format, the output color space should be srgb
+                if (surface_format.color_space != .srgb_nonlinear_khr) continue;
+
+                // Check that our usage flags are supported. According to vulkan.gpuinfo.org, 100%
+                // of GPUs surveyed support these usages, but we still want to check just in case--
+                // and since it's unclear whether that means every surface supports them or at least
+                // one surface format does.
+                if (!surface_capabilities.supported_usage_flags.color_attachment_bit) continue;
+                if (!surface_capabilities.supported_usage_flags.transfer_dst_bit) continue;
+
+                // We require at least three channels of whichever color space is requested
+                switch (options.surface_format) {
+                    .unorm4x8 => switch (surface_format.format) {
+                        // 100% of Windows devices on vulkan.gpuinfo.org support this format and
+                        // color space.
+                        .b8g8r8a8_unorm => format_rank += 3,
+                        // Some fallbacks since support on Linux is more varied, at least
+                        // according to the database. I suspect that in practice any machine
+                        // capable of running games won't need these fallbacks.
+                        .r8g8b8a8_unorm => format_rank += 2,
+                        .r8g8b8_unorm,
+                        .b8g8r8_unorm,
+                        .a8b8g8r8_unorm_pack32,
+                        => format_rank += 1,
+                        else => {},
+                    },
+                    .srgb4x8 => switch (surface_format.format) {
+                        // 99.89% of Windows devices on vulkan.gpuinfo.org support this format
+                        // and color space.
+                        .b8g8r8a8_srgb => format_rank += 3,
+                        // These should cover the remaining devices. I doubt hardware capable of
+                        // running games exists that doesn't support at least one SRGB surface
+                        // format, if it does then you need to fall back to a linear swapchain
+                        // format and do the conversion yourselves.
+                        .r8g8b8a8_srgb => format_rank += 2,
+                        .r8g8b8_srgb,
+                        .b8g8r8_srgb,
+                        .a8b8g8r8_srgb_pack32,
+                        => format_rank += 1,
+                        else => {},
+                    },
                 }
 
                 if (format_rank > best_surface_format_rank) {
