@@ -2597,6 +2597,13 @@ fn rangeToVk(range: gpu.ImageRange, aspect: gpu.ImageAspect) vk.ImageSubresource
     };
 }
 
+fn accessToVk(access: gpu.Access) vk.AccessFlags2 {
+    return .{
+        .shader_read_bit = access.read,
+        .shader_write_bit = access.write,
+    };
+}
+
 pub fn imageBarrierUndefinedToTransferDst(
     options: gpu.ImageBarrier.UndefinedToTransferDstOptions,
 ) gpu.ImageBarrier {
@@ -2675,10 +2682,7 @@ pub fn imageBarrierColorAttachmentToGeneral(
             .src_stage_mask = .{ .color_attachment_output_bit = true },
             .src_access_mask = .{ .color_attachment_write_bit = true },
             .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
-            .dst_access_mask = .{
-                .shader_read_bit = true,
-                .shader_write_bit = true,
-            },
+            .dst_access_mask = accessToVk(options.dst_access),
             .old_layout = .attachment_optimal,
             .new_layout = .general,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
@@ -2695,10 +2699,7 @@ pub fn imageBarrierGeneralToReadOnly(
     return .{
         .backend = .{
             .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
-            .src_access_mask = .{
-                .shader_read_bit = options.src_access.read,
-                .shader_write_bit = options.src_access.write,
-            },
+            .src_access_mask = accessToVk(options.src_access),
             .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
             .dst_access_mask = .{ .shader_read_bit = true },
             .old_layout = .general,
@@ -2745,6 +2746,23 @@ pub fn imageBarrierColorAttachmentToPresentBlitSrc(
     } };
 }
 
+pub fn imageBarrierGeneralToPresentBlitSrc(
+    options: gpu.ImageBarrier.GeneralToPresentBlitSrcOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
+        .src_access_mask = .{ .shader_write_bit = true },
+        .dst_stage_mask = .{ .blit_bit = true },
+        .dst_access_mask = .{ .transfer_read_bit = true },
+        .old_layout = .general,
+        .new_layout = .transfer_src_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
+    } };
+}
+
 pub fn imageBarrierUndefinedToColorAttachmentAfterPresentBlit(
     options: gpu.ImageBarrier.UndefinedToColorAttachmentAfterPresentBlitOptions,
 ) gpu.ImageBarrier {
@@ -2764,21 +2782,34 @@ pub fn imageBarrierUndefinedToColorAttachmentAfterPresentBlit(
     };
 }
 
+pub fn imageBarrierUndefinedToGeneralAfterPresentBlit(
+    options: gpu.ImageBarrier.UndefinedToGeneralAfterPresentBlitOptions,
+) gpu.ImageBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .blit_bit = true },
+            .src_access_mask = .{},
+            .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+            .dst_access_mask = accessToVk(options.dst_access),
+            .old_layout = .undefined,
+            .new_layout = .general,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, .{ .color = true }),
+        },
+    };
+}
+
 pub fn bufBarrierInit(
     options: gpu.BufBarrier.Options,
 ) gpu.BufBarrier {
     return .{
         .backend = .{
             .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
-            .src_access_mask = .{
-                .shader_read_bit = options.src_access.read,
-                .shader_write_bit = options.src_access.write,
-            },
+            .src_access_mask = accessToVk(options.src_access),
             .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
-            .dst_access_mask = .{
-                .shader_read_bit = options.dst_access.read,
-                .shader_write_bit = options.dst_access.write,
-            },
+            .dst_access_mask = accessToVk(options.dst_access),
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .buffer = options.handle.asBackendType(),

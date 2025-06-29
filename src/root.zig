@@ -1408,6 +1408,7 @@ pub const ImageBarrier = extern struct {
     pub const ColorAttachmentToGeneralOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
+        dst_access: Access,
         dst_stages: ShaderStages,
     };
 
@@ -1416,11 +1417,6 @@ pub const ImageBarrier = extern struct {
     }
 
     pub const GeneralToReadOnlyOptions = struct {
-        pub const Access = packed struct {
-            read: bool = false,
-            write: bool = false,
-        };
-
         handle: ImageHandle,
         range: ImageRange,
         src_stages: ShaderStages,
@@ -1453,6 +1449,17 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierColorAttachmentToPresentBlitSrc(options);
     }
 
+    pub const GeneralToPresentBlitSrcOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        src_stages: ShaderStages,
+    };
+
+    /// See `colorAttachmentToPresentBlitSrc`, similar disclaimer applies here.
+    pub fn generalToPresentBlitSrc(options: GeneralToPresentBlitSrcOptions) @This() {
+        return Backend.imageBarrierGeneralToPresentBlitSrc(options);
+    }
+
     pub const UndefinedToColorAttachmentAfterPresentBlitOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
@@ -1465,17 +1472,32 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierUndefinedToColorAttachmentAfterPresentBlit(options);
     }
 
+    pub const UndefinedToGeneralAfterPresentBlitOptions = struct {
+        handle: ImageHandle,
+        dst_stages: ShaderStages,
+        dst_access: Access,
+        range: ImageRange,
+    };
+
+    /// See `colorAttachmentToPresentBlitSrc`, similar disclaimer applies here.
+    pub fn undefinedToGeneralAfterPresentBlit(
+        options: UndefinedToGeneralAfterPresentBlitOptions,
+    ) @This() {
+        return Backend.imageBarrierUndefinedToGeneralAfterPresentBlit(options);
+    }
+
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+};
+
+pub const Access = packed struct {
+    read: bool = false,
+    write: bool = false,
 };
 
 pub const BufBarrier = extern struct {
     backend: Backend.BufBarrier,
 
     pub const Options = struct {
-        pub const Access = packed struct {
-            read: bool = false,
-            write: bool = false,
-        };
         src_stages: ShaderStages,
         src_access: Access,
         dst_stages: ShaderStages,
