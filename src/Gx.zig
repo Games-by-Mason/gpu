@@ -74,9 +74,9 @@ pub const Options = struct {
 
     /// The default device type ranking.
     pub const default_device_type_ranks = b: {
-        var ranks = std.EnumArray(Device.Kind, u8).initFill(0);
-        ranks.set(.discrete, 2);
-        ranks.set(.integrated, 1);
+        var ranks = std.EnumArray(Device.Kind, u8).initFill(1);
+        ranks.set(.discrete, 3);
+        ranks.set(.integrated, 2);
         break :b ranks;
     };
 
@@ -105,7 +105,8 @@ pub const Options = struct {
     },
     /// The number of frames in flight.
     frames_in_flight: u4,
-    /// The device type rankings.
+    /// The device type rankings. Higher ranked device types are prioritized, rank 0 devices are
+    /// skipped.
     device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
     /// Whether or not to enable timestamp queries.
     timestamp_queries: bool,
