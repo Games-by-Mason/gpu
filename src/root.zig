@@ -880,6 +880,15 @@ pub const GraphicsShaderStage = enum {
     fragment,
 };
 
+pub const ShaderStages = EnumBitSet(ShaderStage);
+
+pub const BarrierStages = packed struct {
+    top_of_pipe: bool = false,
+    vertex: bool = false,
+    fragment: bool = false,
+    compute: bool = false,
+};
+
 fn EnumBitSet(T: type) type {
     const fields = @typeInfo(T).@"enum".fields;
     var struct_fields: [fields.len]std.builtin.Type.StructField = undefined;
@@ -905,8 +914,6 @@ fn nonZero(T: type, self: T) bool {
     const int: Int = @bitCast(self);
     return int != 0;
 }
-
-pub const ShaderStages = EnumBitSet(ShaderStage);
 
 pub const Pipeline = struct {
     handle: Handle,
@@ -1367,6 +1374,7 @@ pub const ImageBarrier = extern struct {
 
     pub const UndefinedToTransferDstOptions = struct {
         handle: ImageHandle,
+        src_stages: BarrierStages,
         range: ImageRange,
         aspect: ImageAspect,
     };
@@ -1377,6 +1385,7 @@ pub const ImageBarrier = extern struct {
 
     pub const UndefinedToColorAttachmentOptions = struct {
         handle: ImageHandle,
+        src_stages: BarrierStages,
         range: ImageRange,
     };
 
@@ -1384,10 +1393,35 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierUndefinedToColorAttachment(options);
     }
 
+    pub const UndefinedToGeneralOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        src_stages: BarrierStages,
+        dst_stages: BarrierStages,
+        dst_access: Access,
+    };
+
+    pub fn undefinedToGeneral(options: UndefinedToGeneralOptions) @This() {
+        return Backend.imageBarrierUndefinedToGeneral(options);
+    }
+
+    pub const GeneralToGeneralOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        src_stages: BarrierStages,
+        src_access: Access,
+        dst_stages: BarrierStages,
+        dst_access: Access,
+    };
+
+    pub fn generalToGeneral(options: GeneralToGeneralOptions) @This() {
+        return Backend.imageBarrierGeneralToGeneral(options);
+    }
+
     pub const TransferDstToReadOnlyOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
-        dst_stages: ShaderStages,
+        dst_stages: BarrierStages,
         aspect: ImageAspect,
     };
 
@@ -1398,7 +1432,7 @@ pub const ImageBarrier = extern struct {
     pub const ColorAttachmentToReadOnlyOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
-        dst_stages: ShaderStages,
+        dst_stages: BarrierStages,
     };
 
     pub fn colorAttachmentToReadOnly(options: ColorAttachmentToReadOnlyOptions) @This() {
@@ -1409,7 +1443,7 @@ pub const ImageBarrier = extern struct {
         handle: ImageHandle,
         range: ImageRange,
         dst_access: Access,
-        dst_stages: ShaderStages,
+        dst_stages: BarrierStages,
     };
 
     pub fn colorAttachmentToGeneral(options: ColorAttachmentToGeneralOptions) @This() {
@@ -1419,14 +1453,27 @@ pub const ImageBarrier = extern struct {
     pub const GeneralToReadOnlyOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
-        src_stages: ShaderStages,
+        src_stages: BarrierStages,
         src_access: Access,
-        dst_stages: ShaderStages,
+        dst_stages: BarrierStages,
         aspect: ImageAspect,
     };
 
     pub fn generalToReadOnly(options: GeneralToReadOnlyOptions) @This() {
         return Backend.imageBarrierGeneralToReadOnly(options);
+    }
+
+    pub const ReadOnlyToGeneralOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        src_stages: BarrierStages,
+        dst_stages: BarrierStages,
+        dst_access: Access,
+        aspect: ImageAspect,
+    };
+
+    pub fn readOnlyToGeneral(options: ReadOnlyToGeneralOptions) @This() {
+        return Backend.imageBarrierReadOnlyToGeneral(options);
     }
 
     pub const ColorAttachmentToTransferSrcOptions = struct {
@@ -1452,7 +1499,7 @@ pub const ImageBarrier = extern struct {
     pub const GeneralToPresentBlitSrcOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
-        src_stages: ShaderStages,
+        src_stages: BarrierStages,
     };
 
     /// See `colorAttachmentToPresentBlitSrc`, similar disclaimer applies here.
@@ -1474,7 +1521,7 @@ pub const ImageBarrier = extern struct {
 
     pub const UndefinedToGeneralAfterPresentBlitOptions = struct {
         handle: ImageHandle,
-        dst_stages: ShaderStages,
+        dst_stages: BarrierStages,
         dst_access: Access,
         range: ImageRange,
     };
@@ -1498,9 +1545,9 @@ pub const BufBarrier = extern struct {
     backend: Backend.BufBarrier,
 
     pub const Options = struct {
-        src_stages: ShaderStages,
+        src_stages: BarrierStages,
         src_access: Access,
-        dst_stages: ShaderStages,
+        dst_stages: BarrierStages,
         dst_access: Access,
         handle: BufHandle(.{}),
     };
@@ -1713,6 +1760,15 @@ pub const CmdBuf = enum(u64) {
         Backend.cmdBufDraw(gx, self, options);
     }
 
+    /// At the time of writing all Windows hardware on vulkan.gpu.info.org supports at least 256
+    /// total work groups (x * y * z) at the time of writing, with the exception of some virtual
+    /// devices that aren't relevant. The individual dimensions also support up to 256, with the
+    /// exception of the z axis which often only supports up to 64.
+    ///
+    /// Details at the time of writing:
+    /// - AMD subgroups have 32 or 64 threads
+    /// - Nvidia subgroups have 32 threads
+    /// - Intel varies, but appears to always be a power of two <= 32
     pub const DispatchOptions = struct {
         x: u32,
         y: u32,

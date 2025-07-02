@@ -2356,6 +2356,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
             .image = &.{
                 .undefinedToTransferDst(.{
                     .handle = .fromBackendType(swapchain_image),
+                    .src_stages = .{ .top_of_pipe = true },
                     .range = .first,
                     .aspect = .{ .color = true },
                 }),
@@ -2578,9 +2579,10 @@ fn shaderStagesToVk(stages: gpu.ShaderStages) vk.ShaderStageFlags {
     };
 }
 
-fn shaderStagesToVkPipelineStages(stages: gpu.ShaderStages) vk.PipelineStageFlags2 {
-    comptime assert(std.meta.fields(gpu.ShaderStages).len == 3); // Update below if this fails!
+fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
+    comptime assert(std.meta.fields(gpu.BarrierStages).len == 4); // Update below if this fails!
     return .{
+        .top_of_pipe_bit = stages.top_of_pipe,
         .vertex_shader_bit = stages.vertex,
         .fragment_shader_bit = stages.fragment,
         .compute_shader_bit = stages.compute,
@@ -2609,7 +2611,7 @@ pub fn imageBarrierUndefinedToTransferDst(
 ) gpu.ImageBarrier {
     return .{
         .backend = .{
-            .src_stage_mask = .{ .top_of_pipe_bit = true },
+            .src_stage_mask = barrierStagesToVk(options.src_stages),
             .src_access_mask = .{},
             .dst_stage_mask = .{ .all_transfer_bit = true },
             .dst_access_mask = .{ .transfer_write_bit = true },
@@ -2627,12 +2629,46 @@ pub fn imageBarrierUndefinedToColorAttachment(
     options: gpu.ImageBarrier.UndefinedToColorAttachmentOptions,
 ) gpu.ImageBarrier {
     return .{ .backend = .{
-        .src_stage_mask = .{ .top_of_pipe_bit = true },
+        .src_stage_mask = barrierStagesToVk(options.src_stages),
         .src_access_mask = .{},
         .dst_stage_mask = .{ .color_attachment_output_bit = true },
         .dst_access_mask = .{ .color_attachment_write_bit = true },
         .old_layout = .undefined,
         .new_layout = .attachment_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
+    } };
+}
+
+pub fn imageBarrierUndefinedToGeneral(
+    options: gpu.ImageBarrier.UndefinedToGeneralOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = barrierStagesToVk(options.src_stages),
+        .src_access_mask = .{},
+        .dst_stage_mask = barrierStagesToVk(options.dst_stages),
+        .dst_access_mask = accessToVk(options.dst_access),
+        .old_layout = .undefined,
+        .new_layout = .general,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range, .{ .color = true }),
+    } };
+}
+
+pub fn imageBarrierGeneralToGeneral(
+    options: gpu.ImageBarrier.GeneralToGeneralOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = barrierStagesToVk(options.src_stages),
+        .src_access_mask = accessToVk(options.src_access),
+        .dst_stage_mask = barrierStagesToVk(options.dst_stages),
+        .dst_access_mask = accessToVk(options.dst_access),
+        .old_layout = .general,
+        .new_layout = .general,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
@@ -2646,7 +2682,7 @@ pub fn imageBarrierTransferDstToReadOnly(
     return .{ .backend = .{
         .src_stage_mask = .{ .copy_bit = true },
         .src_access_mask = .{ .transfer_write_bit = true },
-        .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+        .dst_stage_mask = barrierStagesToVk(options.dst_stages),
         .dst_access_mask = .{ .shader_read_bit = true },
         .old_layout = .transfer_dst_optimal,
         .new_layout = .read_only_optimal,
@@ -2663,7 +2699,7 @@ pub fn imageBarrierColorAttachmentToReadOnly(
     return .{ .backend = .{
         .src_stage_mask = .{ .color_attachment_output_bit = true },
         .src_access_mask = .{ .color_attachment_write_bit = true },
-        .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+        .dst_stage_mask = barrierStagesToVk(options.dst_stages),
         .dst_access_mask = .{ .shader_read_bit = true },
         .old_layout = .attachment_optimal,
         .new_layout = .read_only_optimal,
@@ -2681,7 +2717,7 @@ pub fn imageBarrierColorAttachmentToGeneral(
         .backend = .{
             .src_stage_mask = .{ .color_attachment_output_bit = true },
             .src_access_mask = .{ .color_attachment_write_bit = true },
-            .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
             .dst_access_mask = accessToVk(options.dst_access),
             .old_layout = .attachment_optimal,
             .new_layout = .general,
@@ -2698,12 +2734,31 @@ pub fn imageBarrierGeneralToReadOnly(
 ) gpu.ImageBarrier {
     return .{
         .backend = .{
-            .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
+            .src_stage_mask = barrierStagesToVk(options.src_stages),
             .src_access_mask = accessToVk(options.src_access),
-            .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
             .dst_access_mask = .{ .shader_read_bit = true },
             .old_layout = .general,
             .new_layout = .read_only_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, options.aspect),
+        },
+    };
+}
+
+pub fn imageBarrierReadOnlyToGeneral(
+    options: gpu.ImageBarrier.ReadOnlyToGeneralOptions,
+) gpu.ImageBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = barrierStagesToVk(options.src_stages),
+            .src_access_mask = .{ .shader_read_bit = true },
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
+            .dst_access_mask = accessToVk(options.dst_access),
+            .old_layout = .read_only_optimal,
+            .new_layout = .general,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = options.handle.asBackendType(),
@@ -2750,7 +2805,7 @@ pub fn imageBarrierGeneralToPresentBlitSrc(
     options: gpu.ImageBarrier.GeneralToPresentBlitSrcOptions,
 ) gpu.ImageBarrier {
     return .{ .backend = .{
-        .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
+        .src_stage_mask = barrierStagesToVk(options.src_stages),
         .src_access_mask = .{ .shader_write_bit = true },
         .dst_stage_mask = .{ .blit_bit = true },
         .dst_access_mask = .{ .transfer_read_bit = true },
@@ -2789,7 +2844,7 @@ pub fn imageBarrierUndefinedToGeneralAfterPresentBlit(
         .backend = .{
             .src_stage_mask = .{ .blit_bit = true },
             .src_access_mask = .{},
-            .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
             .dst_access_mask = accessToVk(options.dst_access),
             .old_layout = .undefined,
             .new_layout = .general,
@@ -2806,9 +2861,9 @@ pub fn bufBarrierInit(
 ) gpu.BufBarrier {
     return .{
         .backend = .{
-            .src_stage_mask = shaderStagesToVkPipelineStages(options.src_stages),
+            .src_stage_mask = barrierStagesToVk(options.src_stages),
             .src_access_mask = accessToVk(options.src_access),
-            .dst_stage_mask = shaderStagesToVkPipelineStages(options.dst_stages),
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
             .dst_access_mask = accessToVk(options.dst_access),
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
@@ -3248,7 +3303,7 @@ fn formatDebugMessage(
                     try writer.writeByte('\n');
 
                     try writer.print("\t\t* type: {}\n", .{object.object_type});
-                    try writer.print("\t\t* handle: 0x{x}", .{object.object_handle});
+                    try writer.print("\t\t* handle: 0x{x}\n", .{object.object_handle});
                 }
             }
         }

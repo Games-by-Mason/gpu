@@ -101,6 +101,7 @@ pub fn beginWrite(
     cb.barriers(gx, .{ .image = &.{
         .undefinedToTransferDst(.{
             .handle = image.handle,
+            .src_stages = .{ .top_of_pipe = true },
             .range = .first,
             .aspect = .{ .color = true },
         }),
