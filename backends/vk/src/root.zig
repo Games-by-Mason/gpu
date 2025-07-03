@@ -1314,7 +1314,6 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
         var storage_images: u32 = 0;
         var uniform_buffers: u32 = 0;
         var storage_buffers: u32 = 0;
-        var descriptors: u32 = 0;
 
         for (options.cmds) |cmd| {
             for (cmd.layout_options.descs) |desc| {
@@ -1327,7 +1326,6 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
                     .storage_buffer => storage_buffers += desc.count,
                 }
             }
-            descriptors += @intCast(cmd.layout_options.descs.len);
         }
 
         // Descriptor count must be greater than zero, so skip any that are zero
@@ -3333,30 +3331,40 @@ fn vkDebugCallback(
         break :b .err;
     };
 
-    // Ignore or reduce the severity of some warnings
-    if (level == .warn) {
-        if (data) |d| switch (d.*.message_id_number) {
-            // Ignore `BestPractices-vkCreateDevice-physical-device-features-not-retrieved`, this is
-            // a false positive--we're using `vkGetPhysicalDeviceFeatures2`.
-            584333584 => return vk.FALSE,
-            // Ignore `BestPractices-vkBindBufferMemory-small-dedicated-allocation` and
-            // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering strategy is
-            // designed around this but we often have so little total memory that we trip it anyway!
-            280337739, -40745094 => return vk.FALSE,
-            // Don't warn us that validation is on every time validation is on, but do log it as
-            // debug
-            615892639, 2132353751, 1734198062 => level = .debug,
-            // Don't warn us that the swapchain is out of date, we handle this it's not an
-            // exceptional situation!
-            1762589289 => level = .debug,
-            // Don't warn us about skipping unsupported drivers, but do log it as debug
-            0 => if (d.*.p_message_id_name) |name| {
-                if (std.mem.eql(u8, std.mem.span(name), "Loader Message")) {
-                    level = .debug;
-                }
+    // Change the severity of some messages
+    if (data) |d| {
+        switch (level) {
+            .warn => switch (d.*.message_id_number) {
+                // Ignore `BestPractices-vkCreateDevice-physical-device-features-not-retrieved`, this is
+                // a false positive--we're using `vkGetPhysicalDeviceFeatures2`.
+                584333584 => return vk.FALSE,
+                // Ignore `BestPractices-vkBindBufferMemory-small-dedicated-allocation` and
+                // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering strategy is
+                // designed around this but we often have so little total memory that we trip it anyway!
+                280337739, -40745094 => return vk.FALSE,
+                // Don't warn us that validation is on every time validation is on, but do log it as
+                // debug
+                615892639, 2132353751, 1734198062 => level = .debug,
+                // Don't warn us that the swapchain is out of date, we handle this it's not an
+                // exceptional situation!
+                1762589289 => level = .debug,
+                // Don't warn us about skipping unsupported drivers, but do log it as debug
+                0 => if (d.*.p_message_id_name) |name| {
+                    if (std.mem.eql(u8, std.mem.span(name), "Loader Message")) {
+                        level = .debug;
+                    }
+                },
+                else => {},
+            },
+            .err => switch (d.*.message_id_number) {
+                // False positive `UNASSIGNED-Descriptor destroyed` when we resize the window, see
+                // tracking issue:
+                // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10199
+                -1575303641 => level = .debug,
+                else => {},
             },
             else => {},
-        };
+        }
     }
 
     // Otherwise log them

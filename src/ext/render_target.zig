@@ -27,7 +27,8 @@ const ImageBumpAllocator = gpu.ext.ImageBumpAllocator;
 ///
 /// Image sizes are specified in a virtual coordinate system. For example, you may set up the pool
 /// to have a virtual extent of 1920x1080 and a physical extent of 1920x1080. Under this setup, a
-/// 1920x1080 is surface sized, a 960x540 image is half surface sized.
+/// 1920x1080 is full sized, a 960x540 image is half sized.
+///
 /// Virtual coordinates were chosen over floats ranging from 0 to 1 as this avoids needing to create
 /// entirely new option structs for image creation.
 pub fn RenderTarget(kind: ImageKind) type {
@@ -55,14 +56,14 @@ pub fn RenderTarget(kind: ImageKind) type {
             };
         }
 
-        /// Information on a render target. Invalidated on recreate.
-        pub const Info = struct {
+        /// The current render target state. Invalidated on recreate.
+        pub const State = struct {
             image: Image(kind),
             extent: gpu.Extent2D,
         };
 
-        /// Returns `Info` for this render target.
-        pub fn get(self: @This(), pool: *const Pool) Info {
+        /// Returns `State` for this render target.
+        pub fn get(self: @This(), pool: *const Pool) State {
             return .{
                 .image = pool.images.items[@intFromEnum(self)],
                 .extent = self.extent(pool),
@@ -184,13 +185,15 @@ pub fn RenderTarget(kind: ImageKind) type {
                 self: *@This(),
                 /// This should be a timer that's reset every time the surface is resized.
                 resize_timer: *std.time.Timer,
-                surface_extent: gpu.Extent2D,
+                /// The physical extent the virtual coordinate system should scale for. This is
+                /// typically set to the platform's surface extent, but it doesn't have to be.
+                physical_extent: gpu.Extent2D,
             ) bool {
                 // Early out if the extent hasn't changed.
-                if (self.physical_extent.eql(surface_extent)) return false;
+                if (self.physical_extent.eql(physical_extent)) return false;
 
                 // Early out if the extent is 0 sized.
-                if (surface_extent.width == 0 or surface_extent.height == 0) return false;
+                if (physical_extent.width == 0 or physical_extent.height == 0) return false;
 
                 // Early out if the window was recently resized since we may be still be in an active
                 // resize and should let it complete, unless the new size is dramatically larger than
@@ -198,8 +201,8 @@ pub fn RenderTarget(kind: ImageKind) type {
                 // game delta time, since on some platforms (e.g. Windows) the OS takes over control
                 // flow during resizes, which is likely to pause the in game delta time.
                 const scale = @max(
-                    surface_extent.width / self.physical_extent.width,
-                    surface_extent.height / self.physical_extent.height,
+                    physical_extent.width / self.physical_extent.width,
+                    physical_extent.height / self.physical_extent.height,
                 );
                 const needs_recreate = scale > 8 or resize_timer.read() > 100000000;
                 if (!needs_recreate) return false;
