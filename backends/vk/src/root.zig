@@ -1259,19 +1259,40 @@ pub fn cmdBufBindPipeline(
 pub fn cmdBufBindDescSet(
     self: *Gx,
     cb: gpu.CmdBuf,
-    pipeline: gpu.Pipeline,
-    set: gpu.DescSet,
+    options: gpu.CmdBuf.BindDescSetOptions,
 ) void {
-    self.backend.device.cmdBindDescriptorSets(
-        cb.asBackendType(),
-        pipelineKindToVk(pipeline.kind),
-        pipeline.layout.asBackendType(),
-        0,
-        1,
-        &.{set.asBackendType()},
-        0,
-        &[0]u32{},
-    );
+    // If this assertion fails, we need to update the code below
+    comptime assert(std.meta.fields(gpu.CmdBuf.BindDescSetOptions.BindPoints).len == 2);
+
+    // Once we adopt Vulkan 1.4, this can be done in a single API call. We probably shouldn't adopt
+    // the per-stage binding however unless DX12 supports it.
+    {
+        if (options.bind_points.graphics) {
+            self.backend.device.cmdBindDescriptorSets(
+                cb.asBackendType(),
+                .graphics,
+                options.layout.asBackendType(),
+                0,
+                1,
+                &.{options.set.asBackendType()},
+                0,
+                &[0]u32{},
+            );
+        }
+
+        if (options.bind_points.compute) {
+            self.backend.device.cmdBindDescriptorSets(
+                cb.asBackendType(),
+                .compute,
+                options.layout.asBackendType(),
+                0,
+                1,
+                &.{options.set.asBackendType()},
+                0,
+                &[0]u32{},
+            );
+        }
+    }
 }
 
 pub fn cmdBufEnd(self: *Gx, cb: gpu.CmdBuf) void {

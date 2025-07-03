@@ -1701,15 +1701,18 @@ pub const CmdBuf = enum(u64) {
         Backend.cmdBufBindPipeline(gx, self, pipeline);
     }
 
-    pub fn bindDescSet(
-        self: @This(),
-        gx: *Gx,
-        pipeline: Pipeline,
+    pub const BindDescSetOptions = struct {
+        pub const BindPoints = EnumBitSet(Pipeline.Kind);
+
+        bind_points: BindPoints,
+        layout: Pipeline.Layout.Handle,
         set: DescSet,
-    ) void {
+    };
+
+    pub fn bindDescSet(self: @This(), gx: *Gx, options: BindDescSetOptions) void {
         const zone = Zone.begin(.{ .src = @src() });
         defer zone.end();
-        Backend.cmdBufBindDescSet(gx, self, pipeline, set);
+        Backend.cmdBufBindDescSet(gx, self, options);
     }
 
     pub const PushConstantSliceOptions = struct {
