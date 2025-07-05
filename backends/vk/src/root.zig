@@ -2674,7 +2674,7 @@ pub fn imageBarrierUndefinedToGeneral(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, .{ .color = true }),
+        .subresource_range = rangeToVk(options.range, options.aspect),
     } };
 }
 
@@ -2691,7 +2691,7 @@ pub fn imageBarrierGeneralToGeneral(
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, .{ .color = true }),
+        .subresource_range = rangeToVk(options.range, options.aspect),
     } };
 }
 

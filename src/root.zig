@@ -1399,6 +1399,7 @@ pub const ImageBarrier = extern struct {
         src_stages: BarrierStages,
         dst_stages: BarrierStages,
         dst_access: Access,
+        aspect: ImageAspect,
     };
 
     pub fn undefinedToGeneral(options: UndefinedToGeneralOptions) @This() {
@@ -1412,6 +1413,7 @@ pub const ImageBarrier = extern struct {
         src_access: Access,
         dst_stages: BarrierStages,
         dst_access: Access,
+        aspect: ImageAspect,
     };
 
     pub fn generalToGeneral(options: GeneralToGeneralOptions) @This() {
