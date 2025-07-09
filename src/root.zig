@@ -1720,7 +1720,7 @@ pub const CmdBuf = enum(u64) {
     pub const PushConstantSliceOptions = struct {
         pipeline_layout: Pipeline.Layout.Handle,
         stages: ShaderStages,
-        offset: u32,
+        offset: u32 = 0,
         data: []const u32,
     };
 
@@ -1728,11 +1728,27 @@ pub const CmdBuf = enum(u64) {
         Backend.cmdBufPushConstants(gx, self, options);
     }
 
+    pub fn pushConstantField(
+        self: @This(),
+        T: type,
+        comptime field_name: []const u8,
+        gx: *Gx,
+        options: PushConstantOptions(@FieldType(T, field_name)),
+    ) void {
+        _ = extern struct { extern_type: @TypeOf(options.data.*) };
+        Backend.cmdBufPushConstants(gx, self, .{
+            .pipeline_layout = options.pipeline_layout,
+            .stages = options.stages,
+            .offset = options.offset + @offsetOf(T, field_name),
+            .data = @ptrCast(std.mem.asBytes(options.data)),
+        });
+    }
+
     pub fn PushConstantOptions(T: type) type {
         return struct {
             pipeline_layout: Pipeline.Layout.Handle,
             stages: ShaderStages,
-            offset: u32,
+            offset: u32 = 0,
             data: *const T,
         };
     }
