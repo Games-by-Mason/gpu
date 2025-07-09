@@ -915,29 +915,25 @@ fn nonZero(T: type, self: T) bool {
     return int != 0;
 }
 
-pub const Pipeline = struct {
-    handle: Handle,
-    layout: Layout.Handle,
-    kind: Kind,
+pub const BindPoint = enum {
+    graphics,
+    compute,
+};
 
-    pub const Kind = enum {
-        graphics,
-        compute,
-    };
+pub const BindPoints = EnumBitSet(BindPoint);
 
-    pub const Handle = enum(u64) {
-        _,
+pub const Pipeline = enum(u64) {
+    _,
 
-        pub inline fn fromBackendType(value: Backend.Pipeline) @This() {
-            comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(value));
-        }
+    pub inline fn fromBackendType(value: Backend.Pipeline) @This() {
+        comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(value));
+    }
 
-        pub inline fn asBackendType(self: @This()) Backend.Pipeline {
-            comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
-            return @enumFromInt(@intFromEnum(self));
-        }
-    };
+    pub inline fn asBackendType(self: @This()) Backend.Pipeline {
+        comptime assert(@sizeOf(Backend.Pipeline) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(self));
+    }
 
     pub const InitGraphicsCmd = struct {
         pub const Stages = std.enums.EnumFieldStruct(GraphicsShaderStage, ShaderModule, null);
@@ -1694,19 +1690,22 @@ pub const CmdBuf = enum(u64) {
         Backend.cmdBufEnd(gx, self);
     }
 
+    pub const BindPipelineOptions = struct {
+        bind_point: BindPoint,
+        pipeline: Pipeline,
+    };
+
     pub fn bindPipeline(
         self: @This(),
         gx: *Gx,
-        pipeline: Pipeline,
+        options: BindPipelineOptions,
     ) void {
         const zone = Zone.begin(.{ .src = @src() });
         defer zone.end();
-        Backend.cmdBufBindPipeline(gx, self, pipeline);
+        Backend.cmdBufBindPipeline(gx, self, options);
     }
 
     pub const BindDescSetOptions = struct {
-        pub const BindPoints = EnumBitSet(Pipeline.Kind);
-
         bind_points: BindPoints,
         layout: Pipeline.Layout.Handle,
         set: DescSet,

@@ -1237,22 +1237,18 @@ pub fn cmdBufSetScissor(
     }});
 }
 
-fn pipelineKindToVk(self: gpu.Pipeline.Kind) vk.PipelineBindPoint {
+fn bindPointToVk(self: gpu.BindPoint) vk.PipelineBindPoint {
     return switch (self) {
         .graphics => .graphics,
         .compute => .compute,
     };
 }
 
-pub fn cmdBufBindPipeline(
-    self: *Gx,
-    cb: gpu.CmdBuf,
-    pipeline: gpu.Pipeline,
-) void {
+pub fn cmdBufBindPipeline(self: *Gx, cb: gpu.CmdBuf, options: gpu.CmdBuf.BindPipelineOptions) void {
     self.backend.device.cmdBindPipeline(
         cb.asBackendType(),
-        pipelineKindToVk(pipeline.kind),
-        pipeline.handle.asBackendType(),
+        bindPointToVk(options.bind_point),
+        options.pipeline.asBackendType(),
     );
 }
 
@@ -1262,7 +1258,7 @@ pub fn cmdBufBindDescSet(
     options: gpu.CmdBuf.BindDescSetOptions,
 ) void {
     // If this assertion fails, we need to update the code below
-    comptime assert(std.meta.fields(gpu.CmdBuf.BindDescSetOptions.BindPoints).len == 2);
+    comptime assert(std.meta.fields(gpu.BindPoints).len == 2);
 
     // Once we adopt Vulkan 1.4, this can be done in a single API call. We probably shouldn't adopt
     // the per-stage binding however unless DX12 supports it.
@@ -2024,7 +2020,7 @@ pub fn memoryDestroy(self: *Gx, memory: gpu.MemoryHandle) void {
 }
 
 pub fn pipelineDestroy(self: *Gx, pipeline: gpu.Pipeline) void {
-    self.backend.device.destroyPipeline(pipeline.handle.asBackendType(), null);
+    self.backend.device.destroyPipeline(pipeline.asBackendType(), null);
 }
 
 pub fn shaderModuleCreate(self: *Gx, options: gpu.ShaderModule.Options) gpu.ShaderModule {
@@ -2217,11 +2213,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
     }
     for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
         setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.name);
-        cmd.result.* = .{
-            .layout = cmd.layout.handle,
-            .handle = .fromBackendType(pipeline),
-            .kind = .graphics,
-        };
+        cmd.result.* = .fromBackendType(pipeline);
     }
 }
 
@@ -2256,11 +2248,7 @@ pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeC
     }
     for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
         setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.name);
-        cmd.result.* = .{
-            .layout = cmd.layout.handle,
-            .handle = .fromBackendType(pipeline),
-            .kind = .compute,
-        };
+        cmd.result.* = .fromBackendType(pipeline);
     }
 }
 
