@@ -1064,7 +1064,8 @@ pub const Pipeline = struct {
                 partially_bound: bool,
             };
 
-            /// A range of push constant data.
+            /// A range of push constant data. All Windows devices at the time of writing support at
+            /// least 128 bytes of push constant data.
             ///
             /// Some APIs (e.g. Vulkan) allow setting the offset and size of each push constant
             /// range separately, whereas others like DX12 only allow you to specify non-overlapping
