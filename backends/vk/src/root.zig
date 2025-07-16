@@ -3175,13 +3175,24 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
     setName(self.debug_messenger, self.device, self.swapchain, .{ .str = "Main" });
     assert(self.swapchain_images.len == 0);
     assert(self.swapchain_views.len == 0);
-    var image_count: u32 = max_swapchain_images;
+    // It looks like we could technically just set the count to `max_swapchain_images` and not have
+    // to call this twice, but this leads to best practice validation warnings so we just follow the
+    // expected pattern here.
+    var image_count: u32 = 0;
+    const get_images_count_result = self.device.getSwapchainImagesKHR(
+        self.swapchain,
+        &image_count,
+        null,
+    ) catch |err| @panic(@errorName(err));
+    if (get_images_count_result != .success) @panic(@tagName(get_images_count_result));
+    if (image_count > max_swapchain_images) @panic("too many swap chain images");
     const get_images_result = self.device.getSwapchainImagesKHR(
         self.swapchain,
         &image_count,
         &self.swapchain_images.buffer,
     ) catch |err| @panic(@errorName(err));
     self.swapchain_images.len = image_count;
+    assert(self.swapchain_images.len <= self.swapchain_images.buffer.len);
     if (get_images_result != .success) @panic(@tagName(get_images_result));
     for (self.swapchain_images.constSlice(), 0..) |handle, i| {
         setName(self.debug_messenger, self.device, handle, .{ .str = "Swapchain", .index = i });
@@ -3353,7 +3364,7 @@ fn vkDebugCallback(
                 280337739, -40745094 => return vk.FALSE,
                 // Don't warn us that validation is on every time validation is on, but do log it as
                 // debug
-                615892639, 2132353751, 1734198062 => level = .debug,
+                615892639, 2132353751, 1734198062, -2111305990 => level = .debug,
                 // Don't warn us that the swapchain is out of date, we handle this it's not an
                 // exceptional situation!
                 1762589289 => level = .debug,
