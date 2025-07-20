@@ -21,6 +21,10 @@ Work in progress, not yet usable. Check back soon.
 * Mobile/web support are not a priority.
 	* There's nothing stopping you from writing a mobile or web backend, but these platforms are not factored into the API design. As such, you may have to emulate features that these platforms are late to adopt.
 
+## Troubleshooting
+
+LunarG provides validation layers for Vulkan which are enabled by default for debug builds. You may want to disable these in the init options if they're too slow on your setup. If you're getting crashes in the validation layers, make sure your SDK is up to date--I recommend getting them directly from LunarG as some package managers update them very infrequently.
+
 # Backends
 
 A Vulkan backend is provided in-repo for the time being. Vulkan was chosen because it's generally the strictest of the relevant APIs, and supports largest number of relevant platforms: Windows, Linux, and Switch.

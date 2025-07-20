@@ -102,7 +102,7 @@ const DeviceFeatures = struct {
     fn initRequired(self: *@This(), options: InitRequiredOptions) void {
         self.initEmpty();
 
-        // 100% of Windows and Linux devices in `vulkan.gpuinfo.org` support these features at the
+        // >99% of Windows and Linux devices in `vulkan.gpuinfo.org` support these features at the
         // time of writing.
         self.vk12.host_query_reset = @intFromBool(options.host_query_reset);
         self.vk13.synchronization_2 = vk.TRUE;
@@ -2179,6 +2179,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
         };
 
         pipeline_infos.appendAssumeCapacity(.{
+            .flags = .{},
             .stage_count = @intCast(shader_stages_slice.len),
             .p_stages = shader_stages_slice.ptr,
             .p_vertex_input_state = &vertex_input,

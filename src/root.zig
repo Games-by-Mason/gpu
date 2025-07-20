@@ -9,6 +9,7 @@ const BufView = @import("buf_view.zig").BufView;
 const Backend = global_options.Backend;
 const TracyQueue = tracy.GpuQueue;
 const Zone = tracy.Zone;
+const log = std.log.scoped(.gpu);
 
 pub const tracy = @import("tracy");
 
@@ -967,6 +968,7 @@ pub const Pipeline = enum(u64) {
     ) void {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
+        log.debug("Pipeline.initGraphics ({})", .{cmds.len});
         if (std.debug.runtime_safety) {
             assert(cmds.len < global_options.init_pipelines_buf_len);
             for (cmds) |cmd| {
@@ -976,6 +978,7 @@ pub const Pipeline = enum(u64) {
             }
         }
         Backend.pipelinesCreateGraphics(gx, cmds);
+        log.debug("Pipeline.initGraphics: success", .{});
     }
 
     pub const InitComputeCmd = struct {
@@ -991,7 +994,9 @@ pub const Pipeline = enum(u64) {
     ) void {
         const zone = tracy.Zone.begin(.{ .src = @src() });
         defer zone.end();
+        log.debug("Pipeline.initCompute ({})", .{cmds.len});
         Backend.pipelinesCreateCompute(gx, cmds);
+        log.debug("Pipeline.initCompute: success", .{});
     }
 
     pub fn deinit(self: @This(), gx: *Gx) void {
