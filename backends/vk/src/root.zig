@@ -156,6 +156,66 @@ const DeviceFeatures = struct {
     }
 };
 
+/// We'd rather just have an array list of required extensions. Unfortunately, the calibrated
+/// timestamps extension has two different names, and in the wild relevant devices sometimes support
+/// only one or the other, so we need more logic here. If enough devices move to the KHR name
+/// eventually then we can replace this whole thing with a simpl array list.
+const DeviceExts = struct {
+    pub const List = std.BoundedArray([*:0]const u8, 2);
+
+    khr_swapchain: bool = false,
+    khr_calibrated_timestamps: bool = false,
+    ext_calibrated_timestamps: bool = false,
+
+    fn add(self: *@This(), name_buf: *const [vk.MAX_EXTENSION_NAME_SIZE]u8) void {
+        const name: []const u8 = std.mem.span(@as([*:0]const u8, @ptrCast(name_buf[0..].ptr)));
+        inline for (@typeInfo(@This()).@"struct".fields) |field| {
+            if (std.mem.eql(u8, name, @field(vk.extensions, field.name).name)) {
+                @field(self, field.name) = true;
+            }
+        }
+    }
+
+    fn list(self: @This(), timestamp_queries: bool) ?List {
+        var result: List = .{};
+
+        if (self.khr_swapchain) {
+            result.appendAssumeCapacity(vk.extensions.khr_swapchain.name);
+        } else {
+            return null;
+        }
+
+        if (timestamp_queries) {
+            if (self.khr_calibrated_timestamps) {
+                result.appendAssumeCapacity(vk.extensions.khr_calibrated_timestamps.name);
+            } else if (self.ext_calibrated_timestamps) {
+                result.appendAssumeCapacity(vk.extensions.ext_calibrated_timestamps.name);
+            } else {
+                return null;
+            }
+        }
+
+        return result;
+    }
+
+    const GetCalibratedTimestampsFn = fn (
+        self: vk.DeviceProxy,
+        timestamp_count: u32,
+        p_timestamp_infos: [*]const vk.CalibratedTimestampInfoKHR,
+        p_timestamps: [*]u64,
+    ) vk.DeviceProxy.GetCalibratedTimestampsKHRError!u64;
+
+    fn getGetCalibratedTimestampsFn(self: @This()) ?*const GetCalibratedTimestampsFn {
+        if (self.khr_calibrated_timestamps) {
+            return &vk.DeviceProxy.getCalibratedTimestampsKHR;
+        } else if (self.ext_calibrated_timestamps) {
+            return &vk.DeviceProxy.getCalibratedTimestampsEXT;
+        } else {
+            return null;
+        }
+    }
+};
+
 pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
@@ -346,13 +406,6 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     defer gpa.free(physical_devices);
 
     var best_physical_device: PhysicalDevice = .{};
-    var required_device_extensions: std.ArrayListUnmanaged([*:0]const u8) = .{};
-    defer required_device_extensions.deinit(gpa);
-    required_device_extensions.append(gpa, vk.extensions.khr_swapchain.name) catch @panic("OOM");
-    if (options.timestamp_queries) {
-        required_device_extensions.append(gpa, vk.extensions.khr_calibrated_timestamps.name) catch @panic("OOM");
-    }
-    log.debug("Required Device Extensions: {s}", .{required_device_extensions.items});
 
     log.info("All Devices:", .{});
     for (physical_devices, 0..) |device, i| {
@@ -399,19 +452,16 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         } else null;
         log.debug("\t* queue family index: {?}", .{queue_family_index});
 
-        var missing_device_extensions: std.StringHashMapUnmanaged(void) = .{};
-        defer missing_device_extensions.deinit(gpa);
-        for (required_device_extensions.items) |required| missing_device_extensions.put(gpa, std.mem.span(required), {}) catch |err| @panic(@errorName(err));
-
+        var device_exts: DeviceExts = .{};
         const supported_device_extensions = instance_proxy.enumerateDeviceExtensionPropertiesAlloc(device, null, gpa) catch |err| @panic(@errorName(err));
         defer gpa.free(supported_device_extensions);
         for (supported_device_extensions) |extension_properties| {
-            const name: [*c]const u8 = @ptrCast(extension_properties.extension_name[0..]);
-            _ = missing_device_extensions.remove(std.mem.span(name));
+            device_exts.add(&extension_properties.extension_name);
         }
-        const extensions_supported = missing_device_extensions.count() == 0;
 
-        const surface_capabilities, const surface_format, const present_mode = if (extensions_supported) b: {
+        const device_ext_list = device_exts.list(options.timestamp_queries);
+
+        const surface_capabilities, const surface_format, const present_mode = if (device_ext_list != null) b: {
             const surface_capabilities = instance_proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(
                 device,
                 surface,
@@ -494,13 +544,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
 
         log.debug("\t* present mode: {?}", .{present_mode});
         log.debug("\t* surface format: {?}", .{surface_format});
-        if (!extensions_supported) {
-            log.debug("\t* missing extensions:", .{});
-            var key_iterator = missing_device_extensions.keyIterator();
-            while (key_iterator.next()) |key| {
-                log.debug("  \t* {s}", .{key.*});
-            }
-        }
+        log.debug("\t* device extensions: {}", .{device_exts});
 
         const composite_alpha: ?vk.CompositeAlphaFlagsKHR = b: {
             if (surface_capabilities) |sc| {
@@ -524,7 +568,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         const device_version: vk.Version = @bitCast(properties.api_version);
         const version_compatible = device_version.variant == vk_version.variant and
             @as(u32, @bitCast(device_version)) >= @as(u32, @bitCast(vk_version));
-        const compatible = version_compatible and queue_family_index != null and extensions_supported and composite_alpha != null and supports_required_features;
+        const compatible = version_compatible and queue_family_index != null and device_ext_list != null and composite_alpha != null and supports_required_features;
 
         if (compatible) {
             log.debug("\t* rank: {}", .{rank});
@@ -558,6 +602,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                 .sampler_anisotropy = features.vk10.features.sampler_anisotropy == vk.TRUE,
                 .max_sampler_anisotropy = properties.limits.max_sampler_anisotropy,
                 .queue_family_index = queue_family_index.?,
+                .device_exts = device_exts,
             };
             // Separate line to work around partial assignment on continue
             best_physical_device = new;
@@ -593,12 +638,13 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         .host_query_reset = options.timestamp_queries,
         .sampler_anisotropy = best_physical_device.sampler_anisotropy,
     });
+    const device_exts = best_physical_device.device_exts.list(options.timestamp_queries).?;
     const device_create_info: vk.DeviceCreateInfo = .{
         .p_queue_create_infos = &queue_create_infos,
         .queue_create_info_count = @intCast(queue_create_infos.len),
         .p_enabled_features = null,
-        .enabled_extension_count = @intCast(required_device_extensions.items.len),
-        .pp_enabled_extension_names = required_device_extensions.items.ptr,
+        .enabled_extension_count = @intCast(device_exts.constSlice().len),
+        .pp_enabled_extension_names = device_exts.constSlice().ptr,
         .p_next = features.root(),
     };
     const device_handle = instance_proxy.createDevice(
@@ -700,7 +746,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         .p_initial_data = null,
     }, null) catch |err| @panic(@errorName(err));
 
-    const calibration: TimestampCalibration = .init(device, options.timestamp_queries);
+    const calibration: TimestampCalibration = .init(best_physical_device.device_exts, device, options.timestamp_queries);
     const tracy_queue = TracyQueue.init(.{
         .gpu_time = calibration.gpu,
         .period = timestamp_period,
@@ -2551,14 +2597,16 @@ pub const TimestampCalibration = struct {
     gpu: u64,
     max_deviation: u64,
 
-    fn init(device: vk.DeviceProxy, timestamp_queries: bool) TimestampCalibration {
+    fn init(device_exts: DeviceExts, device: vk.DeviceProxy, timestamp_queries: bool) TimestampCalibration {
         if (!timestamp_queries) return .{
             .cpu = 0,
             .gpu = 0,
             .max_deviation = 0,
         };
         var calibration_results: [2]u64 = undefined;
-        const max_deviation = device.getCalibratedTimestampsKHR(
+        const getCalibratedTimestamps = device_exts.getGetCalibratedTimestampsFn().?;
+        const max_deviation = getCalibratedTimestamps(
+            device,
             2,
             &.{
                 .{ .time_domain = switch (builtin.os.tag) {
@@ -3232,6 +3280,7 @@ const PhysicalDevice = struct {
     sampler_anisotropy: bool = undefined,
     max_sampler_anisotropy: f32 = undefined,
     queue_family_index: u32 = undefined,
+    device_exts: DeviceExts = undefined,
 };
 
 const TimestampQueries = struct {
