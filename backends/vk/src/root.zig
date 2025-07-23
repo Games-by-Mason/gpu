@@ -3424,6 +3424,11 @@ fn vkDebugCallback(
                         level = .debug;
                     }
                 },
+                // Don't warn us about functions that return errors. This could be useful, but it leads to
+                // false positives and Zig forces us to handle errors anyway. The false positive I hit is on
+                // an Intel UHD GPU and occurs during device creation, presumably internally something calls
+                // `vkGetPhysicalDeviceImageFormatProperties2`.
+                1405170735 => level = .debug,
                 else => {},
             },
             .err => switch (d.*.message_id_number) {
