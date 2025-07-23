@@ -48,10 +48,36 @@ pub const Extent2D = extern struct {
     }
 };
 
+pub const Volume = struct {
+    min: Offset3D,
+    max: Offset3D,
+    pub fn fromExtent2D(extent: Extent2D) @This() {
+        return .{
+            .min = .zero,
+            .max = .{
+                .x = @intCast(extent.width),
+                .y = @intCast(extent.height),
+                .z = 1,
+            },
+        };
+    }
+};
+
 pub const Offset2D = extern struct {
     pub const zero: @This() = .{ .x = 0, .y = 0 };
     x: i32,
     y: i32,
+
+    pub fn eql(self: @This(), other: @This()) bool {
+        return std.meta.eql(self, other);
+    }
+};
+
+pub const Offset3D = extern struct {
+    pub const zero: @This() = .{ .x = 0, .y = 0, .z = 0 };
+    x: i32,
+    y: i32,
+    z: i32,
 
     pub fn eql(self: @This(), other: @This()) bool {
         return std.meta.eql(self, other);
@@ -1489,52 +1515,115 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierColorAttachmentToTransferSrc(options);
     }
 
-    pub const ColorAttachmentToPresentBlitSrcOptions = struct {
+    pub const ColorAttachmentToBlitSrcOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
     };
 
-    /// This may not be a "real" layout, for example in the Vulkan backend this currently uses the
-    /// transfer source layout but with a specific flag/access setup.
-    pub fn colorAttachmentToPresentBlitSrc(options: ColorAttachmentToPresentBlitSrcOptions) @This() {
-        return Backend.imageBarrierColorAttachmentToPresentBlitSrc(options);
+    /// This may not be a "real" layout if the backend manually implements blitting.
+    pub fn colorAttachmentToBlitSrc(options: ColorAttachmentToBlitSrcOptions) @This() {
+        return Backend.imageBarrierColorAttachmentToBlitSrc(options);
     }
 
-    pub const GeneralToPresentBlitSrcOptions = struct {
+    pub const GeneralToBlitSrcOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
         src_stages: BarrierStages,
+        aspect: ImageAspect,
     };
 
-    /// See `colorAttachmentToPresentBlitSrc`, similar disclaimer applies here.
-    pub fn generalToPresentBlitSrc(options: GeneralToPresentBlitSrcOptions) @This() {
-        return Backend.imageBarrierGeneralToPresentBlitSrc(options);
+    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
+    pub fn generalToBlitSrc(options: GeneralToBlitSrcOptions) @This() {
+        return Backend.imageBarrierGeneralToBlitSrc(options);
     }
 
-    pub const UndefinedToColorAttachmentAfterPresentBlitOptions = struct {
+    pub const BlitSrcToReadOnlyOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        dst_stages: BarrierStages,
+        aspect: ImageAspect,
+    };
+
+    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
+    pub fn blitSrcToReadOnly(options: BlitSrcToReadOnlyOptions) @This() {
+        return Backend.imageBarrierBlitSrcToReadOnly(options);
+    }
+
+    pub const BlitSrcToGeneralOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        dst_stages: BarrierStages,
+        dst_access: Access,
+        aspect: ImageAspect,
+    };
+
+    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
+    pub fn blitSrcToGeneral(options: BlitSrcToGeneralOptions) @This() {
+        return Backend.imageBarrierBlitSrcToGeneral(options);
+    }
+
+    pub const BlitDstToReadOnlyOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        dst_stages: BarrierStages,
+        aspect: ImageAspect,
+    };
+
+    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
+    pub fn blitDstToReadOnly(options: BlitDstToReadOnlyOptions) @This() {
+        return Backend.imageBarrierBlitDstToReadOnly(options);
+    }
+
+    pub const BlitDstToGeneralOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        dst_stages: BarrierStages,
+        dst_access: Access,
+        aspect: ImageAspect,
+    };
+
+    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
+    pub fn blitDstToGeneral(options: BlitDstToGeneralOptions) @This() {
+        return Backend.imageBarrierBlitDstToGeneral(options);
+    }
+
+    pub const UndefinedToBlitDstOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        src_stages: BarrierStages,
+        aspect: ImageAspect,
+    };
+
+    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
+    pub fn undefinedToBlitDst(options: UndefinedToBlitDstOptions) @This() {
+        return Backend.imageBarrierUndefinedToBlitDst(options);
+    }
+
+    pub const UndefinedToColorAttachmentAfterBlitOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
     };
 
-    /// See `colorAttachmentToPresentBlitSrc`, similar disclaimer applies here.
-    pub fn undefinedToColorAttachmentAfterPresentBlit(
-        options: UndefinedToColorAttachmentAfterPresentBlitOptions,
+    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
+    pub fn undefinedToColorAttachmentAfterBlit(
+        options: UndefinedToColorAttachmentAfterBlitOptions,
     ) @This() {
-        return Backend.imageBarrierUndefinedToColorAttachmentAfterPresentBlit(options);
+        return Backend.imageBarrierUndefinedToColorAttachmentAfterBlit(options);
     }
 
-    pub const UndefinedToGeneralAfterPresentBlitOptions = struct {
+    pub const UndefinedToGeneralAfterBlitOptions = struct {
         handle: ImageHandle,
         dst_stages: BarrierStages,
         dst_access: Access,
         range: ImageRange,
+        aspect: ImageAspect,
     };
 
-    /// See `colorAttachmentToPresentBlitSrc`, similar disclaimer applies here.
-    pub fn undefinedToGeneralAfterPresentBlit(
-        options: UndefinedToGeneralAfterPresentBlitOptions,
+    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
+    pub fn undefinedToGeneralAfterBlit(
+        options: UndefinedToGeneralAfterBlitOptions,
     ) @This() {
-        return Backend.imageBarrierUndefinedToGeneralAfterPresentBlit(options);
+        return Backend.imageBarrierUndefinedToGeneralAfterBlit(options);
     }
 
     pub const asBackendSlice = AsBackendSlice(@This()).mixin;
@@ -1856,6 +1945,41 @@ pub const CmdBuf = enum(u64) {
             options.src.as(.{}),
             options.regions,
         );
+    }
+
+    pub const BlitOptions = struct {
+        pub const Region = struct {
+            pub const Options = struct {
+                pub const Subresource = struct {
+                    mip_level: u32,
+                    base_array_layer: u32,
+                    array_layers: u32,
+                    volume: Volume,
+                };
+                src: Subresource,
+                dst: Subresource,
+                aspect: ImageAspect,
+            };
+
+            backend: Backend.BlitRegion,
+
+            pub fn init(options: @This().Options) @This() {
+                return Backend.blitRegionInit(options);
+            }
+
+            pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+        };
+
+        src: ImageHandle,
+        dst: ImageHandle,
+        regions: []const Region,
+        filter: ImageFilter,
+    };
+
+    pub fn blit(self: @This(), gx: *Gx, options: BlitOptions) void {
+        const zone = Zone.begin(.{ .src = @src() });
+        defer zone.end();
+        Backend.cmdBufBlit(gx, self, options);
     }
 
     pub fn beginZone(self: @This(), gx: *Gx, comptime loc: tracy.SourceLocation.InitOptions) void {

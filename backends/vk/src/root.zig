@@ -2418,53 +2418,26 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         });
 
         // Perform the blit
-        self.backend.device.cmdBlitImage(
-            cb.asBackendType(),
-            present.handle.asBackendType(),
-            .transfer_src_optimal,
-            swapchain_image,
-            .transfer_dst_optimal,
-            1,
-            &.{.{
-                .src_subresource = .{
-                    .aspect_mask = .{ .color_bit = true },
+        cb.blit(self, .{
+            .src = .fromBackendType(present.handle.asBackendType()),
+            .dst = .fromBackendType(swapchain_image),
+            .regions = &.{.init(.{
+                .src = .{
                     .mip_level = 0,
                     .base_array_layer = 0,
-                    .layer_count = 1,
+                    .array_layers = 1,
+                    .volume = .fromExtent2D(present.src_extent),
                 },
-                .src_offsets = .{
-                    .{
-                        .x = 0,
-                        .y = 0,
-                        .z = 0,
-                    },
-                    .{
-                        .x = @intCast(present.src_extent.width),
-                        .y = @intCast(present.src_extent.height),
-                        .z = 1,
-                    },
-                },
-                .dst_subresource = .{
-                    .aspect_mask = .{ .color_bit = true },
+                .dst = .{
                     .mip_level = 0,
                     .base_array_layer = 0,
-                    .layer_count = 1,
+                    .array_layers = 1,
+                    .volume = .fromExtent2D(self.backend.swapchain_extent),
                 },
-                .dst_offsets = .{
-                    .{
-                        .x = 0,
-                        .y = 0,
-                        .z = 0,
-                    },
-                    .{
-                        .x = @intCast(self.backend.swapchain_extent.width),
-                        .y = @intCast(self.backend.swapchain_extent.height),
-                        .z = 1,
-                    },
-                },
-            }},
-            filterToVk(present.filter),
-        );
+                .aspect = .{ .color = true },
+            })},
+            .filter = present.filter,
+        });
 
         // Transition the swapchain image to present source
         self.backend.device.cmdPipelineBarrier2(cb.asBackendType(), &.{
@@ -2840,8 +2813,8 @@ pub fn imageBarrierColorAttachmentToTransferSrc(
     } };
 }
 
-pub fn imageBarrierColorAttachmentToPresentBlitSrc(
-    options: gpu.ImageBarrier.ColorAttachmentToPresentBlitSrcOptions,
+pub fn imageBarrierColorAttachmentToBlitSrc(
+    options: gpu.ImageBarrier.ColorAttachmentToBlitSrcOptions,
 ) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = .{ .color_attachment_output_bit = true },
@@ -2857,25 +2830,120 @@ pub fn imageBarrierColorAttachmentToPresentBlitSrc(
     } };
 }
 
-pub fn imageBarrierGeneralToPresentBlitSrc(
-    options: gpu.ImageBarrier.GeneralToPresentBlitSrcOptions,
+pub fn imageBarrierGeneralToBlitSrc(
+    options: gpu.ImageBarrier.GeneralToBlitSrcOptions,
+) gpu.ImageBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = barrierStagesToVk(options.src_stages),
+            .src_access_mask = .{ .shader_write_bit = true },
+            .dst_stage_mask = .{ .blit_bit = true },
+            .dst_access_mask = .{ .transfer_read_bit = true },
+            .old_layout = .general,
+            .new_layout = .transfer_src_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, options.aspect),
+        },
+    };
+}
+
+pub fn imageBarrierBlitSrcToReadOnly(
+    options: gpu.ImageBarrier.BlitSrcToReadOnlyOptions,
+) gpu.ImageBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .blit_bit = true },
+            .src_access_mask = .{ .transfer_read_bit = true },
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
+            .dst_access_mask = .{ .shader_read_bit = true },
+            .old_layout = .transfer_src_optimal,
+            .new_layout = .read_only_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, options.aspect),
+        },
+    };
+}
+
+pub fn imageBarrierBlitSrcToGeneral(
+    options: gpu.ImageBarrier.BlitSrcToGeneralOptions,
+) gpu.ImageBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .blit_bit = true },
+            .src_access_mask = .{ .transfer_read_bit = true },
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
+            .dst_access_mask = accessToVk(options.dst_access),
+            .old_layout = .transfer_src_optimal,
+            .new_layout = .general,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, options.aspect),
+        },
+    };
+}
+
+pub fn imageBarrierBlitDstToReadOnly(
+    options: gpu.ImageBarrier.BlitDstToReadOnlyOptions,
+) gpu.ImageBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .blit_bit = true },
+            .src_access_mask = .{ .transfer_write_bit = true },
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
+            .dst_access_mask = .{ .shader_read_bit = true },
+            .old_layout = .transfer_dst_optimal,
+            .new_layout = .read_only_optimal,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, options.aspect),
+        },
+    };
+}
+
+pub fn imageBarrierBlitDstToGeneral(
+    options: gpu.ImageBarrier.BlitDstToGeneralOptions,
+) gpu.ImageBarrier {
+    return .{
+        .backend = .{
+            .src_stage_mask = .{ .blit_bit = true },
+            .src_access_mask = .{ .transfer_write_bit = true },
+            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
+            .dst_access_mask = accessToVk(options.dst_access),
+            .old_layout = .transfer_dst_optimal,
+            .new_layout = .general,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = options.handle.asBackendType(),
+            .subresource_range = rangeToVk(options.range, options.aspect),
+        },
+    };
+}
+
+pub fn imageBarrierUndefinedToBlitDst(
+    options: gpu.ImageBarrier.UndefinedToBlitDstOptions,
 ) gpu.ImageBarrier {
     return .{ .backend = .{
         .src_stage_mask = barrierStagesToVk(options.src_stages),
-        .src_access_mask = .{ .shader_write_bit = true },
+        .src_access_mask = .{},
         .dst_stage_mask = .{ .blit_bit = true },
-        .dst_access_mask = .{ .transfer_read_bit = true },
-        .old_layout = .general,
-        .new_layout = .transfer_src_optimal,
+        .dst_access_mask = .{ .transfer_write_bit = true },
+        .old_layout = .undefined,
+        .new_layout = .transfer_dst_optimal,
         .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
         .image = options.handle.asBackendType(),
-        .subresource_range = rangeToVk(options.range, .{ .color = true }),
+        .subresource_range = rangeToVk(options.range, options.aspect),
     } };
 }
 
-pub fn imageBarrierUndefinedToColorAttachmentAfterPresentBlit(
-    options: gpu.ImageBarrier.UndefinedToColorAttachmentAfterPresentBlitOptions,
+pub fn imageBarrierUndefinedToColorAttachmentAfterBlit(
+    options: gpu.ImageBarrier.UndefinedToColorAttachmentAfterBlitOptions,
 ) gpu.ImageBarrier {
     return .{
         .backend = .{
@@ -2893,8 +2961,8 @@ pub fn imageBarrierUndefinedToColorAttachmentAfterPresentBlit(
     };
 }
 
-pub fn imageBarrierUndefinedToGeneralAfterPresentBlit(
-    options: gpu.ImageBarrier.UndefinedToGeneralAfterPresentBlitOptions,
+pub fn imageBarrierUndefinedToGeneralAfterBlit(
+    options: gpu.ImageBarrier.UndefinedToGeneralAfterBlitOptions,
 ) gpu.ImageBarrier {
     return .{
         .backend = .{
@@ -2907,7 +2975,7 @@ pub fn imageBarrierUndefinedToGeneralAfterPresentBlit(
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = options.handle.asBackendType(),
-            .subresource_range = rangeToVk(options.range, .{ .color = true }),
+            .subresource_range = rangeToVk(options.range, options.aspect),
         },
     };
 }
@@ -2973,6 +3041,40 @@ pub fn imageUploadRegionInit(options: gpu.ImageUpload.Region.Options) gpu.ImageU
             .height = options.image_extent.height,
             .depth = options.image_extent.depth,
         },
+    } };
+}
+
+fn blitSubresourceToVk(
+    self: gpu.CmdBuf.BlitOptions.Region.Options.Subresource,
+    aspect: gpu.ImageAspect,
+) vk.ImageSubresourceLayers {
+    return .{
+        .aspect_mask = aspectToVk(aspect),
+        .mip_level = self.mip_level,
+        .base_array_layer = self.base_array_layer,
+        .layer_count = self.array_layers,
+    };
+}
+
+fn offset3DToVk(self: gpu.Offset3D) vk.Offset3D {
+    return .{ .x = self.x, .y = self.y, .z = self.z };
+}
+
+fn volumeToVk(volume: gpu.Volume) [2]vk.Offset3D {
+    return .{
+        offset3DToVk(volume.min),
+        offset3DToVk(volume.max),
+    };
+}
+
+pub fn blitRegionInit(
+    options: gpu.CmdBuf.BlitOptions.Region.Options,
+) gpu.CmdBuf.BlitOptions.Region {
+    return .{ .backend = .{
+        .src_subresource = blitSubresourceToVk(options.src, options.aspect),
+        .src_offsets = volumeToVk(options.src.volume),
+        .dst_subresource = blitSubresourceToVk(options.dst, options.aspect),
+        .dst_offsets = volumeToVk(options.dst.volume),
     } };
 }
 
@@ -3042,6 +3144,20 @@ pub fn cmdBufUploadBuffer(
         dst.asBackendType(),
         @intCast(vk_regions.len),
         vk_regions.ptr,
+    );
+}
+
+pub fn cmdBufBlit(self: *Gx, cb: gpu.CmdBuf, options: gpu.CmdBuf.BlitOptions) void {
+    const vk_regions = gpu.CmdBuf.BlitOptions.Region.asBackendSlice(options.regions);
+    self.backend.device.cmdBlitImage(
+        cb.asBackendType(),
+        options.src.asBackendType(),
+        .transfer_src_optimal,
+        options.dst.asBackendType(),
+        .transfer_dst_optimal,
+        @intCast(vk_regions.len),
+        vk_regions.ptr,
+        filterToVk(options.filter),
     );
 }
 
@@ -3606,6 +3722,7 @@ pub const ImageBarrier = vk.ImageMemoryBarrier2;
 pub const BufBarrier = vk.BufferMemoryBarrier2;
 pub const ImageUploadRegion = vk.BufferImageCopy;
 pub const BufferUploadRegion = vk.BufferCopy;
+pub const BlitRegion = vk.ImageBlit;
 pub const Attachment = vk.RenderingAttachmentInfo;
 pub const ImageFormat = vk.Format;
 
