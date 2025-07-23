@@ -38,6 +38,10 @@ const assert = std.debug.assert;
 /// individual pieces of memory, but you can reset the entire allocator if all resources have been
 /// destroyed. You may want to create a separate allocator for things like per-level vs global data
 /// to allow freeing some data while keeping other data around.
+///
+/// If you're uploading all images as an array to access in a bindless manner, keep in mind that
+/// some older Intel GPUs only support 200 resources per shader stage. When working with animations
+/// you can pack multiple images into one shader array to decrease your resource count.
 pub fn ImageBumpAllocator(kind: ImageKind) type {
     return struct {
         const Memory = gpu.Memory(kind.asMemoryKind());
