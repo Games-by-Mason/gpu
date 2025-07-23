@@ -53,7 +53,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
             dedicated: bool,
 
             fn reset(self: *@This(), gx: *Gx) void {
-                if (gx.validate) {
+                if (gx.validation.gte(.fast)) {
                     // Normally reset is a noop. However, if we have validation layers on, destroy
                     // and recreate the memory so that they complain if any resources still bound to
                     // it get reused.

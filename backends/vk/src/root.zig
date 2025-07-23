@@ -268,9 +268,14 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     // Mutable because this copy may be part of a p_next chain
     var instance_dbg_messenger_info = dbg_messenger_info;
 
+    const enabled_validation_features = if (options.validation == .all)
+        &enabled_validation_features_all
+    else
+        &enabled_validation_features_fast;
+
     var instance_validation_features: vk.ValidationFeaturesEXT = .{
-        .enabled_validation_feature_count = enabled_validation_features.len,
-        .p_enabled_validation_features = &enabled_validation_features,
+        .enabled_validation_feature_count = @intCast(enabled_validation_features.len),
+        .p_enabled_validation_features = enabled_validation_features.ptr,
     };
 
     var create_instance_chain: ?*vk.BaseInStructure = null;
@@ -279,7 +284,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     {
         const val_layer_name = "VK_LAYER_KHRONOS_validation";
         const supported_layers = base_wrapper.enumerateInstanceLayerPropertiesAlloc(gpa) catch |err| @panic(@errorName(err));
-        var validation_layer_missing = options.debug.gte(.validate);
+        var validation_layer_missing = options.validation.gte(.fast);
         defer gpa.free(supported_layers);
 
         log.debug("Supported Layers:", .{});
@@ -296,7 +301,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                 props.implementation_version,
             });
 
-            if (options.debug.gte(.validate) and std.mem.eql(u8, curr_name, val_layer_name)) {
+            if (options.validation.gte(.fast) and std.mem.eql(u8, curr_name, val_layer_name)) {
                 appendNext(&create_instance_chain, @ptrCast(&instance_validation_features));
                 layers.append(gpa, val_layer_name) catch @panic("OOM");
                 validation_layer_missing = false;
@@ -320,7 +325,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     }
 
     // Try to enable the debug extension
-    const debug = if (options.debug.gte(.output)) b: {
+    const debug = if (options.validation.gte(.minimal)) b: {
         const dbg_ext_name = vk.extensions.ext_debug_utils.name;
         const supported_instance_exts = base_wrapper.enumerateInstanceExtensionPropertiesAlloc(
             null,
@@ -1639,7 +1644,7 @@ pub fn beginFrame(self: *Gx) void {
     });
     const cmd_pool = &self.backend.cmd_pools[self.frame];
     self.backend.device.resetCommandPool(cmd_pool.*, .{}) catch |err| @panic(@errorName(err));
-    if (self.validate) {
+    if (self.validation.gte(.fast)) {
         // https://github.com/Games-by-Mason/gpu/issues/3
         self.backend.device.destroyCommandPool(cmd_pool.*, null);
         cmd_pool.* = self.backend.device.createCommandPool(&.{
@@ -3418,9 +3423,14 @@ const TimestampQueries = struct {
     write: u32 = 0,
 };
 
-const enabled_validation_features = [_]vk.ValidationFeatureEnableEXT{
+const enabled_validation_features_all = [_]vk.ValidationFeatureEnableEXT{
     .gpu_assisted_ext,
     .gpu_assisted_reserve_binding_slot_ext,
+    .best_practices_ext,
+    .synchronization_validation_ext,
+};
+
+const enabled_validation_features_fast = [_]vk.ValidationFeatureEnableEXT{
     .best_practices_ext,
     .synchronization_validation_ext,
 };

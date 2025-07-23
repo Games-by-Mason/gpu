@@ -36,8 +36,8 @@ in_frame: bool = false,
 timestamp_queries: bool,
 /// The live Tracy queries for each frame.
 tracy_queries: [gpu.global_options.max_frames_in_flight]u16 = @splat(0),
-/// Whether or not validation is enabled.
-validate: bool,
+/// The level of validation enabled.
+validation: Validation,
 
 /// Initialization options.
 pub const Options = struct {
@@ -52,24 +52,6 @@ pub const Options = struct {
         /// These formats convert from linear to sRGB on write. They're the right choice when your
         /// shaders write linear colors.
         srgb4x8,
-    };
-
-    pub const DebugMode = enum(u8) {
-        /// Enables graphics API validation and debug output. High performance cost.
-        ///
-        /// Will emit warning if not available on host.
-        validate = 2,
-        /// Enables debug output. Minimal to no performance cost, may aid profiling software in
-        /// providing readable output.
-        ///
-        /// Will emit warning if not available on host.
-        output = 1,
-        /// No debugging support.
-        none = 0,
-
-        pub fn gte(lhs: @This(), rhs: @This()) bool {
-            return @intFromEnum(lhs) >= @intFromEnum(rhs);
-        }
     };
 
     /// The default device type ranking.
@@ -110,8 +92,8 @@ pub const Options = struct {
     device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
     /// Whether or not to enable timestamp queries.
     timestamp_queries: bool,
-    /// What level of debugging to enable.
-    debug: DebugMode = if (builtin.mode == .Debug) .validate else .none,
+    /// What level of validation to enable.
+    validation: Validation = if (builtin.mode == .Debug) .all else .none,
     /// Disables potentially problematic features. For example, disables all implicit layers in
     /// Vulkan. This may disrupt functionality expected by the user and should only be enabled
     /// when a problem occurs.
@@ -126,6 +108,32 @@ pub const Options = struct {
     surface_extent: Extent2D,
     /// Backend specific options.
     backend: Backend.Options,
+};
+
+/// If the requested level is not available, a warning will be emitted.
+pub const Validation = enum(u8) {
+    /// The default validation level for this build mode.
+    pub const default: @This() = switch (builtin.mode) {
+        .Debug => .all,
+        .ReleaseSafe => .minimal,
+        .ReleaseFast, .ReleaseSmall => .none,
+    };
+
+    /// Enables all graphics API validation and debug output, may have a high performance cost.
+    all = 3,
+    /// Enables only lower cost API validation and debug output, may have a medium performance
+    /// cost.
+    fast = 2,
+    /// Enables debug output only, should have minimal to no performance cost. May aid profiling
+    /// software in providing readable output.
+    minimal = 1,
+    /// No validation or debug output. Use this for release builds.
+    none = 0,
+
+    // XXX: used?
+    pub fn gte(lhs: @This(), rhs: @This()) bool {
+        return @intFromEnum(lhs) >= @intFromEnum(rhs);
+    }
 };
 
 /// Initializes the graphics context.
@@ -144,7 +152,7 @@ pub fn init(gpa: Allocator, options: Options) @This() {
         .device = backend_result.device,
         .frames_in_flight = options.frames_in_flight,
         .timestamp_queries = options.timestamp_queries,
-        .validate = options.debug.gte(.validate),
+        .validation = options.validation,
     };
 
     if (options.max_alignment) {
