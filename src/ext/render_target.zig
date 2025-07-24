@@ -63,7 +63,8 @@ pub fn RenderTarget(kind: ImageKind) type {
         };
 
         /// Returns `State` for this render target.
-        pub fn get(self: @This(), pool: *const Pool) State {
+        pub fn get(self: @This(), pool: *Pool) State {
+            pool.used.set(@intFromEnum(self));
             return .{
                 .image = pool.images.items[@intFromEnum(self)],
                 .extent = self.extent(pool),
@@ -77,6 +78,7 @@ pub fn RenderTarget(kind: ImageKind) type {
             virtual_extent: gpu.Extent2D,
             info: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions),
             images: std.ArrayListUnmanaged(gpu.Image(kind)),
+            used: std.DynamicBitSetUnmanaged,
             /// Best practice is to initialize this with no pages, so that devices that require
             /// dedicated allocations for render targets don't pointlessly pre-allocate memory that
             /// won't actually get used.
@@ -107,11 +109,15 @@ pub fn RenderTarget(kind: ImageKind) type {
                 );
                 errdefer images.deinit(gpa);
 
-                const info: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions) = try .initCapacity(
+                var info: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions) = try .initCapacity(
                     gpa,
                     options.capacity,
                 );
                 errdefer info.deinit(gpa);
+
+                var used: std.DynamicBitSetUnmanaged = .{};
+                errdefer used.deinit(gpa);
+                if (std.debug.runtime_safety) used = try .initEmpty(gpa, options.capacity);
 
                 return .{
                     .name = options.allocator.name,
@@ -119,15 +125,23 @@ pub fn RenderTarget(kind: ImageKind) type {
                     .virtual_extent = options.virtual_extent,
                     .images = images,
                     .info = info,
+                    .used = used,
                     .allocator = allocator,
                 };
             }
 
             /// Destroy the render target pool and all owned images.
             pub fn deinit(self: *@This(), gpa: Allocator, gx: *Gx) void {
+                for (self.info.items, 0..) |info, i| {
+                    if (!self.used.isSet(i)) {
+                        log.warn("{f}: render target not used", .{info.name});
+                    }
+                }
+
                 self.info.deinit(gpa);
                 for (self.images.items) |image| image.deinit(gx);
                 self.images.deinit(gpa);
+                self.used.deinit(gpa);
                 self.allocator.deinit(gpa, gx);
                 self.* = undefined;
             }
