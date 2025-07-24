@@ -84,7 +84,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
             /// page size, and that's making the calculation very liberally.
             max_pages: usize = 128,
             /// Increase this value if you end up getting warnings about dynamic allocations.
-            initial_pages: usize = 1,
+            initial_pages: usize,
         };
 
         /// Creates a new allocator.
@@ -134,7 +134,15 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
 
         fn peekPage(self: *@This(), gx: *Gx, image_name: DebugName) Page {
             if (self.available.items.len == 0) {
-                log.warn("{f}: out of color page memory, making dynamic allocation", .{image_name});
+                if (self.full.items.len > 0) {
+                    // If we had to dynamically allocate, unless we were allocated with no pages in
+                    // which case this was likely intentional (e.g. a render target pool may start
+                    // with no pages in case the device wants all dedicated allocations.)
+                    log.warn("{s}: {f}: out of color page memory, making dynamic allocation", .{
+                        self.name,
+                        image_name,
+                    });
+                }
                 if (self.count() >= self.available.capacity) @panic("OOB");
                 const name: DebugName = .{ .str = self.name, .index = self.count() };
                 self.available.appendAssumeCapacity(.{

@@ -77,6 +77,9 @@ pub fn RenderTarget(kind: ImageKind) type {
             virtual_extent: gpu.Extent2D,
             info: std.ArrayListUnmanaged(ImageBumpAllocator(kind).AllocOptions),
             images: std.ArrayListUnmanaged(gpu.Image(kind)),
+            /// Best practice is to initialize this with no pages, so that devices that require
+            /// dedicated allocations for render targets don't pointlessly pre-allocate memory that
+            /// won't actually get used.
             allocator: ImageBumpAllocator(kind),
 
             /// Options for `init`.
