@@ -134,7 +134,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
 
         fn peekPage(self: *@This(), gx: *Gx, image_name: DebugName) Page {
             if (self.available.items.len == 0) {
-                log.warn("{}: out of color page memory, making dynamic allocation", .{image_name});
+                log.warn("{f}: out of color page memory, making dynamic allocation", .{image_name});
                 if (self.count() >= self.available.capacity) @panic("OOB");
                 const name: DebugName = .{ .str = self.name, .index = self.count() };
                 self.available.appendAssumeCapacity(.{
@@ -162,16 +162,16 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
             const reqs = options.image.memoryRequirements(gx);
             const dedicated = switch (reqs.dedicated) {
                 .preferred => b: {
-                    log.debug("{}: prefers dedicated allocation", .{options.name});
+                    log.debug("{f}: prefers dedicated allocation", .{options.name});
                     break :b true;
                 },
                 .required => b: {
-                    log.debug("{}: requires dedicated allocation", .{options.name});
+                    log.debug("{f}: requires dedicated allocation", .{options.name});
                     break :b true;
                 },
                 .discouraged => if (reqs.size > self.page_size) b: {
                     log.warn(
-                        "{}: drivers discourage dedicated allocation for this image, but it's larger than the page size ({} vs {} bytes)",
+                        "{f}: drivers discourage dedicated allocation for this image, but it's larger than the page size ({} vs {} bytes)",
                         .{ options.name, reqs.size, self.page_size },
                     );
                     break :b true;

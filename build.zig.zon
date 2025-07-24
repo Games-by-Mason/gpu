@@ -5,12 +5,12 @@
     .version = "0.0.0",
     .dependencies = .{
         .tracy = .{
-            .url = "git+https://github.com/Games-By-Mason/tracy_zig#0cad4646be2791982f692a7a47716ec92b62eb2e",
-            .hash = "tracy-0.0.0-R7l8BdlCAQBFp6uysnan3Alaxap65HBF1mzGdabdKe8z",
+            .url = "git+https://github.com/Games-By-Mason/tracy_zig#876c5c5371a46af5af8d4dd88904bccbf6eeae04",
+            .hash = "tracy-0.0.0-R7l8BV1DAQCm4AvfCxJirPmRXFtkf8eoNp55jPqX1jEL",
         },
         .vulkan_zig = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#42e7a8409b8150e1cbd57a8ff8cec219114bac74",
-            .hash = "vulkan-0.0.0-r7Ytx2dUAwDhoUvuIqliqPUbyDZZi0bl_CQIwspUpHs_",
+            .url = "git+https://github.com/Snektron/vulkan-zig#e492b17810d775986e2eefd751f5526d9c3b2618",
+            .hash = "vulkan-0.0.0-r7Ytx5w-AwB0hzckD1mPHma0VgtiJ2DHj5dvgzWVwk2e",
         },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.313.tar.gz",
@@ -18,8 +18,8 @@
         },
         // Only used by extensions
         .geom = .{
-            .url = "git+https://github.com/Games-By-Mason/geom#aebe39f84db50fe8bfa55a4b31d46d7bae11a4d7",
-            .hash = "geom-0.0.0-U1ma3x5AAQCykHvJ4VWSAzJekeTlY5huX7XF1NgpZm2P",
+            .url = "git+https://github.com/Games-By-Mason/geom#ad7fafd743d928d154907244b041ae1ab4a9e159",
+            .hash = "geom-0.0.0-U1ma3081AgB40Ws34tLPkwtlmMGzznZc0p86EEj6mpkw",
         },
     },
     .paths = .{

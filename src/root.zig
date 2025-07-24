@@ -129,14 +129,7 @@ pub const DebugName = struct {
     str: [*:0]const u8,
     index: ?usize = null,
 
-    pub fn format(
-        self: @This(),
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("{s}", .{self.str});
         if (self.index) |index| {
             try writer.print(" {}", .{index});

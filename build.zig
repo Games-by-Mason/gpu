@@ -24,9 +24,7 @@ pub fn build(b: *std.Build) void {
     gpu.addImport("geom", geom.module("geom"));
 
     const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = gpu,
     });
     lib_unit_tests.root_module.addImport("geom", geom.module("geom"));
 
@@ -42,9 +40,11 @@ pub fn build(b: *std.Build) void {
     // "test" ends up in our URLs if we do.
     const docs_exe = b.addExecutable(.{
         .name = "gpu",
-        .root_source_file = b.path("src/docs.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/docs.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     const docs = docs_exe.getEmittedDocs();
     const install_docs = b.addInstallDirectory(.{

@@ -130,7 +130,6 @@ pub const Validation = enum(u8) {
     /// No validation or debug output. Use this for release builds.
     none = 0,
 
-    // XXX: used?
     pub fn gte(lhs: @This(), rhs: @This()) bool {
         return @intFromEnum(lhs) >= @intFromEnum(rhs);
     }

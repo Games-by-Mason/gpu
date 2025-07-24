@@ -346,8 +346,14 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         }
     } else false;
 
-    log.debug("Required Instance Extensions: {s}", .{instance_exts.items});
-    log.debug("Required Layers: {s}", .{layers.items});
+    log.debug("Required Instance Extensions:", .{});
+    for (instance_exts.items) |name| {
+        log.debug("* {s}", .{name});
+    }
+    log.debug("Required Layers:", .{});
+    for (layers.items) |name| {
+        log.debug("* {s}", .{name});
+    }
     ext_zone.end();
 
     const inst_handle_zone = tracy.Zone.begin(.{ .name = "create instance handle", .src = @src() });
@@ -554,7 +560,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         const composite_alpha: ?vk.CompositeAlphaFlagsKHR = b: {
             if (surface_capabilities) |sc| {
                 const supported = sc.supported_composite_alpha;
-                log.debug("\t* supported composite alpha: {}", .{supported});
+                log.debug("\t* supported composite alpha: {any}", .{supported});
                 if (supported.opaque_bit_khr) {
                     break :b .{ .opaque_bit_khr = true };
                 } else if (supported.inherit_bit_khr) {
@@ -3435,78 +3441,69 @@ const enabled_validation_features_fast = [_]vk.ValidationFeatureEnableEXT{
     .synchronization_validation_ext,
 };
 
-const FormatDebugMessageData = struct {
+const FormatDebugMessage = struct {
     severity: vk.DebugUtilsMessageSeverityFlagsEXT,
     message_type: vk.DebugUtilsMessageTypeFlagsEXT,
     data: [*c]const vk.DebugUtilsMessengerCallbackDataEXT,
     user_data: ?*anyopaque,
-};
 
-fn formatDebugMessage(
-    data: FormatDebugMessageData,
-    comptime _: []const u8,
-    _: std.fmt.FormatOptions,
-    writer: anytype,
-) !void {
-    try writer.writeAll("vulkan debug message:\n");
-    try writer.print("\t* type: {}\n", .{data.message_type});
+    pub fn format(data: FormatDebugMessage, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll("vulkan debug message:\n");
+        try writer.print("\t* type: {any}\n", .{data.message_type});
 
-    if (data.data) |d| {
-        try writer.writeAll("\t* id: ");
-        if (d.*.p_message_id_name) |name| {
-            try writer.print("{s}", .{name});
-        } else {
-            try writer.writeAll("null");
-        }
-        try writer.print(" ({})\n", .{d.*.message_id_number});
-
-        if (d.*.p_message) |message| {
-            try writer.print("\t* message: {s}", .{message});
-        }
-
-        if (d.*.queue_label_count > 0) {
-            try writer.writeByte('\n');
-            if (d.*.p_queue_labels) |queue_labels| {
-                for (queue_labels[0..d.*.queue_label_count]) |label| {
-                    try writer.print("\t* queue: {s}\n", .{label.p_label_name});
-                }
+        if (data.data) |d| {
+            try writer.writeAll("\t* id: ");
+            if (d.*.p_message_id_name) |name| {
+                try writer.print("{s}", .{name});
+            } else {
+                try writer.writeAll("null");
             }
-        }
+            try writer.print(" ({})\n", .{d.*.message_id_number});
 
-        if (d.*.cmd_buf_label_count > 0) {
-            try writer.writeByte('\n');
-            if (d.*.p_cmd_buf_labels) |cmd_buf_labels| {
-                for (cmd_buf_labels[0..d.*.cmd_buf_label_count]) |label| {
-                    try writer.print("\t* command buffer: {s}\n", .{label.p_label_name});
-                }
+            if (d.*.p_message) |message| {
+                try writer.print("\t* message: {s}", .{message});
             }
-        }
 
-        if (d.*.object_count > 0) {
-            try writer.writeByte('\n');
-            if (d.*.p_objects) |objects| {
-                for (objects[0..d.*.object_count], 0..) |object, object_i| {
-                    try writer.print("\t* object {}:\n", .{object_i});
-
-                    try writer.writeAll("\t\t* name: ");
-                    if (object.p_object_name) |name| {
-                        try writer.print("{s}", .{name});
-                    } else {
-                        try writer.writeAll("null");
+            if (d.*.queue_label_count > 0) {
+                try writer.writeByte('\n');
+                if (d.*.p_queue_labels) |queue_labels| {
+                    for (queue_labels[0..d.*.queue_label_count]) |label| {
+                        try writer.print("\t* queue: {s}\n", .{label.p_label_name});
                     }
-                    try writer.writeByte('\n');
+                }
+            }
 
-                    try writer.print("\t\t* type: {}\n", .{object.object_type});
-                    try writer.print("\t\t* handle: 0x{x}\n", .{object.object_handle});
+            if (d.*.cmd_buf_label_count > 0) {
+                try writer.writeByte('\n');
+                if (d.*.p_cmd_buf_labels) |cmd_buf_labels| {
+                    for (cmd_buf_labels[0..d.*.cmd_buf_label_count]) |label| {
+                        try writer.print("\t* command buffer: {s}\n", .{label.p_label_name});
+                    }
+                }
+            }
+
+            if (d.*.object_count > 0) {
+                try writer.writeByte('\n');
+                if (d.*.p_objects) |objects| {
+                    for (objects[0..d.*.object_count], 0..) |object, object_i| {
+                        try writer.print("\t* object {}:\n", .{object_i});
+
+                        try writer.writeAll("\t\t* name: ");
+                        if (object.p_object_name) |name| {
+                            try writer.print("{s}", .{name});
+                        } else {
+                            try writer.writeAll("null");
+                        }
+                        try writer.writeByte('\n');
+
+                        try writer.print("\t\t* type: {}\n", .{object.object_type});
+                        try writer.print("\t\t* handle: 0x{x}\n", .{object.object_handle});
+                    }
                 }
             }
         }
     }
-}
-
-fn fmtDebugMessage(data: FormatDebugMessageData) std.fmt.Formatter(formatDebugMessage) {
-    return .{ .data = data };
-}
+};
 
 fn vkDebugCallback(
     severity: vk.DebugUtilsMessageSeverityFlagsEXT,
@@ -3523,7 +3520,7 @@ fn vkDebugCallback(
     else if (severity.verbose_bit_ext)
         .debug
     else b: {
-        log.err("unknown severity {}", .{severity});
+        log.err("unknown severity {any}", .{severity});
         break :b .err;
     };
 
@@ -3569,28 +3566,27 @@ fn vkDebugCallback(
     }
 
     // Otherwise log them
-    const format = "{}";
-    const args = .{fmtDebugMessage(.{
+    const msg: FormatDebugMessage = .{
         .severity = severity,
         .message_type = message_type,
         .data = data,
         .user_data = user_data,
-    })};
+    };
     switch (level) {
         .err => {
-            log.err(format, args);
+            log.err("{f}", .{msg});
             @panic("validation error");
         },
         .warn => {
-            log.warn(format, args);
+            log.warn("{f}", .{msg});
             return vk.FALSE;
         },
         .info => {
-            log.info(format, args);
+            log.info("{f}", .{msg});
             return vk.FALSE;
         },
         .debug => {
-            log.debug(format, args);
+            log.debug("{f}", .{msg});
             return vk.FALSE;
         },
     }
