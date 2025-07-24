@@ -48,6 +48,17 @@ pub const Extent2D = extern struct {
     }
 };
 
+pub const Extent3D = extern struct {
+    pub const zero: @This() = .{ .width = 0, .height = 0 };
+    width: u32,
+    height: u32,
+    depth: u32,
+
+    pub fn eql(self: @This(), other: @This()) bool {
+        return std.meta.eql(self, other);
+    }
+};
+
 pub const Volume = struct {
     min: Offset3D,
     max: Offset3D,
@@ -1877,16 +1888,10 @@ pub const CmdBuf = enum(u64) {
     /// - AMD subgroups have 32 or 64 threads
     /// - Nvidia subgroups have 32 threads
     /// - Intel varies, but appears to always be a power of two <= 32
-    pub const DispatchOptions = struct {
-        x: u32,
-        y: u32,
-        z: u32,
-    };
-
-    pub fn dispatch(self: @This(), gx: *Gx, options: DispatchOptions) void {
+    pub fn dispatch(self: @This(), gx: *Gx, groups: Extent3D) void {
         const zone = Zone.begin(.{ .src = @src() });
         defer zone.end();
-        Backend.cmdBufDispatch(gx, self, options);
+        Backend.cmdBufDispatch(gx, self, groups);
     }
 
     pub const BarriersOptions = struct {

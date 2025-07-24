@@ -1257,9 +1257,9 @@ pub fn cmdBufDraw(
 pub fn cmdBufDispatch(
     self: *Gx,
     cb: gpu.CmdBuf,
-    options: gpu.CmdBuf.DispatchOptions,
+    groups: gpu.Extent3D,
 ) void {
-    self.backend.device.cmdDispatch(cb.asBackendType(), options.x, options.y, options.z);
+    self.backend.device.cmdDispatch(cb.asBackendType(), groups.width, groups.height, groups.depth);
 }
 
 pub fn cmdBufSetViewport(
