@@ -1122,12 +1122,22 @@ pub const Pipeline = enum(u64) {
             }
         };
 
-        pub fn init(gx: *Gx, options: @This().Options) Layout {
+        pub const InitOptions = struct {
+            pub const ImmutableSamplers = struct {
+                binding: u32,
+                samplers: []const Sampler,
+            };
+
+            layout: Layout.Options,
+            immutable_samplers: []const ImmutableSamplers = &.{},
+        };
+
+        pub fn init(gx: *Gx, options: InitOptions) Layout {
             // Check that we're under the minimum guaranteed push constant size
             const max_pc_bytes = 128; // `maxPushConstantsSize` will be raised to 256 in Vulkan 1.4
             const min_pc_alignment = 4; // Vulkan requires multiple of 4
             var pc_bytes: u32 = 0;
-            for (options.push_constant_ranges) |range| {
+            for (options.layout.push_constant_ranges) |range| {
                 // Vulkan doesn't support 0 length push constant ranges
                 assert(range.size > 0);
                 // we can't just align forward ourselves as that makes writing weird
@@ -1138,6 +1148,18 @@ pub const Pipeline = enum(u64) {
                 pc_bytes += range.size;
             }
             assert(pc_bytes <= max_pc_bytes);
+
+            // Check that our immutable samplers line up with the layout
+            if (std.debug.runtime_safety) {
+                for (options.immutable_samplers, 0..) |a, i| {
+                    for (options.immutable_samplers[i + 1 ..]) |b| {
+                        assert(a.binding != b.binding);
+                    }
+                    const desc = options.layout.descs[a.binding];
+                    assert(desc.kind == .sampler);
+                    assert(a.samplers.len == desc.count);
+                }
+            }
 
             // Create the layout
             return Backend.pipelineLayoutCreate(gx, options);

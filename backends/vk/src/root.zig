@@ -1059,12 +1059,18 @@ pub fn bufDestroy(self: *Gx, buffer: gpu.BufHandle(.{})) void {
 
 pub fn pipelineLayoutCreate(
     self: *Gx,
-    options: gpu.Pipeline.Layout.Options,
+    options: gpu.Pipeline.Layout.InitOptions,
 ) gpu.Pipeline.Layout {
     // Create the descriptor set layout
-    var descs: std.BoundedArray(vk.DescriptorSetLayoutBinding, global_options.combined_pipeline_layout_create_buf_len) = .{};
-    var flags: std.BoundedArray(vk.DescriptorBindingFlags, global_options.combined_pipeline_layout_create_buf_len) = .{};
-    for (options.descs, 0..) |desc, i| {
+    var descs: std.BoundedArray(
+        vk.DescriptorSetLayoutBinding,
+        global_options.combined_pipeline_layout_create_buf_len,
+    ) = .{};
+    var flags: std.BoundedArray(
+        vk.DescriptorBindingFlags,
+        global_options.combined_pipeline_layout_create_buf_len,
+    ) = .{};
+    for (options.layout.descs, 0..) |desc, i| {
         descs.append(.{
             .binding = @intCast(i),
             .descriptor_type = switch (desc.kind) {
@@ -1077,15 +1083,33 @@ pub fn pipelineLayoutCreate(
             },
             .descriptor_count = desc.count,
             .stage_flags = shaderStagesToVk(desc.stages),
-            .p_immutable_samplers = null,
+            .p_immutable_samplers = b: {
+                // For each sampler, check if there's an immutable sampler set for it. This sounds
+                // bad from a complexity standpoint, but it would be difficult to actually bind
+                // enough samplers for this to be an issue. If we decide to support immutable
+                // samplers on combined image samplers this could be an issue, but you probably
+                // shouldn't be using combined image samplers anyway so we don't even support that
+                // right now.
+                if (desc.kind == .sampler) {
+                    for (options.immutable_samplers) |is| {
+                        if (is.binding == i) {
+                            break :b @ptrCast(is.samplers);
+                        }
+                    }
+                }
+                break :b null;
+            },
         }) catch @panic("OOB");
         flags.appendAssumeCapacity(.{ .partially_bound_bit = desc.partially_bound });
     }
 
     // Translate the push constant ranges
-    var pc_ranges: std.BoundedArray(vk.PushConstantRange, global_options.combined_pipeline_layout_create_buf_len) = .{};
+    var pc_ranges: std.BoundedArray(
+        vk.PushConstantRange,
+        global_options.combined_pipeline_layout_create_buf_len,
+    ) = .{};
     var pc_offset: u32 = 0;
-    for (options.push_constant_ranges) |range| {
+    for (options.layout.push_constant_ranges) |range| {
         // Add the range
         pc_ranges.append(.{
             .stage_flags = shaderStagesToVk(range.stages),
@@ -1105,7 +1129,12 @@ pub fn pipelineLayoutCreate(
         .p_bindings = &descs.buffer,
         .p_next = &binding_flags,
     }, null) catch @panic("OOM");
-    setName(self.backend.debug_messenger, self.backend.device, descriptor_set_layout, options.name);
+    setName(
+        self.backend.debug_messenger,
+        self.backend.device,
+        descriptor_set_layout,
+        options.layout.name,
+    );
 
     // Create the pipeline layout
     const pipeline_layout = self.backend.device.createPipelineLayout(&.{
@@ -1114,7 +1143,12 @@ pub fn pipelineLayoutCreate(
         .push_constant_range_count = @intCast(pc_ranges.len),
         .p_push_constant_ranges = pc_ranges.constSlice().ptr,
     }, null) catch |err| @panic(@errorName(err));
-    setName(self.backend.debug_messenger, self.backend.device, pipeline_layout, options.name);
+    setName(
+        self.backend.debug_messenger,
+        self.backend.device,
+        pipeline_layout,
+        options.layout.name,
+    );
 
     return .{
         .desc_set = .fromBackendType(descriptor_set_layout),
