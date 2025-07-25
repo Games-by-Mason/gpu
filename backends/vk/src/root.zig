@@ -167,10 +167,11 @@ const DeviceExts = struct {
     khr_calibrated_timestamps: bool = false,
     ext_calibrated_timestamps: bool = false,
 
-    fn add(self: *@This(), name_buf: *const [vk.MAX_EXTENSION_NAME_SIZE]u8) void {
-        const name: []const u8 = std.mem.span(@as([*:0]const u8, @ptrCast(name_buf[0..].ptr)));
+    fn add(self: *@This(), ext: *const vk.ExtensionProperties) void {
+        const name: []const u8 = std.mem.span(@as([*:0]const u8, @ptrCast(ext.extension_name[0..].ptr)));
         inline for (@typeInfo(@This()).@"struct".fields) |field| {
             if (std.mem.eql(u8, name, @field(vk.extensions, field.name).name)) {
+                log.debug("\t* {s} v{} supported", .{ name, ext.spec_version });
                 @field(self, field.name) = true;
             }
         }
@@ -179,12 +180,14 @@ const DeviceExts = struct {
     fn list(self: @This(), timestamp_queries: bool) ?List {
         var result: List = .{};
 
+        // Required
         if (self.khr_swapchain) {
             result.appendAssumeCapacity(vk.extensions.khr_swapchain.name);
         } else {
             return null;
         }
 
+        // Required if timestamp queries are enabled
         if (timestamp_queries) {
             if (self.khr_calibrated_timestamps) {
                 result.appendAssumeCapacity(vk.extensions.khr_calibrated_timestamps.name);
@@ -212,6 +215,21 @@ const DeviceExts = struct {
             return &vk.DeviceProxy.getCalibratedTimestampsEXT;
         } else {
             return null;
+        }
+    }
+};
+
+const InstanceExts = struct {
+    ext_debug_utils: bool = false,
+    ext_swapchain_colorspace: bool = false,
+
+    fn add(self: *@This(), ext: *const vk.ExtensionProperties) void {
+        const name: []const u8 = std.mem.span(@as([*:0]const u8, @ptrCast(ext.extension_name[0..].ptr)));
+        inline for (@typeInfo(@This()).@"struct".fields) |field| {
+            if (std.mem.eql(u8, name, @field(vk.extensions, field.name).name)) {
+                log.debug("{s} v{} supported", .{ name, ext.spec_version });
+                @field(self, field.name) = true;
+            }
         }
     }
 };
@@ -247,9 +265,9 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     var layers: std.ArrayListUnmanaged([*:0]const u8) = .{};
     defer layers.deinit(gpa);
 
-    var instance_exts: std.ArrayListUnmanaged([*:0]const u8) = .{};
-    defer instance_exts.deinit(gpa);
-    instance_exts.appendSlice(gpa, options.backend.instance_extensions) catch @panic("OOM");
+    var required_instance_exts: std.ArrayListUnmanaged([*:0]const u8) = .{};
+    defer required_instance_exts.deinit(gpa);
+    required_instance_exts.appendSlice(gpa, options.backend.instance_extensions) catch @panic("OOM");
 
     const dbg_messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
         .message_severity = .{
@@ -325,29 +343,38 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     }
 
     // Try to enable the debug extension
-    const debug = if (options.validation.gte(.minimal)) b: {
-        const dbg_ext_name = vk.extensions.ext_debug_utils.name;
+    var instance_exts: InstanceExts = .{};
+    {
         const supported_instance_exts = base_wrapper.enumerateInstanceExtensionPropertiesAlloc(
             null,
             gpa,
         ) catch |err| @panic(@errorName(err));
         defer gpa.free(supported_instance_exts);
-        for (supported_instance_exts) |props| {
-            const curr_name = std.mem.span(@as([*:0]const u8, @ptrCast(&props.extension_name)));
-            if (std.mem.eql(u8, dbg_ext_name, curr_name)) {
-                log.info("{s} v{}", .{ dbg_ext_name, props.spec_version });
-                instance_exts.append(gpa, vk.extensions.ext_debug_utils.name) catch @panic("OOM");
-                appendNext(&create_instance_chain, @ptrCast(&instance_dbg_messenger_info));
-                break :b true;
-            }
-        } else {
-            log.warn("{s}: requested but not found", .{dbg_ext_name});
-            break :b false;
-        }
-    } else false;
+        for (supported_instance_exts) |ext| instance_exts.add(&ext);
+    }
+
+    const debug = b: {
+        if (!options.validation.gte(.minimal)) break :b false;
+        if (instance_exts.ext_debug_utils) break :b true;
+        log.warn("{s}: requested but not found", .{vk.extensions.ext_debug_utils.name});
+        break :b false;
+    };
+    if (debug) {
+        required_instance_exts.append(
+            gpa,
+            vk.extensions.ext_debug_utils.name,
+        ) catch @panic("OOM");
+        appendNext(&create_instance_chain, @ptrCast(&instance_dbg_messenger_info));
+    }
+    if (instance_exts.ext_swapchain_colorspace) {
+        required_instance_exts.append(
+            gpa,
+            vk.extensions.ext_swapchain_colorspace.name,
+        ) catch @panic("OOM");
+    }
 
     log.debug("Required Instance Extensions:", .{});
-    for (instance_exts.items) |name| {
+    for (required_instance_exts.items) |name| {
         log.debug("* {s}", .{name});
     }
     log.debug("Required Layers:", .{});
@@ -377,8 +404,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         },
         .enabled_layer_count = math.cast(u32, layers.items.len) orelse @panic("overflow"),
         .pp_enabled_layer_names = layers.items.ptr,
-        .enabled_extension_count = math.cast(u32, instance_exts.items.len) orelse @panic("overflow"),
-        .pp_enabled_extension_names = instance_exts.items.ptr,
+        .enabled_extension_count = math.cast(u32, required_instance_exts.items.len) orelse @panic("overflow"),
+        .pp_enabled_extension_names = required_instance_exts.items.ptr,
         .p_next = create_instance_chain,
     }, null) catch |err| @panic(@errorName(err));
     inst_handle_zone.end();
@@ -467,7 +494,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         const supported_device_extensions = instance_proxy.enumerateDeviceExtensionPropertiesAlloc(device, null, gpa) catch |err| @panic(@errorName(err));
         defer gpa.free(supported_device_extensions);
         for (supported_device_extensions) |extension_properties| {
-            device_exts.add(&extension_properties.extension_name);
+            device_exts.add(&extension_properties);
         }
 
         const device_ext_list = device_exts.list(options.timestamp_queries);
@@ -553,8 +580,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             break :b .{ surface_capabilities, best_surface_format, best_present_mode };
         } else .{ null, null, null };
 
+        log.info("\t* surface format: {?}", .{surface_format});
         log.debug("\t* present mode: {?}", .{present_mode});
-        log.debug("\t* surface format: {?}", .{surface_format});
         log.debug("\t* device extensions: {}", .{device_exts});
 
         const composite_alpha: ?vk.CompositeAlphaFlagsKHR = b: {
@@ -3453,7 +3480,6 @@ const FormatDebugMessage = struct {
 
     pub fn format(data: FormatDebugMessage, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll("vulkan debug message:\n");
-        try writer.print("\t* type: {any}\n", .{data.message_type});
 
         if (data.data) |d| {
             try writer.writeAll("\t* id: ");
