@@ -1068,7 +1068,6 @@ pub const Pipeline = enum(u64) {
             pub const Desc = struct {
                 pub const Kind = union(enum) {
                     sampler: void,
-                    combined_image_sampler: void,
                     sampled_image: void,
                     storage_image: void,
                     uniform_buffer: struct {
@@ -1129,7 +1128,7 @@ pub const Pipeline = enum(u64) {
             };
 
             layout: Layout.Options,
-            immutable_samplers: []const ImmutableSamplers = &.{},
+            immutable_samplers: []const ImmutableSamplers,
         };
 
         pub fn init(gx: *Gx, options: InitOptions) Layout {
@@ -1317,8 +1316,8 @@ pub const DescSet = enum(u64) {
                 sampler: Sampler,
             };
 
+            /// Prefer immutable samplers when possible.
             sampler: Sampler,
-            combined_image_sampler: CombinedImageSampler,
             sampled_image: ImageView,
             storage_image: ImageView,
             uniform_buf: Buf(.{ .uniform = true }).View,
