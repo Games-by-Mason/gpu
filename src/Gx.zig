@@ -17,6 +17,9 @@ const Sampler = gpu.Sampler;
 const DescSet = gpu.DescSet;
 const Device = gpu.Device;
 const Image = gpu.Image;
+const ImageFormat = gpu.ImageFormat;
+const ColorSpace = gpu.ColorSpace;
+const SurfaceFormat = gpu.SurfaceFormat;
 
 const Ctx = @This();
 
@@ -41,19 +44,6 @@ validation: Validation,
 
 /// Initialization options.
 pub const Options = struct {
-    pub const SurfaceFormat = enum {
-        /// Requests a 4 channel 8 bit per channel unorm surface format with any channel order.
-        ///
-        /// These formats do no automatic conversion of color spaces, they're the right choice when
-        /// your shaders write sRGB colors.
-        unorm4x8,
-        /// Requests a 4 channel 8 bit per channel sRGB surface format with any channel order.
-        ///
-        /// These formats convert from linear to sRGB on write. They're the right choice when your
-        /// shaders write linear colors.
-        srgb4x8,
-    };
-
     /// The default device type ranking.
     pub const default_device_type_ranks = b: {
         var ranks = std.EnumArray(Device.Kind, u8).initFill(1);
@@ -101,9 +91,9 @@ pub const Options = struct {
     /// Whether or not to force maximum alignment, may be useful for diagnosing some memory related
     /// issues.
     max_alignment: bool = false,
-    /// The surface format request. This request will resolve to a format supported by the current
-    /// hardware, you can check the result at `device.surface_format`.
-    surface_format: SurfaceFormat,
+    /// Surface format queries, ordered by priority. The chosen format can be read back from
+    /// `device.surface_format`.
+    surface_format: []const SurfaceFormat.Query,
     /// The initial surface extent.
     surface_extent: Extent2D,
     /// Backend specific options.

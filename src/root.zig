@@ -528,8 +528,104 @@ fn containsBits(self: anytype, other: @TypeOf(self)) bool {
     return self_bits & other_bits == other_bits;
 }
 
-// Good reference for support on DX12 level hardware:
-// - https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/hardware-support-for-direct3d-12-1-formats
+pub const ColorSpace = enum(i32) {
+    srgb_nonlinear = Backend.named_color_spaces.srgb_nonlinear,
+    hdr10_st2084 = Backend.named_color_spaces.hdr10_st2084,
+    bt2020_linear = Backend.named_color_spaces.bt2020_linear,
+    hdr10_hlg = Backend.named_color_spaces.hdr10_hlg,
+    extended_srgb_linear = Backend.named_color_spaces.extended_srgb_linear,
+    extended_srgb_nonlinear = Backend.named_color_spaces.extended_srgb_nonlinear,
+    _,
+
+    pub inline fn fromBackendType(value: Backend.ColorSpace) @This() {
+        comptime assert(@sizeOf(Backend.ColorSpace) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(value));
+    }
+
+    pub inline fn asBackendType(self: @This()) Backend.ColorSpace {
+        comptime assert(@sizeOf(Backend.ColorSpace) == @sizeOf(@This()));
+        return @enumFromInt(@intFromEnum(self));
+    }
+
+    pub fn asBackendSlice(self: []const @This()) []const Backend.ColorSpace {
+        comptime assert(@sizeOf(@This()) == @sizeOf(Backend.ColorSpace));
+        comptime assert(@alignOf(@This()) == @alignOf(Backend.ColorSpace));
+        return @ptrCast(self);
+    }
+};
+
+pub const SurfaceFormat = struct {
+    color_space: ColorSpace,
+    image_format: ImageFormat,
+
+    pub const Query = struct {
+        /// The query's color space.
+        color_space: ColorSpace,
+        /// The query's formats, sorted by priority.
+        image_formats: []const ImageFormat,
+
+        /// sRGB colors, applies the transfer function on write. All realistic Windows devices will
+        /// be able to satisfy this query.
+        pub const srgb: @This() = .{
+            .color_space = .srgb_nonlinear,
+            .image_formats = &.{
+                // Supported by all realistic Windows deviecs in the Vulkan hardware database
+                .b8g8r8a8_srgb,
+                // Rarely supported, but available as a fallback.
+                .a8b8g8r8_srgb,
+                // Rarely supported, but available as a fallback. Fails to gamma correct on AMD
+                // drivers at the time of writing (but won't be chosen since they support
+                // `b8g8r8a8_srgb`.)
+                .r8g8b8a8_srgb,
+            },
+        };
+
+        /// sRGB colors, the transfer function must be applied manually. All realistic Windows
+        /// devices will be able to satisfy this query.
+        pub const linear_srgb: @This() = .{
+            .color_space = .srgb_nonlinear,
+            .image_formats = &.{
+                // Supported by all realistic Windows devices in the Vulkan hardware database.
+                .b8g8r8a8_unorm,
+                // Available as a fallback.
+                .r8g8b8a8_unorm,
+                // Rarely supported, but available as a fallback.
+                .r8g8b8a8_snorm,
+                // Rarely supported, but available as a fallback.
+                .a8b8g8r8_unorm,
+                // Rarely supported, but available as a fallback.
+                .a8b8g8r8_snorm,
+                // Rarely supported, but available as a fallback.
+                .b8g8r8a8_snorm,
+            },
+        };
+
+        /// The most commonly supported HDR standard. Is typically available if the display is in
+        /// HDR mode.
+        pub const hdr10_st2084: @This() = .{
+            .color_space = .hdr10_st2084,
+            .image_formats = &.{
+                // Most common.
+                .a2b10g10r10_unorm,
+                // Less common, but available as a fallback.
+                .a2r10g10b10_unorm,
+                // Less common, but availalbe as a fallback.
+                .r16g16b16a16_sfloat,
+            },
+        };
+    };
+};
+
+/// Image formats.
+///
+/// Named in memory order. Note that DX12 formats are not necessarily named in memory order for
+/// whatever reason. It's sometimes possible to discern the actual order through other bits and
+/// pieces of the docs, sometimes it's ambiguous. I have not bothered to do this detective work, all
+/// formats that don't have clear matches are just marked as ambiguous for now. It's possible that,
+/// are we to add a DX12 backend, this will actually need more abstraction.
+///
+/// Good reference for support on DX12 level hardware:
+/// - https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/hardware-support-for-direct3d-12-1-formats
 pub const ImageFormat = enum(i32) {
     undefined = Backend.named_image_formats.undefined,
 
@@ -562,6 +658,43 @@ pub const ImageFormat = enum(i32) {
     d24_unorm_s8_uint = Backend.named_image_formats.d24_unorm_s8_uint,
     /// DX12 requires support for use as a 1D or 2D sampled image.
     d32_sfloat = Backend.named_image_formats.d32_sfloat,
+
+    /// DX12 requires support for use as a storage image, and as a sampled image.
+    r16g16b16a16_sfloat = Backend.named_image_formats.r16g16b16a16_sfloat,
+    /// DX12 requires support for use as a write only storage image, and as a sampled image.
+    r16g16b16a16_unorm = Backend.named_image_formats.r16g16b16a16_unorm,
+    /// DX12 requires support for use as a sampled image.
+    r16g16b16a16_snorm = Backend.named_image_formats.r16g16b16a16_snorm,
+
+    /// DX12 requires support for use as a sampled image.
+    b5g6r5_unorm = Backend.named_image_formats.b5g6r5_unorm,
+    /// DX12 requires support for use as a sampled image.
+    b5g5r5a1_unorm = Backend.named_image_formats.b5g5r5a1_unorm,
+
+    /// DX12 channel order is ambiguous, see enum docs.
+    a8b8g8r8_srgb = Backend.named_image_formats.a8b8g8r8_srgb,
+    /// DX12 channel order is ambiguous, see enum docs.
+    a8b8g8r8_unorm = Backend.named_image_formats.a8b8g8r8_unorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    a8b8g8r8_snorm = Backend.named_image_formats.a8b8g8r8_snorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    b8g8r8a8_snorm = Backend.named_image_formats.b8g8r8a8_snorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    a2b10g10r10_unorm = Backend.named_image_formats.a2b10g10r10_unorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    a2r10g10b10_unorm = Backend.named_image_formats.a2r10g10b10_unorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    b10g11r11_ufloat = Backend.named_image_formats.b10g11r11_ufloat,
+    /// DX12 channel order is ambiguous, see enum docs.
+    r5g6b5_unorm = Backend.named_image_formats.r5g6b5_unorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    a1r5g5b5_unorm = Backend.named_image_formats.a1r5g5b5_unorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    r4g4b4a4_unorm = Backend.named_image_formats.r4g4b4a4_unorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    b4g4r4a4_unorm = Backend.named_image_formats.b4g4r4a4_unorm,
+    /// DX12 channel order is ambiguous, see enum docs.
+    r5g5b5a1_unorm = Backend.named_image_formats.r5g5b5a1_unorm,
 
     _,
 
@@ -1406,7 +1539,7 @@ pub const Device = struct {
     texel_buffer_offset_alignment: u16,
     timestamp_period: f32,
     tracy_queue: TracyQueue,
-    surface_format: ImageFormat,
+    surface_format: SurfaceFormat,
 };
 
 pub const ImageRange = struct {

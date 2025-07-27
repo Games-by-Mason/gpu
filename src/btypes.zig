@@ -9,6 +9,15 @@ pub const BackendInitResult = struct {
     device: gpu.Device,
 };
 
+pub const NamedColorSpaces = struct {
+    srgb_nonlinear: i32,
+    hdr10_st2084: i32,
+    bt2020_linear: i32,
+    hdr10_hlg: i32,
+    extended_srgb_linear: i32,
+    extended_srgb_nonlinear: i32,
+};
+
 pub const NamedImageFormats = struct {
     undefined: i32,
 
@@ -28,6 +37,26 @@ pub const NamedImageFormats = struct {
 
     d24_unorm_s8_uint: i32,
     d32_sfloat: i32,
+
+    r16g16b16a16_sfloat: i32,
+    r16g16b16a16_unorm: i32,
+    r16g16b16a16_snorm: i32,
+
+    b5g6r5_unorm: i32,
+    b5g5r5a1_unorm: i32,
+
+    a8b8g8r8_srgb: i32,
+    a8b8g8r8_unorm: i32,
+    a8b8g8r8_snorm: i32,
+    b8g8r8a8_snorm: i32,
+    a2b10g10r10_unorm: i32,
+    a2r10g10b10_unorm: i32,
+    b10g11r11_ufloat: i32,
+    r5g6b5_unorm: i32,
+    a1r5g5b5_unorm: i32,
+    r4g4b4a4_unorm: i32,
+    b4g4r4a4_unorm: i32,
+    r5g5b5a1_unorm: i32,
 };
 
 pub const ImageOptions = struct {

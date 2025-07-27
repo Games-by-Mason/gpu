@@ -505,65 +505,43 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                 surface,
             ) catch |err| @panic(@errorName(err));
 
-            var best_surface_format: ?vk.SurfaceFormatKHR = null;
-            var best_surface_format_rank: u8 = 0;
-            const surface_formats = instance_proxy.getPhysicalDeviceSurfaceFormatsAllocKHR(
+            const supported_surface_formats = instance_proxy.getPhysicalDeviceSurfaceFormatsAllocKHR(
                 device,
                 surface,
                 gpa,
             ) catch |err| @panic(@errorName(err));
-            defer gpa.free(surface_formats);
-            for (surface_formats) |surface_format| {
-                var format_rank: u8 = 0;
+            defer gpa.free(supported_surface_formats);
 
-                // Regardless of our surface format, the output color space should be srgb
-                if (surface_format.color_space != .srgb_nonlinear_khr) continue;
-
-                // Check that our usage flags are supported. According to vulkan.gpuinfo.org, 100%
-                // of GPUs surveyed support these usages, but we still want to check just in case--
-                // and since it's unclear whether that means every surface supports them or at least
-                // one surface format does.
-                if (!surface_capabilities.supported_usage_flags.color_attachment_bit) continue;
-                if (!surface_capabilities.supported_usage_flags.transfer_dst_bit) continue;
-
-                // We require at least three channels of whichever color space is requested
-                switch (options.surface_format) {
-                    .unorm4x8 => switch (surface_format.format) {
-                        // 100% of Windows devices on vulkan.gpuinfo.org support this format and
-                        // color space.
-                        .b8g8r8a8_unorm => format_rank += 3,
-                        // Some fallbacks since support on Linux is more varied, at least
-                        // according to the database. I suspect that in practice any machine
-                        // capable of running games won't need these fallbacks.
-                        .r8g8b8a8_unorm => format_rank += 2,
-                        .r8g8b8_unorm,
-                        .b8g8r8_unorm,
-                        .a8b8g8r8_unorm_pack32,
-                        => format_rank += 1,
-                        else => {},
-                    },
-                    .srgb4x8 => switch (surface_format.format) {
-                        // 99.89% of Windows devices on vulkan.gpuinfo.org support this format
-                        // and color space.
-                        .b8g8r8a8_srgb => format_rank += 3,
-                        // These should cover the remaining devices. I doubt hardware capable of
-                        // running games exists that doesn't support at least one SRGB surface
-                        // format, if it does then you need to fall back to a linear swapchain
-                        // format and do the conversion yourselves.
-                        .r8g8b8a8_srgb => format_rank += 2,
-                        .r8g8b8_srgb,
-                        .b8g8r8_srgb,
-                        .a8b8g8r8_srgb_pack32,
-                        => format_rank += 1,
-                        else => {},
-                    },
-                }
-
-                if (format_rank > best_surface_format_rank) {
-                    best_surface_format = surface_format;
-                    best_surface_format_rank = format_rank;
-                }
+            log.debug("    * supported surface formats:", .{});
+            for (supported_surface_formats) |supported| {
+                log.debug("        * {}, {}", .{ supported.color_space, supported.format });
             }
+            const surface_format: ?gpu.SurfaceFormat = sf: {
+                for (options.surface_format) |query| {
+                    for (query.image_formats) |query_format| {
+                        for (supported_surface_formats) |supported| {
+                            // Check that we're in the right color space
+                            if (supported.color_space != query.color_space.asBackendType()) continue;
+
+                            // Check that our usage flags are supported. According to vulkan.gpuinfo.org, 100%
+                            // of GPUs surveyed support these usages, but we still want to check just in case--
+                            // and since it's unclear whether that means every surface supports them or at least
+                            // one surface format does.
+                            if (!surface_capabilities.supported_usage_flags.color_attachment_bit) continue;
+                            if (!surface_capabilities.supported_usage_flags.transfer_dst_bit) continue;
+
+                            // Check that we're the right format
+                            if (query_format.asBackendType() == supported.format) {
+                                break :sf .{
+                                    .color_space = query.color_space,
+                                    .image_format = .fromBackendType(supported.format),
+                                };
+                            }
+                        }
+                    }
+                }
+                break :sf null;
+            };
             var best_present_mode: vk.PresentModeKHR = .fifo_khr;
             const present_modes = instance_proxy.getPhysicalDeviceSurfacePresentModesAllocKHR(
                 device,
@@ -577,10 +555,10 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                     else => {},
                 }
             }
-            break :b .{ surface_capabilities, best_surface_format, best_present_mode };
+            break :b .{ surface_capabilities, surface_format, best_present_mode };
         } else .{ null, null, null };
 
-        log.info("\t* surface format: {?}", .{surface_format});
+        log.info("\t* best surface format: {?}", .{surface_format});
         log.debug("\t* present mode: {?}", .{present_mode});
         log.debug("\t* device extensions: {}", .{device_exts});
 
@@ -825,7 +803,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .texel_buffer_offset_alignment = best_physical_device.min_texel_buffer_offset_alignment,
             .timestamp_period = timestamp_period,
             .tracy_queue = tracy_queue,
-            .surface_format = .fromBackendType(best_physical_device.surface_format.format),
+            .surface_format = best_physical_device.surface_format,
         },
     };
 
@@ -3351,8 +3329,8 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
     var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
         .surface = self.surface,
         .min_image_count = min_image_count,
-        .image_format = self.physical_device.surface_format.format,
-        .image_color_space = self.physical_device.surface_format.color_space,
+        .image_format = self.physical_device.surface_format.image_format.asBackendType(),
+        .image_color_space = self.physical_device.surface_format.color_space.asBackendType(),
         .image_extent = .{
             .width = self.swapchain_extent.width,
             .height = self.swapchain_extent.height,
@@ -3406,7 +3384,7 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
         const create_info: vk.ImageViewCreateInfo = .{
             .image = handle,
             .view_type = .@"2d",
-            .format = self.physical_device.surface_format.format,
+            .format = self.physical_device.surface_format.image_format.asBackendType(),
             .subresource_range = .{
                 .aspect_mask = .{ .color_bit = true },
                 .base_mip_level = 0,
@@ -3438,7 +3416,7 @@ const PhysicalDevice = struct {
     name: [vk.MAX_PHYSICAL_DEVICE_NAME_SIZE]u8 = .{0} ** vk.MAX_PHYSICAL_DEVICE_NAME_SIZE,
     index: usize = std.math.maxInt(usize),
     rank: u8 = 0,
-    surface_format: vk.SurfaceFormatKHR = undefined,
+    surface_format: gpu.SurfaceFormat = undefined,
     present_mode: vk.PresentModeKHR = undefined,
     swap_extent: vk.Extent2D = undefined,
     surface_capabilities: vk.SurfaceCapabilitiesKHR = undefined,
@@ -3760,7 +3738,17 @@ pub const ImageUploadRegion = vk.BufferImageCopy;
 pub const BufferUploadRegion = vk.BufferCopy;
 pub const BlitRegion = vk.ImageBlit;
 pub const Attachment = vk.RenderingAttachmentInfo;
+pub const ColorSpace = vk.ColorSpaceKHR;
 pub const ImageFormat = vk.Format;
+
+pub const named_color_spaces: btypes.NamedColorSpaces = .{
+    .srgb_nonlinear = @intFromEnum(vk.ColorSpaceKHR.srgb_nonlinear_khr),
+    .hdr10_st2084 = @intFromEnum(vk.ColorSpaceKHR.hdr10_st2084_ext),
+    .bt2020_linear = @intFromEnum(vk.ColorSpaceKHR.bt2020_linear_ext),
+    .hdr10_hlg = @intFromEnum(vk.ColorSpaceKHR.hdr10_hlg_ext),
+    .extended_srgb_linear = @intFromEnum(vk.ColorSpaceKHR.extended_srgb_linear_ext),
+    .extended_srgb_nonlinear = @intFromEnum(vk.ColorSpaceKHR.extended_srgb_nonlinear_ext),
+};
 
 pub const named_image_formats: btypes.NamedImageFormats = .{
     .undefined = @intFromEnum(vk.Format.undefined),
@@ -3781,4 +3769,24 @@ pub const named_image_formats: btypes.NamedImageFormats = .{
 
     .d24_unorm_s8_uint = @intFromEnum(vk.Format.d24_unorm_s8_uint),
     .d32_sfloat = @intFromEnum(vk.Format.d32_sfloat),
+
+    .r16g16b16a16_sfloat = @intFromEnum(vk.Format.r16g16b16a16_sfloat),
+    .r16g16b16a16_unorm = @intFromEnum(vk.Format.r16g16b16a16_unorm),
+    .r16g16b16a16_snorm = @intFromEnum(vk.Format.r16g16b16a16_snorm),
+
+    .b5g6r5_unorm = @intFromEnum(vk.Format.b5g6r5_unorm_pack16),
+    .b5g5r5a1_unorm = @intFromEnum(vk.Format.b5g5r5a1_unorm_pack16),
+
+    .a8b8g8r8_srgb = @intFromEnum(vk.Format.a8b8g8r8_srgb_pack32),
+    .a8b8g8r8_unorm = @intFromEnum(vk.Format.a8b8g8r8_unorm_pack32),
+    .a8b8g8r8_snorm = @intFromEnum(vk.Format.a8b8g8r8_snorm_pack32),
+    .b8g8r8a8_snorm = @intFromEnum(vk.Format.b8g8r8a8_snorm),
+    .a2b10g10r10_unorm = @intFromEnum(vk.Format.a2b10g10r10_unorm_pack32),
+    .a2r10g10b10_unorm = @intFromEnum(vk.Format.a2r10g10b10_unorm_pack32),
+    .b10g11r11_ufloat = @intFromEnum(vk.Format.b10g11r11_ufloat_pack32),
+    .r5g6b5_unorm = @intFromEnum(vk.Format.r5g6b5_unorm_pack16),
+    .a1r5g5b5_unorm = @intFromEnum(vk.Format.a1r5g5b5_unorm_pack16),
+    .r4g4b4a4_unorm = @intFromEnum(vk.Format.r4g4b4a4_unorm_pack16),
+    .b4g4r4a4_unorm = @intFromEnum(vk.Format.b4g4r4a4_unorm_pack16),
+    .r5g5b5a1_unorm = @intFromEnum(vk.Format.r5g5b5a1_unorm_pack16),
 };
