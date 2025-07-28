@@ -520,6 +520,15 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                 for (options.surface_format) |query| {
                     for (query.image_formats) |query_format| {
                         for (supported_surface_formats) |supported| {
+                            // Only check for the alternate color spaces if they're actually supported
+                            if (supported.color_space != .srgb_nonlinear_khr and !instance_exts.ext_swapchain_colorspace) {
+                                log.warn(
+                                    "{s} formats found but extension unsupported",
+                                    .{vk.extensions.ext_swapchain_colorspace.name},
+                                );
+                                continue;
+                            }
+
                             // Check that we're in the right color space
                             if (supported.color_space != query.color_space.asBackendType()) continue;
 
