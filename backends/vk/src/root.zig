@@ -516,7 +516,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             for (supported_surface_formats) |supported| {
                 log.debug("        * {}, {}", .{ supported.color_space, supported.format });
             }
-            const surface_format: ?gpu.SurfaceFormat = sf: {
+            const surface_format: ?gpu.SurfaceFormatQuery.Result = sf: {
                 for (options.surface_format) |query| {
                     for (query.image_formats) |query_format| {
                         for (supported_surface_formats) |supported| {
@@ -535,6 +535,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
                                 break :sf .{
                                     .color_space = query.color_space,
                                     .image_format = .fromBackendType(supported.format),
+                                    .userdata = query.userdata,
                                 };
                             }
                         }
@@ -3416,7 +3417,7 @@ const PhysicalDevice = struct {
     name: [vk.MAX_PHYSICAL_DEVICE_NAME_SIZE]u8 = .{0} ** vk.MAX_PHYSICAL_DEVICE_NAME_SIZE,
     index: usize = std.math.maxInt(usize),
     rank: u8 = 0,
-    surface_format: gpu.SurfaceFormat = undefined,
+    surface_format: gpu.SurfaceFormatQuery.Result = undefined,
     present_mode: vk.PresentModeKHR = undefined,
     swap_extent: vk.Extent2D = undefined,
     surface_capabilities: vk.SurfaceCapabilitiesKHR = undefined,
@@ -3454,7 +3455,7 @@ const FormatDebugMessage = struct {
     severity: vk.DebugUtilsMessageSeverityFlagsEXT,
     message_type: vk.DebugUtilsMessageTypeFlagsEXT,
     data: [*c]const vk.DebugUtilsMessengerCallbackDataEXT,
-    user_data: ?*anyopaque,
+    userdata: ?*anyopaque,
 
     pub fn format(data: FormatDebugMessage, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll("vulkan debug message:\n");
@@ -3517,7 +3518,7 @@ fn vkDebugCallback(
     severity: vk.DebugUtilsMessageSeverityFlagsEXT,
     message_type: vk.DebugUtilsMessageTypeFlagsEXT,
     data: [*c]const vk.DebugUtilsMessengerCallbackDataEXT,
-    user_data: ?*anyopaque,
+    userdata: ?*anyopaque,
 ) callconv(vk.vulkan_call_conv) vk.Bool32 {
     var level: std.log.Level = if (severity.error_bit_ext)
         .err
@@ -3578,7 +3579,7 @@ fn vkDebugCallback(
         .severity = severity,
         .message_type = message_type,
         .data = data,
-        .user_data = user_data,
+        .userdata = userdata,
     };
     switch (level) {
         .err => {

@@ -554,35 +554,25 @@ pub const ColorSpace = enum(i32) {
     }
 };
 
-pub const SurfaceFormat = struct {
-    color_space: ColorSpace,
-    image_format: ImageFormat,
-
-    pub const Query = struct {
-        /// The query's color space.
+pub const SurfaceFormatQuery = struct {
+    pub const Result = struct {
         color_space: ColorSpace,
-        /// The query's formats, sorted by priority.
-        image_formats: []const ImageFormat,
+        image_format: ImageFormat,
+        userdata: u32,
+    };
 
-        /// sRGB colors, applies the transfer function on write. All realistic Windows devices will
-        /// be able to satisfy this query.
-        pub const srgb: @This() = .{
-            .color_space = .srgb_nonlinear,
-            .image_formats = &.{
-                // Supported by all realistic Windows deviecs in the Vulkan hardware database
-                .b8g8r8a8_srgb,
-                // Rarely supported, but available as a fallback.
-                .a8b8g8r8_srgb,
-                // Rarely supported, but available as a fallback. Fails to gamma correct on AMD
-                // drivers at the time of writing (but won't be chosen since they support
-                // `b8g8r8a8_srgb`.)
-                .r8g8b8a8_srgb,
-            },
-        };
+    /// The query's color space.
+    color_space: ColorSpace,
+    /// The query's formats, sorted by priority.
+    image_formats: []const ImageFormat,
+    /// Pass through. Useful for checking which query was selected after initialization.
+    userdata: u32,
 
-        /// sRGB colors, the transfer function must be applied manually. All realistic Windows
-        /// devices will be able to satisfy this query.
-        pub const linear_srgb: @This() = .{
+    /// sRGB colors, requires your shaders to apply the transfer function. This is the preferred
+    /// way to display high quality SDR content, and all realistic Windows devices will be able
+    /// to satisfy this query.
+    pub fn linearSrgb(userdata: u32) @This() {
+        return .{
             .color_space = .srgb_nonlinear,
             .image_formats = &.{
                 // Supported by all realistic Windows devices in the Vulkan hardware database.
@@ -598,11 +588,34 @@ pub const SurfaceFormat = struct {
                 // Rarely supported, but available as a fallback.
                 .b8g8r8a8_snorm,
             },
+            .userdata = userdata,
         };
+    }
 
-        /// The most commonly supported HDR standard. Is typically available if the display is in
-        /// HDR mode.
-        pub const hdr10_st2084: @This() = .{
+    /// Similar to linear sRGB, but applies the transfer function for you. This may be faster,
+    /// but it also may be lower quality (e.g. result in more banding) than if you do the
+    /// conversion yourself. All realistic Windows devices will be able to satisfy this query.
+    pub fn srgb(userdata: u32) @This() {
+        return .{
+            .color_space = .srgb_nonlinear,
+            .image_formats = &.{
+                // Supported by all realistic Windows deviecs in the Vulkan hardware database
+                .b8g8r8a8_srgb,
+                // Rarely supported, but available as a fallback.
+                .a8b8g8r8_srgb,
+                // Rarely supported, but available as a fallback. Fails to gamma correct on AMD
+                // drivers at the time of writing (but won't be chosen since they support
+                // `b8g8r8a8_srgb`.)
+                .r8g8b8a8_srgb,
+            },
+            .userdata = userdata,
+        };
+    }
+
+    /// The most commonly supported HDR standard. Is typically available if the display is in
+    /// HDR mode, you should provide a fallback for when it's not available.
+    pub fn hdr10(userdata: u32) @This() {
+        return .{
             .color_space = .hdr10_st2084,
             .image_formats = &.{
                 // Most common.
@@ -612,8 +625,9 @@ pub const SurfaceFormat = struct {
                 // Less common, but availalbe as a fallback.
                 .r16g16b16a16_sfloat,
             },
+            .userdata = userdata,
         };
-    };
+    }
 };
 
 /// Image formats.
@@ -1539,7 +1553,7 @@ pub const Device = struct {
     texel_buffer_offset_alignment: u16,
     timestamp_period: f32,
     tracy_queue: TracyQueue,
-    surface_format: SurfaceFormat,
+    surface_format: SurfaceFormatQuery.Result,
 };
 
 pub const ImageRange = struct {

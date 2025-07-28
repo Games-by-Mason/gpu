@@ -19,7 +19,7 @@ const Device = gpu.Device;
 const Image = gpu.Image;
 const ImageFormat = gpu.ImageFormat;
 const ColorSpace = gpu.ColorSpace;
-const SurfaceFormat = gpu.SurfaceFormat;
+const SurfaceFormatQuery = gpu.SurfaceFormatQuery;
 
 const Ctx = @This();
 
@@ -93,7 +93,7 @@ pub const Options = struct {
     max_alignment: bool = false,
     /// Surface format queries, ordered by priority. The chosen format can be read back from
     /// `device.surface_format`.
-    surface_format: []const SurfaceFormat.Query,
+    surface_format: []const SurfaceFormatQuery,
     /// The initial surface extent.
     surface_extent: Extent2D,
     /// Backend specific options.
