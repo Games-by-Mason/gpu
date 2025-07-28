@@ -568,7 +568,7 @@ pub const SurfaceFormatQuery = struct {
     /// Pass through. Useful for checking which query was selected after initialization.
     userdata: u32,
 
-    /// sRGB colors, requires your shaders to apply the transfer function. This is the preferred
+    /// sRGB colors, you must use the sRGB transfer function before writing. This is the preferred
     /// way to display high quality SDR content, and all realistic Windows devices will be able
     /// to satisfy this query.
     pub fn linearSrgb(userdata: u32) @This() {
@@ -592,9 +592,9 @@ pub const SurfaceFormatQuery = struct {
         };
     }
 
-    /// Similar to linear sRGB, but applies the transfer function for you. This may be faster,
-    /// but it also may be lower quality (e.g. result in more banding) than if you do the
-    /// conversion yourself. All realistic Windows devices will be able to satisfy this query.
+    /// Similar to linear sRGB, but applies the transfer function for you. May be faster on low end
+    /// hardware, but often cannot be written by a compute shader on real hardware--regardless
+    /// of what the spec claims. All realistic Windows devices will be able to satisfy this query.
     pub fn srgb(userdata: u32) @This() {
         return .{
             .color_space = .srgb_nonlinear,
@@ -640,6 +640,9 @@ pub const SurfaceFormatQuery = struct {
 ///
 /// Good reference for support on DX12 level hardware:
 /// - https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/hardware-support-for-direct3d-12-1-formats
+///
+/// For Vulkan conformance:
+/// - https://docs.vulkan.org/spec/latest/chapters/formats.html
 pub const ImageFormat = enum(i32) {
     undefined = Backend.named_image_formats.undefined,
 
