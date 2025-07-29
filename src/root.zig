@@ -611,7 +611,7 @@ pub const SurfaceFormatQuery = struct {
     /// Similar to linear sRGB, but applies the transfer function for you. May be faster on low end
     /// hardware, but often cannot be written by a compute shader on real hardware--regardless
     /// of what the spec claims. All realistic Windows devices will be able to satisfy this query.
-    pub fn srgb(userdata: u32) @This() {
+    pub fn nonlinearSrgb(userdata: u32) @This() {
         return .{
             .color_space = .srgb_nonlinear,
             .image_formats = &.{
@@ -647,7 +647,7 @@ pub const SurfaceFormatQuery = struct {
 
     /// Widely supported according to the Vulkan hardware database, but doesn't appear to have wide
     /// usage for reasons that are unclear to me. Use if you know what you're doing.
-    pub fn extendedSrgbLinear(userdata: u32) @This() {
+    pub fn linearSrgbExtended(userdata: u32) @This() {
         return .{
             .color_space = .extended_srgb_linear,
             .image_formats = &.{
@@ -666,7 +666,7 @@ pub const SurfaceFormatQuery = struct {
 
     /// Widely supported according to the Vulkan hardware database, but doesn't appear to have wide
     /// usage for reasons that are unclear to me. Use if you know what you're doing.
-    pub fn extendedSrgbNonlinear(userdata: u32) @This() {
+    pub fn nonlinearSrgbExtended(userdata: u32) @This() {
         return .{
             .color_space = .extended_srgb_nonlinear,
             .image_formats = &.{
