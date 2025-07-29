@@ -117,6 +117,22 @@ pub const Viewport = extern struct {
     }
 };
 
+pub const XYColor = struct {
+    x: f32,
+    y: f32,
+};
+
+pub const HdrMetadata = struct {
+    display_primary_red: XYColor,
+    display_primary_green: XYColor,
+    display_primary_blue: XYColor,
+    white_point: XYColor,
+    max_luminance: f32,
+    min_luminance: f32,
+    max_content_light_level: f32,
+    max_frame_average_light_level: f32,
+};
+
 pub const MemoryRequirements = struct {
     const DedicatedAllocationAffinity = enum {
         discouraged,
@@ -624,6 +640,44 @@ pub const SurfaceFormatQuery = struct {
                 .a2r10g10b10_unorm,
                 // Less common, but availalbe as a fallback.
                 .r16g16b16a16_sfloat,
+            },
+            .userdata = userdata,
+        };
+    }
+
+    /// Widely supported according to the Vulkan hardware database, but doesn't appear to have wide
+    /// usage for reasons that are unclear to me. Use if you know what you're doing.
+    pub fn extendedSrgbLinear(userdata: u32) @This() {
+        return .{
+            .color_space = .extended_srgb_linear,
+            .image_formats = &.{
+                // Most common.
+                .r16g16b16a16_sfloat,
+                // Rare, but available as a fallback.
+                .a2r10g10b10_unorm,
+                // Rare, but available as a fallback.
+                .a2b10g10r10_unorm,
+                // Rare, but available as a fallback.
+                .r16g16b16a16_unorm,
+            },
+            .userdata = userdata,
+        };
+    }
+
+    /// Widely supported according to the Vulkan hardware database, but doesn't appear to have wide
+    /// usage for reasons that are unclear to me. Use if you know what you're doing.
+    pub fn extendedSrgbNonlinear(userdata: u32) @This() {
+        return .{
+            .color_space = .extended_srgb_nonlinear,
+            .image_formats = &.{
+                // Most common.
+                .r16g16b16a16_sfloat,
+                // Rare, but available as a fallback.
+                .a2r10g10b10_unorm,
+                // Rare, but available as a fallback.
+                .a2b10g10r10_unorm,
+                // Rare, but available as a fallback.
+                .r16g16b16a16_unorm,
             },
             .userdata = userdata,
         };

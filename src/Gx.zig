@@ -41,6 +41,8 @@ timestamp_queries: bool,
 tracy_queries: [gpu.global_options.max_frames_in_flight]u16 = @splat(0),
 /// The level of validation enabled.
 validation: Validation,
+/// HDR metadata.
+hdr_metadata: ?gpu.HdrMetadata = null,
 
 /// Initialization options.
 pub const Options = struct {
@@ -280,4 +282,9 @@ pub fn updateDescSets(self: *@This(), updates: []const DescSet.Update) void {
 /// should probably be using `std.process.cleanExit`.
 pub fn waitIdle(self: *const @This()) void {
     Backend.waitIdle(self);
+}
+
+pub fn setHdrMetadata(self: *@This(), metadata: gpu.HdrMetadata) void {
+    self.hdr_metadata = metadata;
+    Backend.updateHdrMetadata(metadata);
 }

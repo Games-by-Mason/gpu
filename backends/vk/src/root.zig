@@ -51,6 +51,9 @@ cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 // Tracy info
 tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
 
+surface_context: ?*anyopaque,
+getWin32Monitor: *const fn (surface_context: ?*anyopaque) ?*anyopaque,
+
 pub const Options = struct {
     const CreateSurfaceError = error{
         OutOfHostMemory,
@@ -64,9 +67,13 @@ pub const Options = struct {
     surface_context: ?*anyopaque,
     createSurface: *const fn (
         instance: vk.Instance,
-        context: ?*anyopaque,
+        surface_context: ?*anyopaque,
         allocation_callbacks: ?*const vk.AllocationCallbacks,
     ) vk.SurfaceKHR,
+    /// On windows should return the HMONITOR for the given surface context, or `null` on failure.
+    /// On all other platforms should return `null`. This function is currently unused, but may be
+    /// used in the future to control fullscreen exclusivity.
+    getWin32Monitor: *const fn (surface_context: ?*anyopaque) ?*anyopaque,
     /// Allows you to blacklist problematic layers by setting the `VK_LAYERS_DISABLE` environment
     /// variable at runtime.
     ///
@@ -164,6 +171,7 @@ const DeviceExts = struct {
     pub const List = std.BoundedArray([*:0]const u8, 2);
 
     khr_swapchain: bool = false,
+    ext_hdr_metadata: bool = false,
     khr_calibrated_timestamps: bool = false,
     ext_calibrated_timestamps: bool = false,
 
@@ -180,11 +188,16 @@ const DeviceExts = struct {
     fn list(self: @This(), timestamp_queries: bool) ?List {
         var result: List = .{};
 
-        // Required
+        // Required extensions
         if (self.khr_swapchain) {
             result.appendAssumeCapacity(vk.extensions.khr_swapchain.name);
         } else {
             return null;
+        }
+
+        // Optional extensions
+        if (self.ext_hdr_metadata) {
+            result.appendAssumeCapacity(vk.extensions.ext_hdr_metadata.name);
         }
 
         // Required if timestamp queries are enabled
@@ -805,6 +818,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .queue = queue,
             .queue_family_index = best_physical_device.queue_family_index,
             .tracy_query_pools = tracy_query_pools,
+            .surface_context = options.backend.surface_context,
+            .getWin32Monitor = options.backend.getWin32Monitor,
         },
         .device = .{
             .kind = best_physical_device.ty,
@@ -818,7 +833,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     };
 
     // Set up the swapchain
-    result.backend.setSwapchainExtent(options.surface_extent);
+    result.backend.setSwapchainExtent(options.surface_extent, null);
 
     return result;
 }
@@ -2393,7 +2408,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         // Instead, we just recreate the swapchain immediately. The only downside is a slightly
         // lower framerate during the resize than would otherwise be possible.
         if (self.backend.recreate_swapchain) {
-            setSwapchainExtent(&self.backend, present.surface_extent);
+            self.backend.setSwapchainExtent(present.surface_extent, self.hdr_metadata);
         }
 
         // Actually acquire the image. Drivers typically block either here or on present if the
@@ -2411,7 +2426,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
                 .null_handle,
             ) catch |err| switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    setSwapchainExtent(&self.backend, present.surface_extent);
+                    self.backend.setSwapchainExtent(present.surface_extent, self.hdr_metadata);
                     continue;
                 },
                 error.OutOfHostMemory,
@@ -3195,6 +3210,32 @@ pub fn waitIdle(self: *const Gx) void {
     self.backend.device.deviceWaitIdle() catch |err| @panic(@errorName(err));
 }
 
+fn xyColorToVk(self: gpu.XYColor) vk.XYColorEXT {
+    return .{
+        .x = self.x,
+        .y = self.y,
+    };
+}
+
+pub fn updateHdrMetadata(self: *Gx, metadata: gpu.HdrMetadata) void {
+    self.backend.updateHdrMetadataImpl(metadata);
+}
+
+fn updateHdrMetadataImpl(self: *@This(), metadata: gpu.HdrMetadata) void {
+    if (self.physical_device.device_exts.ext_hdr_metadata) {
+        self.device.setHdrMetadataEXT(1, &.{self.swapchain}, &.{.{
+            .display_primary_red = xyColorToVk(metadata.display_primary_red),
+            .display_primary_green = xyColorToVk(metadata.display_primary_green),
+            .display_primary_blue = xyColorToVk(metadata.display_primary_blue),
+            .white_point = xyColorToVk(metadata.white_point),
+            .max_luminance = metadata.max_luminance,
+            .min_luminance = metadata.min_luminance,
+            .max_content_light_level = metadata.max_content_light_level,
+            .max_frame_average_light_level = metadata.max_frame_average_light_level,
+        }});
+    }
+}
+
 fn aspectToVk(self: gpu.ImageAspect) vk.ImageAspectFlags {
     return .{
         .color_bit = self.color,
@@ -3276,7 +3317,7 @@ fn destroySwapchainViewsAndResetImages(self: *@This()) void {
     self.swapchain_images.clear();
 }
 
-fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
+fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.HdrMetadata) void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
 
@@ -3336,6 +3377,7 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
         break :b std.math.maxInt(u32);
     } else surface_capabilities.max_image_count;
     const min_image_count = @min(max_images, surface_capabilities.min_image_count + 1);
+
     var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
         .surface = self.surface,
         .min_image_count = min_image_count,
@@ -3367,6 +3409,7 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D) void {
     };
 
     self.swapchain = self.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
+    if (hdr_metadata) |some| self.updateHdrMetadataImpl(some);
     setName(self.debug_messenger, self.device, self.swapchain, .{ .str = "Main" });
     assert(self.swapchain_images.len == 0);
     assert(self.swapchain_views.len == 0);
