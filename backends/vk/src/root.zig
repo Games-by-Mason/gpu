@@ -52,10 +52,9 @@ cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
 
 surface_context: ?*anyopaque,
-getWin32Monitor: *const fn (surface_context: ?*anyopaque) ?*anyopaque,
 
 pub const Options = struct {
-    const CreateSurfaceError = error{
+    pub const CreateSurfaceError = error{
         OutOfHostMemory,
         OutOfDeviceMemory,
         NativeWindowInUseKHR,
@@ -70,10 +69,6 @@ pub const Options = struct {
         surface_context: ?*anyopaque,
         allocation_callbacks: ?*const vk.AllocationCallbacks,
     ) vk.SurfaceKHR,
-    /// On windows should return the HMONITOR for the given surface context, or `null` on failure.
-    /// On all other platforms should return `null`. This function is currently unused, but may be
-    /// used in the future to control fullscreen exclusivity.
-    getWin32Monitor: *const fn (surface_context: ?*anyopaque) ?*anyopaque,
     /// Allows you to blacklist problematic layers by setting the `VK_LAYERS_DISABLE` environment
     /// variable at runtime.
     ///
@@ -819,7 +814,6 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             .queue_family_index = best_physical_device.queue_family_index,
             .tracy_query_pools = tracy_query_pools,
             .surface_context = options.backend.surface_context,
-            .getWin32Monitor = options.backend.getWin32Monitor,
         },
         .device = .{
             .kind = best_physical_device.ty,

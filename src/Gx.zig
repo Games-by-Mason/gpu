@@ -44,6 +44,8 @@ validation: Validation,
 /// HDR metadata.
 hdr_metadata: ?gpu.HdrMetadata = null,
 
+pub const PlatformWindow = enum(u64) { _ };
+
 /// Initialization options.
 pub const Options = struct {
     /// The default device type ranking.
@@ -98,6 +100,9 @@ pub const Options = struct {
     surface_format: []const SurfaceFormatQuery,
     /// The initial surface extent.
     surface_extent: Extent2D,
+    /// The platform specific window handle. Not yet used, may eventually be used for things like
+    /// enabling full screen exclusivity.
+    window: PlatformWindow,
     /// Backend specific options.
     backend: Backend.Options,
 };
