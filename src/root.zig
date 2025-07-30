@@ -1194,6 +1194,8 @@ pub const Pipeline = enum(u64) {
         color_attachment_formats: []const ImageFormat,
         depth_attachment_format: ImageFormat,
         stencil_attachment_format: ImageFormat,
+        rasterization_samples: Samples = .@"1",
+        alpha_to_coverage: bool = false,
     };
 
     pub fn initGraphics(
@@ -1922,14 +1924,32 @@ pub const Attachment = struct {
         dont_care: void,
     };
 
+    const StoreOp = enum {
+        store,
+        dont_care,
+        none,
+    };
+
     pub const Layout = enum {};
 
     // Resolve options not currently supported through the public interface, some thought is needed
     // to make this compatible with the DX12 style API. Store op is also assumed to be store for
     // now.
     pub const Options = struct {
+        pub const ResolveMode = enum {
+            none,
+            sample_zero,
+            average,
+            min,
+            max,
+        };
+
         view: ImageView,
         load_op: LoadOp,
+        store_op: StoreOp,
+
+        resolve_view: ?ImageView = null,
+        resolve_mode: ResolveMode = .none,
     };
 
     pub fn init(options: @This().Options) @This() {

@@ -1792,15 +1792,7 @@ fn imageOptionsToVk(options: btypes.ImageOptions) vk.ImageCreateInfo {
         },
         .mip_levels = options.mip_levels,
         .array_layers = options.array_layers,
-        .samples = switch (options.samples) {
-            .@"1" => .{ .@"1_bit" = true },
-            .@"2" => .{ .@"2_bit" = true },
-            .@"4" => .{ .@"4_bit" = true },
-            .@"8" => .{ .@"8_bit" = true },
-            .@"16" => .{ .@"16_bit" = true },
-            .@"32" => .{ .@"32_bit" = true },
-            .@"64" => .{ .@"64_bit" = true },
-        },
+        .samples = samplesToVk(options.samples),
         .tiling = .optimal,
         .usage = .{
             .transfer_src_bit = options.usage.transfer_src,
@@ -2126,6 +2118,18 @@ pub fn shaderModuleDestroy(self: *Gx, module: gpu.ShaderModule) void {
     self.backend.device.destroyShaderModule(module.asBackendType(), null);
 }
 
+fn samplesToVk(self: gpu.Samples) vk.SampleCountFlags {
+    return switch (self) {
+        .@"1" => .{ .@"1_bit" = true },
+        .@"2" => .{ .@"2_bit" = true },
+        .@"4" => .{ .@"4_bit" = true },
+        .@"8" => .{ .@"8_bit" = true },
+        .@"16" => .{ .@"16_bit" = true },
+        .@"32" => .{ .@"32_bit" = true },
+        .@"64" => .{ .@"64_bit" = true },
+    };
+}
+
 pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphicsCmd) void {
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
@@ -2158,13 +2162,6 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
         .depth_bias_clamp = 0.0,
         .depth_bias_slope_factor = 0.0,
     };
-    const multisampling: vk.PipelineMultisampleStateCreateInfo = .{
-        .sample_shading_enable = vk.FALSE,
-        .rasterization_samples = .{ .@"1_bit" = true },
-        .min_sample_shading = 1.0,
-        .alpha_to_coverage_enable = vk.FALSE,
-        .alpha_to_one_enable = vk.FALSE,
-    };
     const color_blend_attachments = [_]vk.PipelineColorBlendAttachmentState{
         .{
             .color_write_mask = .{
@@ -2196,6 +2193,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var rendering_infos: std.BoundedArray(vk.PipelineRenderingCreateInfo, global_options.init_desc_pool_buf_len) = .{};
+    var multisampling_infos: std.BoundedArray(vk.PipelineMultisampleStateCreateInfo, global_options.init_desc_pool_buf_len) = .{};
     for (cmds) |cmd| {
         const input_assembly = input_assemblys.addOneAssumeCapacity();
         input_assembly.* = switch (cmd.input_assembly) {
@@ -2263,6 +2261,15 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .stencil_attachment_format = cmd.stencil_attachment_format.asBackendType(),
         };
 
+        const multisampling_info = multisampling_infos.addOneAssumeCapacity();
+        multisampling_info.* = .{
+            .sample_shading_enable = vk.FALSE,
+            .rasterization_samples = samplesToVk(cmd.rasterization_samples),
+            .min_sample_shading = 1.0,
+            .alpha_to_coverage_enable = vk.TRUE,
+            .alpha_to_one_enable = vk.FALSE,
+        };
+
         pipeline_infos.appendAssumeCapacity(.{
             .flags = .{},
             .stage_count = @intCast(shader_stages_slice.len),
@@ -2271,7 +2278,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .p_input_assembly_state = input_assembly,
             .p_viewport_state = &viewport_state,
             .p_rasterization_state = &rasterizer,
-            .p_multisample_state = &multisampling,
+            .p_multisample_state = multisampling_info,
             .p_depth_stencil_state = null,
             .p_color_blend_state = &color_blending,
             .p_dynamic_state = &dynamic_state,
@@ -3126,23 +3133,41 @@ pub fn bufferUploadRegionInit(options: Gx.BufferUpload.Region.Options) Gx.Buffer
 }
 
 pub fn attachmentInit(options: gpu.Attachment.Options) gpu.Attachment {
-    return .{ .backend = .{
-        .image_view = options.view.asBackendType(),
-        .image_layout = .attachment_optimal,
-        .resolve_mode = .{},
-        .resolve_image_view = .null_handle,
-        .resolve_image_layout = .undefined,
-        .load_op = switch (options.load_op) {
-            .clear_color => .clear,
-            .load => .load,
-            .dont_care => .dont_care,
+    return .{
+        .backend = .{
+            .image_view = options.view.asBackendType(),
+            .image_layout = .attachment_optimal,
+            .resolve_mode = switch (options.resolve_mode) {
+                .none => .{},
+                .sample_zero => .{ .sample_zero_bit = true },
+                .average => .{ .average_bit = true },
+                .min => .{ .min_bit = true },
+                .max => .{ .max_bit = true },
+            },
+            .resolve_image_view = if (options.resolve_view) |rv|
+                rv.asBackendType()
+            else
+                .null_handle,
+            .resolve_image_layout = if (options.resolve_view != null)
+                .attachment_optimal
+            else
+                .undefined,
+            .load_op = switch (options.load_op) {
+                .clear_color => .clear,
+                .load => .load,
+                .dont_care => .dont_care,
+            },
+            .store_op = switch (options.store_op) {
+                .store => .store,
+                .dont_care => .dont_care,
+                .none => .none,
+            },
+            .clear_value = switch (options.load_op) {
+                .clear_color => |color| .{ .color = .{ .float_32 = color } },
+                else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
+            },
         },
-        .store_op = .store,
-        .clear_value = switch (options.load_op) {
-            .clear_color => |color| .{ .color = .{ .float_32 = color } },
-            else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
-        },
-    } };
+    };
 }
 
 pub fn cmdBufUploadImage(
