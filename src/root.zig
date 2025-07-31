@@ -796,14 +796,27 @@ pub const Dimensions = enum {
     cube_array,
 };
 
+/// Various levels of MSAA.
+///
+/// For the purposes of these docs, `unorm` formats are *not* considered integer formats, and it's
+/// assumed that the image's only usage flag is `color_attachment` or `depth_stencil_attachment`--
+/// adding other usage flags may conflict with MSAA support.
+///
+/// Querying for levels of MSAA support is not currently supported. This is a slightly involved
+/// process as there are technically different results for various image types.
 pub const Samples = enum {
+    /// No MSAA, always supported.
     @"1",
+    /// Two samples, not always supported.
     @"2",
+    /// Four samples, supported on all realistic Windows hardware for non-integer formats at the
+    /// time of writing
     @"4",
+    /// Eight samples, supported on all realistic Windows hardware for non-integer formats at the
+    /// time of writing.
     @"8",
+    /// Sixteen samples, not always supported.
     @"16",
-    @"32",
-    @"64",
 };
 
 pub const ImageFlags = packed struct {

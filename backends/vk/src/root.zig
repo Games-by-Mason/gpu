@@ -457,7 +457,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     for (physical_devices, 0..) |device, i| {
         const properties = instance_proxy.getPhysicalDeviceProperties(device);
         log.info("  {}. {s}", .{ i, bufToStr(&properties.device_name) });
-        log.debug("\t* device api version: {}", .{@as(vk.Version, @bitCast(properties.api_version))});
+        log.debug("\t* device API version: {}", .{@as(vk.Version, @bitCast(properties.api_version))});
         log.debug("\t* device type: {}", .{properties.device_type});
         log.debug("\t* min uniform buffer offset alignment: {}", .{properties.limits.min_uniform_buffer_offset_alignment});
         log.debug("\t* min storage buffer offset alignment: {}", .{properties.limits.min_storage_buffer_offset_alignment});
@@ -1943,7 +1943,7 @@ pub fn imageMemoryRequirements(
     const options_vk = imageOptionsToVk(options);
 
     // Panic if this image format isn't supported, `vkGetDeviceImageMemoryRequirements` won't check
-    // this for us
+    // this for us. Note that many drivers incorrectly return success from here.
     var props: vk.ImageFormatProperties2 = .{
         .image_format_properties = undefined,
     };
@@ -1957,15 +1957,20 @@ pub fn imageMemoryRequirements(
             .flags = options_vk.flags,
         },
         &props,
-    ) catch |err| @panic(@errorName(err));
+    ) catch |err| std.debug.panic("{}: {}", .{ err, options });
 
     // Get the memory requirements
     var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
         .prefers_dedicated_allocation = vk.FALSE,
         .requires_dedicated_allocation = vk.FALSE,
     };
+    const invalid_reqs: vk.MemoryRequirements = .{
+        .size = std.math.maxInt(vk.DeviceSize),
+        .alignment = std.math.maxInt(vk.DeviceSize),
+        .memory_type_bits = 0,
+    };
     var reqs2: vk.MemoryRequirements2 = .{
-        .memory_requirements = undefined,
+        .memory_requirements = invalid_reqs,
         .p_next = &dedicated_reqs,
     };
     self.backend.device.getDeviceImageMemoryRequirements(&.{
@@ -1973,6 +1978,16 @@ pub fn imageMemoryRequirements(
         .plane_aspect = .{},
     }, &reqs2);
     const reqs = reqs2.memory_requirements;
+
+    // Some drivers will lie and claim to support images they don't, and then leave the requirements
+    // uninitialized. As a fallback also check that we actually wrote to reqs.
+    if (reqs.size == invalid_reqs.size or
+        reqs.alignment == invalid_reqs.alignment or
+        reqs.memory_type_bits == invalid_reqs.memory_type_bits)
+    {
+        std.debug.panic("image format unsupported: {}", .{options});
+    }
+
     return .{
         .size = reqs.size,
         .alignment = reqs.alignment,
@@ -2125,8 +2140,6 @@ fn samplesToVk(self: gpu.Samples) vk.SampleCountFlags {
         .@"4" => .{ .@"4_bit" = true },
         .@"8" => .{ .@"8_bit" = true },
         .@"16" => .{ .@"16_bit" = true },
-        .@"32" => .{ .@"32_bit" = true },
-        .@"64" => .{ .@"64_bit" = true },
     };
 }
 
