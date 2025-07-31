@@ -2655,12 +2655,13 @@ fn shaderStagesToVk(stages: gpu.ShaderStages) vk.ShaderStageFlags {
 }
 
 fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
-    comptime assert(std.meta.fields(gpu.BarrierStages).len == 4); // Update below if this fails!
+    comptime assert(std.meta.fields(gpu.BarrierStages).len == 5); // Update below if this fails!
     return .{
         .top_of_pipe_bit = stages.top_of_pipe,
         .vertex_shader_bit = stages.vertex,
         .fragment_shader_bit = stages.fragment,
         .compute_shader_bit = stages.compute,
+        .bottom_of_pipe_bit = stages.bottom_of_pipe,
     };
 }
 
@@ -3558,26 +3559,6 @@ const FormatDebugMessage = struct {
                 if (d.*.p_cmd_buf_labels) |cmd_buf_labels| {
                     for (cmd_buf_labels[0..d.*.cmd_buf_label_count]) |label| {
                         try writer.print("\t* command buffer: {s}\n", .{label.p_label_name});
-                    }
-                }
-            }
-
-            if (d.*.object_count > 0) {
-                try writer.writeByte('\n');
-                if (d.*.p_objects) |objects| {
-                    for (objects[0..d.*.object_count], 0..) |object, object_i| {
-                        try writer.print("\t* object {}:\n", .{object_i});
-
-                        try writer.writeAll("\t\t* name: ");
-                        if (object.p_object_name) |name| {
-                            try writer.print("{s}", .{name});
-                        } else {
-                            try writer.writeAll("null");
-                        }
-                        try writer.writeByte('\n');
-
-                        try writer.print("\t\t* type: {}\n", .{object.object_type});
-                        try writer.print("\t\t* handle: 0x{x}\n", .{object.object_handle});
                     }
                 }
             }

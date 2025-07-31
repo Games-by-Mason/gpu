@@ -1122,6 +1122,7 @@ pub const BarrierStages = packed struct {
     vertex: bool = false,
     fragment: bool = false,
     compute: bool = false,
+    bottom_of_pipe: bool = false,
 };
 
 fn EnumBitSet(T: type) type {
