@@ -2279,7 +2279,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .sample_shading_enable = vk.FALSE,
             .rasterization_samples = samplesToVk(cmd.rasterization_samples),
             .min_sample_shading = 1.0,
-            .alpha_to_coverage_enable = vk.TRUE,
+            .alpha_to_coverage_enable = if (cmd.alpha_to_coverage) vk.TRUE else vk.FALSE,
             .alpha_to_one_enable = vk.FALSE,
         };
 
