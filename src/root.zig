@@ -478,9 +478,7 @@ pub fn Memory(k: MemoryKind) type {
                 .usage = switch (kind) {
                     .buf => |buf| .{ .buf = buf },
                     .color_image => .color_image,
-                    .depth_stencil_image => |format| .{ .depth_stencil_image = .{
-                        .format = format,
-                    } },
+                    .depth_stencil_image => |format| .{ .depth_stencil_image = format },
                     .any => unreachable,
                 },
                 .access = .none,
@@ -725,9 +723,9 @@ pub const ImageFormat = enum(i32) {
     /// DX12 requires support for use as a sampled image.
     b8g8r8a8_srgb = Backend.named_image_formats.b8g8r8a8_srgb,
 
-    /// DX12 requires support for use as a 1D or 2D sampled image.
+    /// DX12 requires support for use as a depth stencil target, and as a 1D or 2D sampled image.
     d24_unorm_s8_uint = Backend.named_image_formats.d24_unorm_s8_uint,
-    /// DX12 requires support for use as a 1D or 2D sampled image.
+    /// DX12 requires support for use as a depth stencil target, and as a 1D or 2D sampled image.
     d32_sfloat = Backend.named_image_formats.d32_sfloat,
 
     /// DX12 requires support for use as a storage image, and as a sampled image.
@@ -907,7 +905,7 @@ pub fn Image(kind: ImageKind) type {
                     .any => unreachable,
                 },
                 .aspect = switch (kind) {
-                    .depth_stencil => |ds| ds.aspect,
+                    .depth_stencil => options.aspect,
                     .color => .{ .color = true },
                     .any => unreachable,
                 },
@@ -946,6 +944,7 @@ pub fn Image(kind: ImageKind) type {
                 sampled: bool = false,
                 storage: bool = false,
                 depth_stencil_attachment: bool = false,
+                input_attachment: bool = false,
             };
 
             pub fn memoryRequirements(self: @This(), gx: *Gx) MemoryRequirements {
@@ -1186,6 +1185,7 @@ pub const Pipeline = enum(u64) {
 
     pub const InitGraphicsCmd = struct {
         pub const Stages = std.enums.EnumFieldStruct(GraphicsShaderStage, ShaderModule, null);
+
         pub const InputAssembly = union(enum) {
             const Strip = struct { indexed_primitive_restart: bool = false };
             point_list: void,
@@ -1200,6 +1200,101 @@ pub const Pipeline = enum(u64) {
             patch_list: void,
         };
 
+        pub const ColorComponents = packed struct {
+            r: bool = false,
+            g: bool = false,
+            b: bool = false,
+            a: bool = false,
+
+            pub const all: @This() = .{ .r = true, .g = true, .b = true, .a = true };
+        };
+
+        pub const AttachmentBlendState = struct {
+            pub const Factor = enum {
+                zero,
+                one,
+                src_color,
+                one_minus_src_color,
+                dst_color,
+                one_minus_dst_color,
+                src_alpha,
+                one_minus_src_alpha,
+                dst_alpha,
+                one_minus_dst_alpha,
+                constant_color,
+                one_minus_constant_color,
+                constant_alpha,
+                one_minus_constant_alpha,
+                src_alpha_saturate,
+            };
+
+            pub const Op = enum {
+                add,
+                subtract,
+                reverse_subtract,
+                min,
+                max,
+            };
+            src_color_factor: Factor,
+            dst_color_factor: Factor,
+            color_op: Op,
+            src_alpha_factor: Factor,
+            dst_alpha_factor: Factor,
+            alpha_op: Op,
+        };
+
+        pub const LogicOp = enum {
+            clear,
+            @"and",
+            and_reverse,
+            copy,
+            and_inverted,
+            no_op,
+            xor,
+            @"or",
+            nor,
+            equivalent,
+            invert,
+            or_reverse,
+            copy_inverted,
+            or_inverted,
+            nand,
+            set,
+        };
+
+        /// We don't currently support the depth bounds check, as I wasn't able to get the correct
+        /// behavior out of it on my AMD/nixOS setup.
+        pub const DepthState = struct {
+            write: bool,
+            compare_op: CompareOp,
+        };
+
+        pub const StencilState = struct {
+            pub const OpState = struct {
+                pub const Op = enum {
+                    keep,
+                    zero,
+                    replace,
+                    increment_clamp,
+                    decrement_clamp,
+                    invert,
+                    increment_wrap,
+                    decrement_wrap,
+                };
+
+                fail_op: Op,
+                pass_op: Op,
+                depth_fail_op: Op,
+                compare_op: CompareOp,
+                compare_mask: u32,
+                write_mask: u32,
+                reference: u32,
+            };
+
+            front: OpState,
+            back: OpState,
+        };
+
         name: DebugName,
         layout: Layout,
         stages: Stages,
@@ -1208,8 +1303,14 @@ pub const Pipeline = enum(u64) {
         color_attachment_formats: []const ImageFormat,
         depth_attachment_format: ImageFormat,
         stencil_attachment_format: ImageFormat,
-        rasterization_samples: Samples = .@"1",
-        alpha_to_coverage: bool = false,
+        rasterization_samples: Samples,
+        alpha_to_coverage: bool,
+        color_write_mask: ColorComponents,
+        blend_state: ?AttachmentBlendState,
+        depth_state: ?DepthState,
+        stencil_state: ?StencilState,
+        logic_op: ?LogicOp,
+        blend_constants: [4]f32,
     };
 
     pub fn initGraphics(
@@ -1395,6 +1496,17 @@ pub const ImageFilter = enum {
     linear,
 };
 
+pub const CompareOp = enum {
+    never,
+    lt,
+    eql,
+    lte,
+    gt,
+    ne,
+    gte,
+    always,
+};
+
 pub const Sampler = enum(u64) {
     _,
 
@@ -1418,16 +1530,6 @@ pub const Sampler = enum(u64) {
                     .w = mode,
                 };
             }
-        };
-        pub const CompareOp = enum {
-            never,
-            less,
-            equal,
-            less_or_equal,
-            greater,
-            not_equal,
-            greater_or_equal,
-            always,
         };
         pub const BorderColor = enum {
             float_transparent_black,
@@ -1935,6 +2037,7 @@ pub const Attachment = struct {
     const LoadOp = union(enum) {
         load: void,
         clear_color: [4]f32,
+        clear_depth_stencil: struct { depth: f32, stencil: u32 },
         dont_care: void,
     };
 
@@ -2015,8 +2118,8 @@ pub const CmdBuf = enum(u64) {
 
     pub const BeginRenderingOptions = struct {
         color_attachments: []const Attachment = &.{},
-        depth_attachment: ?*Attachment = null,
-        stencil_attachment: ?*Attachment = null,
+        depth_attachment: ?Attachment = null,
+        stencil_attachment: ?Attachment = null,
         area: Rect2D,
         viewport: Viewport,
         scissor: Rect2D,

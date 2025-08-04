@@ -134,7 +134,7 @@ pub fn RenderTarget(kind: ImageKind) type {
             pub fn deinit(self: *@This(), gpa: Allocator, gx: *Gx) void {
                 for (self.info.items, 0..) |info, i| {
                     if (!self.used.isSet(i)) {
-                        log.warn("{f}: render target not used", .{info.name});
+                        log.warn("render target '{f}' not used", .{info.name});
                     }
                 }
 
@@ -193,7 +193,9 @@ pub fn RenderTarget(kind: ImageKind) type {
                 }
             }
 
-            /// Returns true if you should recreate the render targets for the best resizing experience.
+            /// Returns true if you should recreate the render targets for the best resizing
+            /// experience.
+            ///
             /// This is not required for correctness, it is a convenient way to balance keeping the
             /// render targets sized relative to the surface with maintaining a smooth resize
             /// experience. Recommended usage is to call at the end of your frame after presentation

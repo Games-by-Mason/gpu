@@ -1270,8 +1270,8 @@ pub fn cmdBufBeginRendering(
         .view_mask = 0,
         .color_attachment_count = @intCast(color_attachments.len),
         .p_color_attachments = color_attachments.ptr,
-        .p_depth_attachment = @ptrCast(options.depth_attachment),
-        .p_stencil_attachment = @ptrCast(options.stencil_attachment),
+        .p_depth_attachment = if (options.depth_attachment) |*a| &a.backend else null,
+        .p_stencil_attachment = if (options.stencil_attachment) |*a| &a.backend else null,
     });
 }
 
@@ -2143,6 +2143,74 @@ fn samplesToVk(self: gpu.Samples) vk.SampleCountFlags {
     };
 }
 
+fn blendFactorToVk(self: gpu.Pipeline.InitGraphicsCmd.AttachmentBlendState.Factor) vk.BlendFactor {
+    return switch (self) {
+        .zero => .zero,
+        .one => .one,
+        .src_color => .src_color,
+        .one_minus_src_color => .one_minus_src_color,
+        .dst_color => .dst_color,
+        .one_minus_dst_color => .one_minus_dst_color,
+        .src_alpha => .src_alpha,
+        .one_minus_src_alpha => .one_minus_src_alpha,
+        .dst_alpha => .dst_alpha,
+        .one_minus_dst_alpha => .one_minus_dst_alpha,
+        .constant_color => .constant_color,
+        .one_minus_constant_color => .one_minus_constant_color,
+        .constant_alpha => .constant_alpha,
+        .one_minus_constant_alpha => .one_minus_constant_alpha,
+        .src_alpha_saturate => .src_alpha_saturate,
+    };
+}
+
+fn blendOpToVk(self: gpu.Pipeline.InitGraphicsCmd.AttachmentBlendState.Op) vk.BlendOp {
+    return switch (self) {
+        .add => .add,
+        .subtract => .subtract,
+        .reverse_subtract => .reverse_subtract,
+        .min => .min,
+        .max => .max,
+    };
+}
+
+fn compareOpToVk(self: gpu.CompareOp) vk.CompareOp {
+    return switch (self) {
+        .never => .never,
+        .lt => .less,
+        .eql => .equal,
+        .lte => .less_or_equal,
+        .gt => .greater,
+        .ne => .not_equal,
+        .gte => .greater_or_equal,
+        .always => .always,
+    };
+}
+
+fn stencilOpToVk(self: gpu.Pipeline.InitGraphicsCmd.StencilState.OpState.Op) vk.StencilOp {
+    return switch (self) {
+        .keep => .keep,
+        .zero => .zero,
+        .replace => .replace,
+        .increment_clamp => .increment_and_clamp,
+        .decrement_clamp => .decrement_and_clamp,
+        .invert => .invert,
+        .increment_wrap => .increment_and_wrap,
+        .decrement_wrap => .decrement_and_wrap,
+    };
+}
+
+fn stencilOpStateToVk(self: gpu.Pipeline.InitGraphicsCmd.StencilState.OpState) vk.StencilOpState {
+    return .{
+        .fail_op = stencilOpToVk(self.fail_op),
+        .pass_op = stencilOpToVk(self.pass_op),
+        .depth_fail_op = stencilOpToVk(self.depth_fail_op),
+        .compare_op = compareOpToVk(self.compare_op),
+        .compare_mask = self.compare_mask,
+        .write_mask = self.write_mask,
+        .reference = self.reference,
+    };
+}
+
 pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphicsCmd) void {
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
@@ -2175,30 +2243,6 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
         .depth_bias_clamp = 0.0,
         .depth_bias_slope_factor = 0.0,
     };
-    const color_blend_attachments = [_]vk.PipelineColorBlendAttachmentState{
-        .{
-            .color_write_mask = .{
-                .r_bit = true,
-                .g_bit = true,
-                .b_bit = true,
-                .a_bit = true,
-            },
-            .blend_enable = vk.TRUE,
-            .src_color_blend_factor = .src_alpha,
-            .dst_color_blend_factor = .one_minus_src_alpha,
-            .color_blend_op = .add,
-            .src_alpha_blend_factor = .one,
-            .dst_alpha_blend_factor = .zero,
-            .alpha_blend_op = .add,
-        },
-    };
-    const color_blending: vk.PipelineColorBlendStateCreateInfo = .{
-        .logic_op_enable = vk.FALSE,
-        .attachment_count = color_blend_attachments.len,
-        .p_attachments = &color_blend_attachments,
-        .logic_op = .copy,
-        .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 },
-    };
 
     // Pipeline create info
     const max_shader_stages = std.meta.fields(gpu.Pipeline.InitGraphicsCmd.Stages).len;
@@ -2206,7 +2250,10 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
     var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
     var rendering_infos: std.BoundedArray(vk.PipelineRenderingCreateInfo, global_options.init_desc_pool_buf_len) = .{};
-    var multisampling_infos: std.BoundedArray(vk.PipelineMultisampleStateCreateInfo, global_options.init_desc_pool_buf_len) = .{};
+    var multisampling_infos: std.BoundedArray(vk.PipelineMultisampleStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
+    var blend_attachment_states: std.BoundedArray(vk.PipelineColorBlendAttachmentState, global_options.init_pipelines_buf_len) = .{};
+    var blend_state_infos: std.BoundedArray(vk.PipelineColorBlendStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
+    var depth_stencil_state_infos: std.BoundedArray(vk.PipelineDepthStencilStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
     for (cmds) |cmd| {
         const input_assembly = input_assemblys.addOneAssumeCapacity();
         input_assembly.* = switch (cmd.input_assembly) {
@@ -2283,6 +2330,105 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .alpha_to_one_enable = vk.FALSE,
         };
 
+        const blend_attachment_state = blend_attachment_states.addOneAssumeCapacity();
+        const color_write_mask: vk.ColorComponentFlags = .{
+            .r_bit = cmd.color_write_mask.r,
+            .g_bit = cmd.color_write_mask.g,
+            .b_bit = cmd.color_write_mask.b,
+            .a_bit = cmd.color_write_mask.a,
+        };
+        blend_attachment_state.* = if (cmd.blend_state) |blend_state| .{
+            .color_write_mask = color_write_mask,
+            .blend_enable = vk.TRUE,
+            .src_color_blend_factor = blendFactorToVk(blend_state.src_color_factor),
+            .dst_color_blend_factor = blendFactorToVk(blend_state.dst_color_factor),
+            .color_blend_op = blendOpToVk(blend_state.color_op),
+            .src_alpha_blend_factor = blendFactorToVk(blend_state.src_alpha_factor),
+            .dst_alpha_blend_factor = blendFactorToVk(blend_state.dst_alpha_factor),
+            .alpha_blend_op = blendOpToVk(blend_state.alpha_op),
+        } else .{
+            .color_write_mask = color_write_mask,
+            .blend_enable = vk.FALSE,
+            .src_color_blend_factor = .one,
+            .dst_color_blend_factor = .zero,
+            .color_blend_op = .add,
+            .src_alpha_blend_factor = .one,
+            .dst_alpha_blend_factor = .zero,
+            .alpha_blend_op = .add,
+        };
+        const blend_state_info = blend_state_infos.addOneAssumeCapacity();
+        blend_state_info.* = .{
+            .logic_op_enable = vk.FALSE,
+            .logic_op = .clear,
+            .attachment_count = 1,
+            .p_attachments = blend_attachment_state[0..1],
+            .blend_constants = cmd.blend_constants,
+        };
+        if (cmd.logic_op) |op| {
+            blend_state_info.logic_op_enable = vk.TRUE;
+            blend_state_info.logic_op = switch (op) {
+                .clear => .clear,
+                .@"and" => .@"and",
+                .and_reverse => .and_reverse,
+                .copy => .copy,
+                .and_inverted => .and_inverted,
+                .no_op => .no_op,
+                .xor => .xor,
+                .@"or" => .@"or",
+                .nor => .nor,
+                .equivalent => .equivalent,
+                .invert => .invert,
+                .or_reverse => .or_reverse,
+                .copy_inverted => .copy_inverted,
+                .or_inverted => .or_inverted,
+                .nand => .nand,
+                .set => .set,
+            };
+        }
+
+        var depth_stencil_state: ?*vk.PipelineDepthStencilStateCreateInfo = null;
+        if (cmd.depth_state != null or cmd.stencil_state != null) {
+            depth_stencil_state = depth_stencil_state_infos.addOneAssumeCapacity();
+            depth_stencil_state.?.* = .{
+                .flags = .{},
+                .depth_test_enable = vk.FALSE,
+                .depth_write_enable = vk.FALSE,
+                .depth_compare_op = .never,
+                .depth_bounds_test_enable = vk.FALSE,
+                .stencil_test_enable = vk.FALSE,
+                .front = .{
+                    .fail_op = .keep,
+                    .pass_op = .keep,
+                    .depth_fail_op = .keep,
+                    .compare_op = .never,
+                    .compare_mask = 0,
+                    .write_mask = 0,
+                    .reference = 0,
+                },
+                .back = .{
+                    .fail_op = .keep,
+                    .pass_op = .keep,
+                    .depth_fail_op = .keep,
+                    .compare_op = .never,
+                    .compare_mask = 0,
+                    .write_mask = 0,
+                    .reference = 0,
+                },
+                .min_depth_bounds = 0.0,
+                .max_depth_bounds = 0.0,
+            };
+            if (cmd.depth_state) |s| {
+                depth_stencil_state.?.*.depth_test_enable = vk.TRUE;
+                depth_stencil_state.?.*.depth_write_enable = if (s.write) vk.TRUE else vk.FALSE;
+                depth_stencil_state.?.*.depth_compare_op = compareOpToVk(s.compare_op);
+            }
+            if (cmd.stencil_state) |s| {
+                depth_stencil_state.?.*.stencil_test_enable = vk.TRUE;
+                depth_stencil_state.?.*.front = stencilOpStateToVk(s.front);
+                depth_stencil_state.?.*.back = stencilOpStateToVk(s.back);
+            }
+        }
+
         pipeline_infos.appendAssumeCapacity(.{
             .flags = .{},
             .stage_count = @intCast(shader_stages_slice.len),
@@ -2292,8 +2438,8 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .p_viewport_state = &viewport_state,
             .p_rasterization_state = &rasterizer,
             .p_multisample_state = multisampling_info,
-            .p_depth_stencil_state = null,
-            .p_color_blend_state = &color_blending,
+            .p_depth_stencil_state = depth_stencil_state,
+            .p_color_blend_state = blend_state_info,
             .p_dynamic_state = &dynamic_state,
             .layout = cmd.layout.handle.asBackendType(),
             .render_pass = .null_handle,
@@ -2593,16 +2739,7 @@ pub fn samplerCreate(
         .anisotropy_enable = @intFromBool(options.max_anisotropy != .none and self.backend.physical_device.sampler_anisotropy),
         .max_anisotropy = @min(@as(f32, @floatFromInt(@as(u8, @intFromEnum(options.max_anisotropy)))), self.backend.physical_device.max_sampler_anisotropy),
         .compare_enable = @intFromBool(options.compare_op != null),
-        .compare_op = if (options.compare_op) |compare_op| switch (compare_op) {
-            .never => .never,
-            .less => .less,
-            .equal => .equal,
-            .less_or_equal => .less_or_equal,
-            .greater => .greater,
-            .not_equal => .not_equal,
-            .greater_or_equal => .greater_or_equal,
-            .always => .always,
-        } else .never,
+        .compare_op = if (options.compare_op) |op| compareOpToVk(op) else .never,
         .min_lod = options.min_lod,
         .max_lod = options.max_lod orelse vk.LOD_CLAMP_NONE,
         .border_color = switch (options.border_color) {
@@ -3167,7 +3304,7 @@ pub fn attachmentInit(options: gpu.Attachment.Options) gpu.Attachment {
             else
                 .undefined,
             .load_op = switch (options.load_op) {
-                .clear_color => .clear,
+                .clear_color, .clear_depth_stencil => .clear,
                 .load => .load,
                 .dont_care => .dont_care,
             },
@@ -3178,6 +3315,10 @@ pub fn attachmentInit(options: gpu.Attachment.Options) gpu.Attachment {
             },
             .clear_value = switch (options.load_op) {
                 .clear_color => |color| .{ .color = .{ .float_32 = color } },
+                .clear_depth_stencil => |ds| .{ .depth_stencil = .{
+                    .depth = ds.depth,
+                    .stencil = ds.stencil,
+                } },
                 else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
             },
         },
