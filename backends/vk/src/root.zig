@@ -576,7 +576,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             break :b .{ surface_capabilities, surface_format, best_present_mode };
         } else .{ null, null, null };
 
-        log.info("\t* best surface format: {?}", .{surface_format});
+        log.debug("\t* best surface format: {?}", .{surface_format});
         log.debug("\t* present mode: {?}", .{present_mode});
         log.debug("\t* device extensions: {}", .{device_exts});
 
@@ -2868,6 +2868,28 @@ pub fn imageBarrierUndefinedToColorAttachment(
     } };
 }
 
+pub fn imageBarrierUndefinedToDepthStencilAttachmentAfterWrite(
+    options: gpu.ImageBarrier.UndefinedToDepthStencilAttachmentOptions,
+) gpu.ImageBarrier {
+    return .{ .backend = .{
+        .src_stage_mask = .{ .late_fragment_tests_bit = true },
+        .src_access_mask = .{ .depth_stencil_attachment_write_bit = true },
+        .dst_stage_mask = .{
+            .early_fragment_tests_bit = true,
+        },
+        .dst_access_mask = .{
+            .depth_stencil_attachment_read_bit = true,
+            .depth_stencil_attachment_write_bit = true,
+        },
+        .old_layout = .undefined,
+        .new_layout = .attachment_optimal,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = options.handle.asBackendType(),
+        .subresource_range = rangeToVk(options.range, options.aspect),
+    } };
+}
+
 pub fn imageBarrierUndefinedToGeneral(
     options: gpu.ImageBarrier.UndefinedToGeneralOptions,
 ) gpu.ImageBarrier {
@@ -2980,7 +3002,7 @@ pub fn imageBarrierReadOnlyToGeneral(
     return .{
         .backend = .{
             .src_stage_mask = barrierStagesToVk(options.src_stages),
-            .src_access_mask = .{ .shader_read_bit = true },
+            .src_access_mask = .{},
             .dst_stage_mask = barrierStagesToVk(options.dst_stages),
             .dst_access_mask = accessToVk(options.dst_access),
             .old_layout = .read_only_optimal,
@@ -3052,7 +3074,7 @@ pub fn imageBarrierBlitSrcToReadOnly(
     return .{
         .backend = .{
             .src_stage_mask = .{ .blit_bit = true },
-            .src_access_mask = .{ .transfer_read_bit = true },
+            .src_access_mask = .{},
             .dst_stage_mask = barrierStagesToVk(options.dst_stages),
             .dst_access_mask = .{ .shader_read_bit = true },
             .old_layout = .transfer_src_optimal,
@@ -3071,7 +3093,7 @@ pub fn imageBarrierBlitSrcToGeneral(
     return .{
         .backend = .{
             .src_stage_mask = .{ .blit_bit = true },
-            .src_access_mask = .{ .transfer_read_bit = true },
+            .src_access_mask = .{},
             .dst_stage_mask = barrierStagesToVk(options.dst_stages),
             .dst_access_mask = accessToVk(options.dst_access),
             .old_layout = .transfer_src_optimal,

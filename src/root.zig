@@ -1768,6 +1768,18 @@ pub const ImageBarrier = extern struct {
         return Backend.imageBarrierUndefinedToColorAttachment(options);
     }
 
+    pub const UndefinedToDepthStencilAttachmentOptions = struct {
+        handle: ImageHandle,
+        range: ImageRange,
+        aspect: ImageAspect,
+    };
+
+    pub fn undefinedToDepthStencilAttachmentAfterWrite(
+        options: UndefinedToDepthStencilAttachmentOptions,
+    ) @This() {
+        return Backend.imageBarrierUndefinedToDepthStencilAttachmentAfterWrite(options);
+    }
+
     pub const UndefinedToGeneralOptions = struct {
         handle: ImageHandle,
         range: ImageRange,
