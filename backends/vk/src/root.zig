@@ -163,7 +163,7 @@ const DeviceFeatures = struct {
 /// only one or the other, so we need more logic here. If enough devices move to the KHR name
 /// eventually then we can replace this whole thing with a simpl array list.
 const DeviceExts = struct {
-    pub const List = std.BoundedArray([*:0]const u8, 2);
+    pub const List = std.BoundedArray([*:0]const u8, 3);
 
     khr_swapchain: bool = false,
     ext_hdr_metadata: bool = false,
