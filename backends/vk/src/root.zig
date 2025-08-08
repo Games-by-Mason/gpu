@@ -16,26 +16,23 @@ pub const vk = @import("vulkan");
 
 const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
-/// The max number of swapchain images.
-///
-/// Most backend APIs don't actually provide a guarantee here, but in practice there are never
-/// more than two or three, and setting an upper bound lets us conveniently store arrays of
-/// these images and related data on the stack.
-const max_swapchain_images = 8;
-
 // Context
 surface: vk.SurfaceKHR,
 base_wrapper: vk.BaseWrapper,
 device: vk.DeviceProxy,
 instance: vk.InstanceProxy,
 physical_device: PhysicalDevice,
-swapchain: vk.SwapchainKHR,
-recreate_swapchain: bool,
-swapchain_extent: gpu.Extent2D,
-swapchain_images: std.BoundedArray(vk.Image, max_swapchain_images),
-swapchain_views: std.BoundedArray(vk.ImageView, max_swapchain_images),
 debug_messenger: vk.DebugUtilsMessengerEXT,
 pipeline_cache: vk.PipelineCache,
+surface_context: ?*anyopaque,
+
+// Swapchain state
+recreate_swapchain: bool,
+swapchain: vk.SwapchainKHR,
+swapchain_extent: gpu.Extent2D,
+swapchain_images: std.ArrayListUnmanaged(vk.Image),
+swapchain_views: std.ArrayListUnmanaged(vk.ImageView),
+ready_for_present: std.ArrayListUnmanaged(vk.Semaphore),
 
 // Queues & commands
 timestamp_period: f32,
@@ -43,15 +40,12 @@ queue: vk.Queue,
 queue_family_index: u32,
 cmd_pools: [global_options.max_frames_in_flight]vk.CommandPool,
 
-// Synchronization
+// Frame synchronization
 image_availables: [global_options.max_frames_in_flight]vk.Semaphore,
-ready_for_present: [max_swapchain_images]vk.Semaphore,
 cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence,
 
 // Tracy info
 tracy_query_pools: [global_options.max_frames_in_flight]vk.QueryPool,
-
-surface_context: ?*anyopaque,
 
 pub const Options = struct {
     pub const CreateSurfaceError = error{
@@ -732,13 +726,18 @@ pub fn init(
         setName(debug_messenger, device, image_availables[i], .{ .str = "Image Available", .index = i });
     }
 
-    var ready_for_present: [max_swapchain_images]vk.Semaphore = undefined;
-    for (&ready_for_present, 0..) |*semaphore, frame| {
-        semaphore.* = device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
-        setName(debug_messenger, device, semaphore.*, .{
+    var ready_for_present = std.ArrayListUnmanaged(vk.Semaphore)
+        .initCapacity(gpa, options.max_swapchain_images) catch @panic("OOM");
+    for (0..ready_for_present.capacity) |frame| {
+        const semaphore = device.createSemaphore(
+            &.{},
+            null,
+        ) catch |err| @panic(@errorName(err));
+        setName(debug_messenger, device, semaphore, .{
             .str = "Ready For Present",
             .index = frame,
         });
+        ready_for_present.appendAssumeCapacity(semaphore);
     }
 
     var cmd_pool_ready: [global_options.max_frames_in_flight]vk.Fence = undefined;
@@ -799,8 +798,10 @@ pub fn init(
             .device = device,
             .swapchain = .null_handle,
             .recreate_swapchain = false,
-            .swapchain_images = .{},
-            .swapchain_views = .{},
+            .swapchain_images = std.ArrayListUnmanaged(vk.Image)
+                .initCapacity(gpa, options.max_swapchain_images) catch @panic("OOM"),
+            .swapchain_views = std.ArrayListUnmanaged(vk.ImageView)
+                .initCapacity(gpa, options.max_swapchain_images) catch @panic("OOM"),
             .swapchain_extent = .{ .width = 0, .height = 0 },
             .cmd_pools = cmd_pools,
             .image_availables = image_availables,
@@ -840,9 +841,10 @@ pub fn deinit(self: *Gx, gpa: Allocator) void {
     }
 
     // Destroy internal sync state
-    for (self.backend.ready_for_present) |semaphore| {
+    for (self.backend.ready_for_present.items) |semaphore| {
         self.backend.device.destroySemaphore(semaphore, null);
     }
+    self.backend.ready_for_present.deinit(gpa);
     for (self.backend.image_availables) |semaphore| {
         self.backend.device.destroySemaphore(semaphore, null);
     }
@@ -857,6 +859,8 @@ pub fn deinit(self: *Gx, gpa: Allocator) void {
 
     // Destroy swapchain state
     destroySwapchainViewsAndResetImages(&self.backend);
+    self.backend.swapchain_views.deinit(gpa);
+    self.backend.swapchain_images.deinit(gpa);
     self.backend.device.destroySwapchainKHR(self.backend.swapchain, null);
 
     // Destroy device state
@@ -2608,7 +2612,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         }
     };
 
-    const swapchain_image = self.backend.swapchain_images.get(image_index);
+    const swapchain_image = self.backend.swapchain_images.items[image_index];
 
     // Blit the image the caller wants to present to the swapchain.
     {
@@ -2689,7 +2693,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
                 .command_buffer_count = 1,
                 .p_command_buffers = &.{cb.asBackendType()},
                 .signal_semaphore_count = 1,
-                .p_signal_semaphores = &.{self.backend.ready_for_present[image_index]},
+                .p_signal_semaphores = &.{self.backend.ready_for_present.items[image_index]},
                 .p_next = null,
             }},
             self.backend.cmd_pool_ready[self.frame],
@@ -2704,7 +2708,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
             self.backend.queue,
             &.{
                 .wait_semaphore_count = 1,
-                .p_wait_semaphores = &.{self.backend.ready_for_present[image_index]},
+                .p_wait_semaphores = &.{self.backend.ready_for_present.items[image_index]},
                 .swapchain_count = 1,
                 .p_swapchains = &.{self.backend.swapchain},
                 .p_image_indices = &.{image_index},
@@ -3514,11 +3518,11 @@ fn findMemoryType(
 }
 
 fn destroySwapchainViewsAndResetImages(self: *@This()) void {
-    for (self.swapchain_views.constSlice()) |view| {
+    for (self.swapchain_views.items) |view| {
         self.device.destroyImageView(view, null);
     }
-    self.swapchain_views.clear();
-    self.swapchain_images.clear();
+    self.swapchain_views.clearRetainingCapacity();
+    self.swapchain_images.clearRetainingCapacity();
 }
 
 fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.HdrMetadata) void {
@@ -3615,9 +3619,9 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
     self.swapchain = self.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
     if (hdr_metadata) |some| self.updateHdrMetadataImpl(some);
     setName(self.debug_messenger, self.device, self.swapchain, .{ .str = "Main" });
-    assert(self.swapchain_images.len == 0);
-    assert(self.swapchain_views.len == 0);
-    // It looks like we could technically just set the count to `max_swapchain_images` and not have
+    assert(self.swapchain_images.items.len == 0);
+    assert(self.swapchain_views.items.len == 0);
+    // It looks like we could technically just set the count to max swapchain images and not have
     // to call this twice, but this leads to best practice validation warnings so we just follow the
     // expected pattern here.
     var image_count: u32 = 0;
@@ -3627,16 +3631,15 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
         null,
     ) catch |err| @panic(@errorName(err));
     if (get_images_count_result != .success) @panic(@tagName(get_images_count_result));
-    if (image_count > max_swapchain_images) @panic("too many swap chain images");
+    if (image_count > self.swapchain_images.capacity) @panic("too many swap chain images");
     const get_images_result = self.device.getSwapchainImagesKHR(
         self.swapchain,
         &image_count,
-        &self.swapchain_images.buffer,
+        self.swapchain_images.items.ptr,
     ) catch |err| @panic(@errorName(err));
-    self.swapchain_images.len = image_count;
-    assert(self.swapchain_images.len <= self.swapchain_images.buffer.len);
+    self.swapchain_images.items.len = image_count;
     if (get_images_result != .success) @panic(@tagName(get_images_result));
-    for (self.swapchain_images.constSlice(), 0..) |handle, i| {
+    for (self.swapchain_images.items, 0..) |handle, i| {
         setName(self.debug_messenger, self.device, handle, .{ .str = "Swapchain", .index = i });
         const create_info: vk.ImageViewCreateInfo = .{
             .image = handle,

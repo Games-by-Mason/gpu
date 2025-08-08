@@ -105,6 +105,12 @@ pub const Options = struct {
     /// The platform specific window handle. Not yet used, may eventually be used for things like
     /// enabling full screen exclusivity.
     window: PlatformWindow,
+    /// The max number of swapchain images.
+    ///
+    /// Most backend APIs don't actually provide a guarantee here, but in practice there are never
+    /// more than two or three, and setting an upper bound lets us avoid making dynamic allocations
+    /// when the swapchain is recreated.
+    max_swapchain_images: u32 = 8,
     /// Backend specific options.
     backend: Backend.Options,
     /// This allocator will be used to create an arena for temporary allocations, e.g. for
