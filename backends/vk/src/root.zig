@@ -1514,140 +1514,112 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
 pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     const arena = self.arena.begin();
     defer self.arena.end();
-
     var write_sets = std.ArrayListUnmanaged(vk.WriteDescriptorSet)
         .initCapacity(arena, updates.len) catch @panic("OOM");
-
-    // Iterate over the updates
-    var i: u32 = 0;
-    while (i < updates.len) {
-        var buffer_infos: std.ArrayListUnmanaged(vk.DescriptorBufferInfo) = .{};
-        var image_infos: std.ArrayListUnmanaged(vk.DescriptorImageInfo) = .{};
-
-        // Find all subsequent updates on the same set binding and type
-        const batch_first_update = updates[i];
-        const batch_set = batch_first_update.set;
-        const batch_binding = batch_first_update.binding;
-        const batch_kind: gpu.DescSet.Update.Value.Tag = batch_first_update.value;
-        const batch_index_start: u32 = batch_first_update.index;
-        var batch_size: u32 = 0;
-        while (true) {
-            const update_curr = updates[i + batch_size];
-
-            switch (update_curr.value) {
-                .sampler => |sampler| image_infos.append(arena, .{
-                    .sampler = sampler.asBackendType(),
-                    .image_view = .null_handle,
-                    .image_layout = .undefined,
-                }) catch @panic("OOM"),
-                .sampled_image => |view| image_infos.append(arena, .{
-                    .sampler = .null_handle,
-                    .image_view = view.asBackendType(),
-                    .image_layout = .read_only_optimal,
-                }) catch @panic("OOM"),
-                .storage_image => |view| image_infos.append(arena, .{
-                    .sampler = .null_handle,
-                    .image_view = view.asBackendType(),
-                    .image_layout = .general,
-                }) catch @panic("OOM"),
-                .uniform_buf => |view| buffer_infos.append(arena, .{
-                    .buffer = view.handle.asBackendType(),
-                    .offset = view.offset,
-                    .range = view.len,
-                }) catch @panic("OOM"),
-                .storage_buf => |view| buffer_infos.append(arena, .{
-                    .buffer = view.handle.asBackendType(),
-                    .offset = view.offset,
-                    .range = view.len,
-                }) catch @panic("OOM"),
-            }
-
-            batch_size += 1;
-            if (i + batch_size >= updates.len) break;
-            const update_next = updates[i + batch_size];
-            if (update_next.value != batch_kind or
-                update_next.set != batch_set or
-                update_next.binding != batch_binding or
-                update_next.index != batch_index_start + batch_size) break;
-        }
-
-        // Write the update
-        switch (batch_kind) {
-            .sampler => {
-                const buf = image_infos.toOwnedSlice(arena) catch @panic("OOM");
-                assert(buf.len == batch_size);
+    for (updates) |update| {
+        switch (update.data) {
+            .samplers => |samplers| {
+                const image_infos = arena.alloc(vk.DescriptorImageInfo, samplers.len) catch @panic("OOM");
+                for (image_infos, samplers) |*image_info, sampler| {
+                    image_info.* = .{
+                        .sampler = sampler.asBackendType(),
+                        .image_view = .null_handle,
+                        .image_layout = .undefined,
+                    };
+                }
                 write_sets.appendAssumeCapacity(.{
-                    .dst_set = batch_set.asBackendType(),
-                    .dst_binding = batch_binding,
-                    .dst_array_element = batch_index_start,
+                    .dst_set = update.set.asBackendType(),
+                    .dst_binding = update.binding,
+                    .dst_array_element = update.base_index,
                     .descriptor_type = .sampler,
-                    .descriptor_count = @intCast(buf.len),
+                    .descriptor_count = @intCast(image_infos.len),
                     .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
-                    .p_image_info = buf.ptr,
+                    .p_image_info = image_infos.ptr,
                     .p_texel_buffer_view = &[0]vk.BufferView{},
                 });
             },
-            .sampled_image => {
-                const buf = image_infos.toOwnedSlice(arena) catch @panic("OOM");
-                assert(buf.len == batch_size);
+            .sampled_images => |views| {
+                const image_infos = arena.alloc(vk.DescriptorImageInfo, views.len) catch @panic("OOM");
+                for (image_infos, views) |*image_info, view| {
+                    image_info.* = .{
+                        .sampler = .null_handle,
+                        .image_view = view.asBackendType(),
+                        .image_layout = .read_only_optimal,
+                    };
+                }
                 write_sets.appendAssumeCapacity(.{
-                    .dst_set = batch_set.asBackendType(),
-                    .dst_binding = batch_binding,
-                    .dst_array_element = batch_index_start,
+                    .dst_set = update.set.asBackendType(),
+                    .dst_binding = update.binding,
+                    .dst_array_element = update.base_index,
                     .descriptor_type = .sampled_image,
-                    .descriptor_count = @intCast(buf.len),
+                    .descriptor_count = @intCast(image_infos.len),
                     .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
-                    .p_image_info = buf.ptr,
+                    .p_image_info = image_infos.ptr,
                     .p_texel_buffer_view = &[0]vk.BufferView{},
                 });
             },
-            .storage_image => {
-                const buf = image_infos.toOwnedSlice(arena) catch @panic("OOM");
-                assert(buf.len == batch_size);
+            .storage_images => |views| {
+                const image_infos = arena.alloc(vk.DescriptorImageInfo, views.len) catch @panic("OOM");
+                for (image_infos, views) |*image_info, view| {
+                    image_info.* = .{
+                        .sampler = .null_handle,
+                        .image_view = view.asBackendType(),
+                        .image_layout = .general,
+                    };
+                }
                 write_sets.appendAssumeCapacity(.{
-                    .dst_set = batch_set.asBackendType(),
-                    .dst_binding = batch_binding,
-                    .dst_array_element = batch_index_start,
+                    .dst_set = update.set.asBackendType(),
+                    .dst_binding = update.binding,
+                    .dst_array_element = update.base_index,
                     .descriptor_type = .storage_image,
-                    .descriptor_count = @intCast(buf.len),
+                    .descriptor_count = @intCast(image_infos.len),
                     .p_buffer_info = &[0]vk.DescriptorBufferInfo{},
-                    .p_image_info = buf.ptr,
+                    .p_image_info = image_infos.ptr,
                     .p_texel_buffer_view = &[0]vk.BufferView{},
                 });
             },
-            .uniform_buf => {
-                const buf = buffer_infos.toOwnedSlice(arena) catch @panic("OOM");
-                assert(buf.len == batch_size);
+            .uniform_bufs => |views| {
+                const buffer_infos = arena.alloc(vk.DescriptorBufferInfo, views.len) catch @panic("OOM");
+                for (buffer_infos, views) |*buffer_info, view| {
+                    buffer_info.* = .{
+                        .buffer = view.handle.asBackendType(),
+                        .offset = view.offset,
+                        .range = view.len,
+                    };
+                }
                 write_sets.appendAssumeCapacity(.{
-                    .dst_set = batch_set.asBackendType(),
-                    .dst_binding = batch_binding,
-                    .dst_array_element = batch_index_start,
+                    .dst_set = update.set.asBackendType(),
+                    .dst_binding = update.binding,
+                    .dst_array_element = update.base_index,
                     .descriptor_type = .uniform_buffer,
-                    .descriptor_count = @intCast(buf.len),
-                    .p_buffer_info = buf.ptr,
+                    .descriptor_count = @intCast(buffer_infos.len),
+                    .p_buffer_info = buffer_infos.ptr,
                     .p_image_info = &[0]vk.DescriptorImageInfo{},
                     .p_texel_buffer_view = &[0]vk.BufferView{},
                 });
             },
-            .storage_buf => {
-                const buf = buffer_infos.toOwnedSlice(arena) catch @panic("OOM");
-                assert(buf.len == batch_size);
+            .storage_bufs => |views| {
+                const buffer_infos = arena.alloc(vk.DescriptorBufferInfo, views.len) catch @panic("OOM");
+                for (buffer_infos, views) |*buffer_info, view| {
+                    buffer_info.* = .{
+                        .buffer = view.handle.asBackendType(),
+                        .offset = view.offset,
+                        .range = view.len,
+                    };
+                }
                 write_sets.appendAssumeCapacity(.{
-                    .dst_set = batch_set.asBackendType(),
-                    .dst_binding = batch_binding,
-                    .dst_array_element = batch_index_start,
+                    .dst_set = update.set.asBackendType(),
+                    .dst_binding = update.binding,
+                    .dst_array_element = update.base_index,
                     .descriptor_type = .storage_buffer,
-                    .descriptor_count = @intCast(buf.len),
-                    .p_buffer_info = buf.ptr,
+                    .descriptor_count = @intCast(buffer_infos.len),
+                    .p_buffer_info = buffer_infos.ptr,
                     .p_image_info = &[0]vk.DescriptorImageInfo{},
                     .p_texel_buffer_view = &[0]vk.BufferView{},
                 });
             },
         }
-
-        i += batch_size;
     }
-
     self.backend.device.updateDescriptorSets(
         @intCast(write_sets.items.len),
         write_sets.items.ptr,
