@@ -285,8 +285,15 @@ pub fn submit(self: *@This(), cbs: []const gpu.CmdBuf) void {
     Backend.submit(self, cbs);
 }
 
-/// Submit descriptor set update commands. Fastest when sorted. Copy commands not currently
-/// supported.
+/// Submit descriptor set update commands. Backends will batch update sequential updates to arrays
+/// automatically when possible. Copy commands not currently supported.
+///
+/// At first glance, automatic batching seems over-complicated and requires the caller to "know"
+/// more about the API to use it effectively. In practice, asking the caller to manually batch these
+/// commands is incredibly inconvenient. The second any inputs are dynamic (e.g. as in render
+/// target pools since you need a conditional on the usage) you need an auto batcher, and if it's
+/// external to `gpu` you likely end up with another layer of buffering for essentially no good
+/// reason.
 pub fn updateDescSets(self: *@This(), updates: []const DescSet.Update) void {
     if (updates.len == 0) return;
     Backend.descSetsUpdate(self, updates);

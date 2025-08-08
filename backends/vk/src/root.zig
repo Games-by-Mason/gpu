@@ -1511,6 +1511,7 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
     return .fromBackendType(desc_pool);
 }
 
+/// Rational for the auto batching can be found in `Gx.updateDescSets`.
 pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     const arena = self.arena.begin();
     defer self.arena.end();
