@@ -163,8 +163,6 @@ const DeviceFeatures = struct {
 /// only one or the other, so we need more logic here. If enough devices move to the KHR name
 /// eventually then we can replace this whole thing with a simpl array list.
 const DeviceExts = struct {
-    pub const List = std.BoundedArray([*:0]const u8, 3);
-
     khr_swapchain: bool = false,
     ext_hdr_metadata: bool = false,
     khr_calibrated_timestamps: bool = false,
@@ -180,33 +178,37 @@ const DeviceExts = struct {
         }
     }
 
-    fn list(self: @This(), timestamp_queries: bool) ?List {
-        var result: List = .{};
+    fn alloc(
+        self: @This(),
+        gpa: Allocator,
+        timestamp_queries: bool,
+    ) ?[]const [*:0]const u8 {
+        var result: std.ArrayListUnmanaged([*:0]const u8) = .{};
 
         // Required extensions
         if (self.khr_swapchain) {
-            result.appendAssumeCapacity(vk.extensions.khr_swapchain.name);
+            result.append(gpa, vk.extensions.khr_swapchain.name) catch @panic("OOM");
         } else {
             return null;
         }
 
         // Optional extensions
         if (self.ext_hdr_metadata) {
-            result.appendAssumeCapacity(vk.extensions.ext_hdr_metadata.name);
+            result.append(gpa, vk.extensions.ext_hdr_metadata.name) catch @panic("OOM");
         }
 
         // Required if timestamp queries are enabled
         if (timestamp_queries) {
             if (self.khr_calibrated_timestamps) {
-                result.appendAssumeCapacity(vk.extensions.khr_calibrated_timestamps.name);
+                result.append(gpa, vk.extensions.khr_calibrated_timestamps.name) catch @panic("OOM");
             } else if (self.ext_calibrated_timestamps) {
-                result.appendAssumeCapacity(vk.extensions.ext_calibrated_timestamps.name);
+                result.append(gpa, vk.extensions.ext_calibrated_timestamps.name) catch @panic("OOM");
             } else {
                 return null;
             }
         }
 
-        return result;
+        return result.toOwnedSlice(gpa) catch @panic("OOM");
     }
 
     const GetCalibratedTimestampsFn = fn (
@@ -505,7 +507,7 @@ pub fn init(
             device_exts.add(&extension_properties);
         }
 
-        const device_ext_list = device_exts.list(options.timestamp_queries);
+        const device_ext_list = device_exts.alloc(arena, options.timestamp_queries);
 
         const surface_capabilities, const surface_format, const present_mode = if (device_ext_list != null) b: {
             const surface_capabilities = instance_proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(
@@ -668,13 +670,13 @@ pub fn init(
         .host_query_reset = options.timestamp_queries,
         .sampler_anisotropy = best_physical_device.sampler_anisotropy,
     });
-    const device_exts = best_physical_device.device_exts.list(options.timestamp_queries).?;
+    const device_exts = best_physical_device.device_exts.alloc(arena, options.timestamp_queries).?;
     const device_create_info: vk.DeviceCreateInfo = .{
         .p_queue_create_infos = &queue_create_infos,
         .queue_create_info_count = @intCast(queue_create_infos.len),
         .p_enabled_features = null,
-        .enabled_extension_count = @intCast(device_exts.constSlice().len),
-        .pp_enabled_extension_names = device_exts.constSlice().ptr,
+        .enabled_extension_count = @intCast(device_exts.len),
+        .pp_enabled_extension_names = device_exts.ptr,
         .p_next = features.root(),
     };
     const device_handle = instance_proxy.createDevice(
