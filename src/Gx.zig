@@ -27,6 +27,8 @@ const Backend = gpu.global_options.Backend;
 
 /// Backend specific state.
 backend: Backend,
+/// An arena allocator for temporary allocations.
+arena: gpu.ext.ScopedArena,
 /// Device information, initialized at init time.
 device: Device,
 /// The number of frames that can be in flight at once.
@@ -105,6 +107,10 @@ pub const Options = struct {
     window: PlatformWindow,
     /// Backend specific options.
     backend: Backend.Options,
+    /// This allocator will be used to create an arena for temporary allocations, e.g. for
+    /// translating API independent struts to backend specific structs. If you want to avoid dynamic
+    /// allocation at runtime you can back this with a fixed buffer allocator.
+    arena: Allocator,
 };
 
 /// If the requested level is not available, a warning will be emitted.
@@ -141,10 +147,13 @@ pub fn init(gpa: Allocator, options: Options) @This() {
     assert(options.frames_in_flight > 0);
     assert(options.frames_in_flight <= gpu.global_options.max_frames_in_flight);
 
-    const backend_result = Backend.init(gpa, options);
+    var arena: gpu.ext.ScopedArena = .init(options.arena);
+
+    const backend_result = Backend.init(gpa, &arena, options);
 
     var gx: @This() = .{
         .backend = backend_result.backend,
+        .arena = arena,
         .device = backend_result.device,
         .frames_in_flight = options.frames_in_flight,
         .timestamp_queries = options.timestamp_queries,
@@ -162,6 +171,7 @@ pub fn init(gpa: Allocator, options: Options) @This() {
 /// Destroys the graphics context. Must not be in use, see `waitIdle`.
 pub fn deinit(self: *@This(), gpa: Allocator) void {
     Backend.deinit(self, gpa);
+    self.arena.deinit();
     self.* = undefined;
 }
 

@@ -242,9 +242,16 @@ const InstanceExts = struct {
     }
 };
 
-pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
+pub fn init(
+    gpa: Allocator,
+    scoped_arena: *gpu.ext.ScopedArena,
+    options: Gx.Options,
+) btypes.BackendInitResult {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
+
+    const arena = scoped_arena.begin();
+    defer scoped_arena.end();
 
     log.info("Graphics API: Vulkan {}.{}.{} (variant {})", .{
         vk_version.major,
@@ -271,11 +278,9 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     // Determine the required layers and extensions
     const ext_zone = tracy.Zone.begin(.{ .name = "layers & extensions", .src = @src() });
     var layers: std.ArrayListUnmanaged([*:0]const u8) = .{};
-    defer layers.deinit(gpa);
 
     var required_instance_exts: std.ArrayListUnmanaged([*:0]const u8) = .{};
-    defer required_instance_exts.deinit(gpa);
-    required_instance_exts.appendSlice(gpa, options.backend.instance_extensions) catch @panic("OOM");
+    required_instance_exts.appendSlice(arena, options.backend.instance_extensions) catch @panic("OOM");
 
     const dbg_messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
         .message_severity = .{
@@ -309,9 +314,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     // Set requested layers, and log all in case any are implicit and end up causing problems
     {
         const val_layer_name = "VK_LAYER_KHRONOS_validation";
-        const supported_layers = base_wrapper.enumerateInstanceLayerPropertiesAlloc(gpa) catch |err| @panic(@errorName(err));
+        const supported_layers = base_wrapper.enumerateInstanceLayerPropertiesAlloc(arena) catch |err| @panic(@errorName(err));
         var validation_layer_missing = options.validation.gte(.fast);
-        defer gpa.free(supported_layers);
 
         log.debug("Supported Layers:", .{});
         var val_props: ?vk.LayerProperties = null;
@@ -329,7 +333,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
 
             if (options.validation.gte(.fast) and std.mem.eql(u8, curr_name, val_layer_name)) {
                 appendNext(&create_instance_chain, @ptrCast(&instance_validation_features));
-                layers.append(gpa, val_layer_name) catch @panic("OOM");
+                layers.append(arena, val_layer_name) catch @panic("OOM");
                 validation_layer_missing = false;
                 val_props = props;
             }
@@ -355,9 +359,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     {
         const supported_instance_exts = base_wrapper.enumerateInstanceExtensionPropertiesAlloc(
             null,
-            gpa,
+            arena,
         ) catch |err| @panic(@errorName(err));
-        defer gpa.free(supported_instance_exts);
         for (supported_instance_exts) |ext| instance_exts.add(&ext);
     }
 
@@ -369,14 +372,14 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
     };
     if (debug) {
         required_instance_exts.append(
-            gpa,
+            arena,
             vk.extensions.ext_debug_utils.name,
         ) catch @panic("OOM");
         appendNext(&create_instance_chain, @ptrCast(&instance_dbg_messenger_info));
     }
     if (instance_exts.ext_swapchain_colorspace) {
         required_instance_exts.append(
-            gpa,
+            arena,
             vk.extensions.ext_swapchain_colorspace.name,
         ) catch @panic("OOM");
     }
@@ -447,9 +450,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
 
     const devices_zone = tracy.Zone.begin(.{ .name = "pick device", .src = @src() });
     const enumerate_devices_zone = tracy.Zone.begin(.{ .name = "enumerate", .src = @src() });
-    const physical_devices = instance_proxy.enumeratePhysicalDevicesAlloc(gpa) catch |err| @panic(@errorName(err));
+    const physical_devices = instance_proxy.enumeratePhysicalDevicesAlloc(arena) catch |err| @panic(@errorName(err));
     enumerate_devices_zone.end();
-    defer gpa.free(physical_devices);
 
     var best_physical_device: PhysicalDevice = .{};
 
@@ -481,8 +483,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             else => .other,
         });
 
-        const queue_family_properties = instance_proxy.getPhysicalDeviceQueueFamilyPropertiesAlloc(device, gpa) catch |err| @panic(@errorName(err));
-        defer gpa.free(queue_family_properties);
+        const queue_family_properties = instance_proxy.getPhysicalDeviceQueueFamilyPropertiesAlloc(device, arena) catch |err| @panic(@errorName(err));
         const queue_family_index: ?u32 = for (queue_family_properties, 0..) |qfp, qfi| {
             // Check for present
             if (instance_proxy.getPhysicalDeviceSurfaceSupportKHR(
@@ -499,8 +500,7 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
         log.debug("\t* queue family index: {?}", .{queue_family_index});
 
         var device_exts: DeviceExts = .{};
-        const supported_device_extensions = instance_proxy.enumerateDeviceExtensionPropertiesAlloc(device, null, gpa) catch |err| @panic(@errorName(err));
-        defer gpa.free(supported_device_extensions);
+        const supported_device_extensions = instance_proxy.enumerateDeviceExtensionPropertiesAlloc(device, null, arena) catch |err| @panic(@errorName(err));
         for (supported_device_extensions) |extension_properties| {
             device_exts.add(&extension_properties);
         }
@@ -516,9 +516,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             const supported_surface_formats = instance_proxy.getPhysicalDeviceSurfaceFormatsAllocKHR(
                 device,
                 surface,
-                gpa,
+                arena,
             ) catch |err| @panic(@errorName(err));
-            defer gpa.free(supported_surface_formats);
 
             log.debug("    * supported surface formats:", .{});
             for (supported_surface_formats) |supported| {
@@ -564,9 +563,8 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
             const present_modes = instance_proxy.getPhysicalDeviceSurfacePresentModesAllocKHR(
                 device,
                 surface,
-                gpa,
+                arena,
             ) catch |err| @panic(@errorName(err));
-            defer gpa.free(present_modes);
             for (present_modes) |present_mode| {
                 switch (present_mode) {
                     .fifo_relaxed_khr => best_present_mode = present_mode,
@@ -652,11 +650,9 @@ pub fn init(gpa: Allocator, options: Gx.Options) btypes.BackendInitResult {
 
     // Iterate over the available queues, and find indices for the various queue types requested
     const queue_zone = tracy.Zone.begin(.{ .name = "queue setup", .src = @src() });
-    const queue_family_properties = instance_proxy.getPhysicalDeviceQueueFamilyPropertiesAlloc(best_physical_device.device, gpa) catch |err| @panic(@errorName(err));
-    defer gpa.free(queue_family_properties);
+    const queue_family_properties = instance_proxy.getPhysicalDeviceQueueFamilyPropertiesAlloc(best_physical_device.device, arena) catch |err| @panic(@errorName(err));
 
-    const queue_family_allocated: []u8 = gpa.alloc(u8, queue_family_properties.len) catch @panic("OOM");
-    defer gpa.free(queue_family_allocated);
+    const queue_family_allocated: []u8 = arena.alloc(u8, queue_family_properties.len) catch @panic("OOM");
     for (queue_family_allocated) |*c| c.* = 0;
 
     const queue_create_infos: [1]vk.DeviceQueueCreateInfo = .{.{
@@ -1085,32 +1081,29 @@ pub fn pipelineLayoutCreate(
     self: *Gx,
     options: gpu.Pipeline.Layout.InitOptions,
 ) gpu.Pipeline.Layout {
+    const arena = self.arena.begin();
+    defer self.arena.end();
+
     // Create the descriptor set layout
-    var descs: std.BoundedArray(
-        vk.DescriptorSetLayoutBinding,
-        global_options.combined_pipeline_layout_create_buf_len,
-    ) = .{};
-    var flags: std.BoundedArray(
-        vk.DescriptorBindingFlags,
-        global_options.combined_pipeline_layout_create_buf_len,
-    ) = .{};
-    for (options.layout.descs, 0..) |desc, i| {
-        descs.append(.{
+    const descs = arena.alloc(vk.DescriptorSetLayoutBinding, options.layout.descs.len) catch @panic("OOM");
+    const flags = arena.alloc(vk.DescriptorBindingFlags, options.layout.descs.len) catch @panic("OOM");
+    for (descs, flags, options.layout.descs, 0..) |*desc, *flag, input, i| {
+        desc.* = .{
             .binding = @intCast(i),
-            .descriptor_type = switch (desc.kind) {
+            .descriptor_type = switch (input.kind) {
                 .sampler => .sampler,
                 .sampled_image => .sampled_image,
                 .storage_image => .storage_image,
                 .uniform_buffer => .uniform_buffer,
                 .storage_buffer => .storage_buffer,
             },
-            .descriptor_count = desc.count,
-            .stage_flags = shaderStagesToVk(desc.stages),
+            .descriptor_count = input.count,
+            .stage_flags = shaderStagesToVk(input.stages),
             .p_immutable_samplers = b: {
                 // For each sampler, check if there's an immutable sampler set for it. This sounds
                 // bad from a complexity standpoint, but it would be difficult to actually bind
                 // enough samplers for this to be an issue.
-                if (desc.kind == .sampler) {
+                if (input.kind == .sampler) {
                     for (options.immutable_samplers) |is| {
                         if (is.binding == i) {
                             break :b @ptrCast(is.samplers);
@@ -1119,34 +1112,31 @@ pub fn pipelineLayoutCreate(
                 }
                 break :b null;
             },
-        }) catch @panic("OOB");
-        flags.appendAssumeCapacity(.{ .partially_bound_bit = desc.partially_bound });
+        };
+        flag.* = .{ .partially_bound_bit = input.partially_bound };
     }
 
     // Translate the push constant ranges
-    var pc_ranges: std.BoundedArray(
-        vk.PushConstantRange,
-        global_options.combined_pipeline_layout_create_buf_len,
-    ) = .{};
+    const pc_ranges = arena.alloc(vk.PushConstantRange, options.layout.push_constant_ranges.len) catch @panic("OOM");
     var pc_offset: u32 = 0;
-    for (options.layout.push_constant_ranges) |range| {
+    for (pc_ranges, options.layout.push_constant_ranges) |*range, input| {
         // Add the range
-        pc_ranges.append(.{
-            .stage_flags = shaderStagesToVk(range.stages),
+        range.* = .{
+            .stage_flags = shaderStagesToVk(input.stages),
             .offset = pc_offset,
-            .size = range.size,
-        }) catch @panic("OOB");
-        pc_offset += range.size;
+            .size = input.size,
+        };
+        pc_offset += input.size;
     }
 
     var binding_flags: vk.DescriptorSetLayoutBindingFlagsCreateInfo = .{
         .binding_count = @intCast(flags.len),
-        .p_binding_flags = flags.constSlice().ptr,
+        .p_binding_flags = flags.ptr,
     };
 
     const descriptor_set_layout = self.backend.device.createDescriptorSetLayout(&.{
         .binding_count = @intCast(descs.len),
-        .p_bindings = &descs.buffer,
+        .p_bindings = descs.ptr,
         .p_next = &binding_flags,
     }, null) catch @panic("OOM");
     setName(
@@ -1161,7 +1151,7 @@ pub fn pipelineLayoutCreate(
         .set_layout_count = 1,
         .p_set_layouts = &.{descriptor_set_layout},
         .push_constant_range_count = @intCast(pc_ranges.len),
-        .p_push_constant_ranges = pc_ranges.constSlice().ptr,
+        .p_push_constant_ranges = pc_ranges.ptr,
     }, null) catch |err| @panic(@errorName(err));
     setName(
         self.backend.debug_messenger,
@@ -1433,6 +1423,9 @@ pub fn descPoolDestroy(self: *Gx, pool: gpu.DescPool) void {
 }
 
 pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
+    const arena = self.arena.begin();
+    defer self.arena.end();
+
     // Create the descriptor pool
     const desc_pool = b: {
         // Calculate the size of the pool
@@ -1456,7 +1449,8 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
 
         // Descriptor count must be greater than zero, so skip any that are zero
         // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkDescriptorPoolSize.html
-        var sizes: std.BoundedArray(vk.DescriptorPoolSize, 4) = .{};
+        var sizes = std.ArrayListUnmanaged(vk.DescriptorPoolSize)
+            .initCapacity(arena, 4) catch @panic("OOM");
         if (samplers > 0) sizes.appendAssumeCapacity(.{
             .type = .sampler,
             .descriptor_count = samplers,
@@ -1480,8 +1474,8 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
 
         // Create the descriptor pool
         const desc_pool = self.backend.device.createDescriptorPool(&.{
-            .pool_size_count = @intCast(sizes.len),
-            .p_pool_sizes = &sizes.buffer,
+            .pool_size_count = @intCast(sizes.items.len),
+            .p_pool_sizes = sizes.items.ptr,
             .flags = .{},
             .max_sets = @intCast(options.cmds.len),
         }, null) catch |err| @panic(@errorName(err));
@@ -1493,21 +1487,21 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
     // Create the descriptor sets
     {
         // Collect the arguments for descriptor set creation
-        var layout_buf: std.BoundedArray(vk.DescriptorSetLayout, global_options.init_desc_pool_buf_len) = .{};
-        var results: [global_options.init_desc_pool_buf_len]vk.DescriptorSet = undefined;
-        for (options.cmds) |cmd| {
-            layout_buf.appendAssumeCapacity(cmd.layout.asBackendType());
+        const layouts = arena.alloc(vk.DescriptorSetLayout, options.cmds.len) catch @panic("OOM");
+        for (layouts, options.cmds) |*layout, cmd| {
+            layout.* = cmd.layout.asBackendType();
         }
 
         // Allocate the descriptor sets
+        const results = arena.alloc(vk.DescriptorSet, options.cmds.len) catch @panic("OOM");
         self.backend.device.allocateDescriptorSets(&.{
             .descriptor_pool = desc_pool,
-            .descriptor_set_count = @intCast(layout_buf.len),
-            .p_set_layouts = &layout_buf.buffer,
-        }, &results) catch |err| @panic(@errorName(err));
+            .descriptor_set_count = @intCast(layouts.len),
+            .p_set_layouts = layouts.ptr,
+        }, results.ptr) catch |err| @panic(@errorName(err));
 
         // Write the results
-        for (options.cmds, results[0..options.cmds.len]) |cmd, result| {
+        for (options.cmds, results) |cmd, result| {
             cmd.result.* = .fromBackendType(result);
             setName(self.backend.debug_messenger, self.backend.device, result, cmd.name);
         }
@@ -2212,6 +2206,9 @@ fn stencilOpStateToVk(self: gpu.Pipeline.InitGraphicsCmd.StencilState.OpState) v
 }
 
 pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphicsCmd) void {
+    const arena = self.arena.begin();
+    defer self.arena.end();
+
     // Settings that are constant across all our pipelines
     const dynamic_states = [_]vk.DynamicState{
         .viewport,
@@ -2245,17 +2242,10 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
     };
 
     // Pipeline create info
-    const max_shader_stages = std.meta.fields(gpu.Pipeline.InitGraphicsCmd.Stages).len;
-    var shader_stages: std.BoundedArray(vk.PipelineShaderStageCreateInfo, global_options.init_pipelines_buf_len * max_shader_stages) = .{};
-    var pipeline_infos: std.BoundedArray(vk.GraphicsPipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
-    var input_assemblys: std.BoundedArray(vk.PipelineInputAssemblyStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
-    var rendering_infos: std.BoundedArray(vk.PipelineRenderingCreateInfo, global_options.init_desc_pool_buf_len) = .{};
-    var multisampling_infos: std.BoundedArray(vk.PipelineMultisampleStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
-    var blend_attachment_states: std.BoundedArray(vk.PipelineColorBlendAttachmentState, global_options.init_pipelines_buf_len) = .{};
-    var blend_state_infos: std.BoundedArray(vk.PipelineColorBlendStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
-    var depth_stencil_state_infos: std.BoundedArray(vk.PipelineDepthStencilStateCreateInfo, global_options.init_pipelines_buf_len) = .{};
+    var pipeline_infos = std.ArrayListUnmanaged(vk.GraphicsPipelineCreateInfo)
+        .initCapacity(arena, cmds.len) catch @panic("OOM");
     for (cmds) |cmd| {
-        const input_assembly = input_assemblys.addOneAssumeCapacity();
+        const input_assembly = arena.create(vk.PipelineInputAssemblyStateCreateInfo) catch @panic("OOM");
         input_assembly.* = switch (cmd.input_assembly) {
             .point_list => .{
                 .topology = .point_list,
@@ -2299,6 +2289,9 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             },
         };
 
+        const max_shader_stages = std.meta.fields(gpu.Pipeline.InitGraphicsCmd.Stages).len;
+        var shader_stages = std.ArrayListUnmanaged(vk.PipelineShaderStageCreateInfo)
+            .initCapacity(arena, max_shader_stages) catch @panic("OOM");
         shader_stages.appendAssumeCapacity(.{
             .stage = .{ .vertex_bit = true },
             .module = cmd.stages.vertex.asBackendType(),
@@ -2309,10 +2302,9 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .module = cmd.stages.fragment.asBackendType(),
             .p_name = "main",
         });
-        const shader_stages_slice = shader_stages.constSlice()[shader_stages.len - 2 ..];
 
-        const rendering_info = rendering_infos.addOneAssumeCapacity();
         const color_attachment_formats = gpu.ImageFormat.asBackendSlice(cmd.color_attachment_formats);
+        const rendering_info = arena.create(vk.PipelineRenderingCreateInfo) catch @panic("OOM");
         rendering_info.* = .{
             .view_mask = 0,
             .color_attachment_count = @intCast(color_attachment_formats.len),
@@ -2321,7 +2313,8 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .stencil_attachment_format = cmd.stencil_attachment_format.asBackendType(),
         };
 
-        const multisampling_info = multisampling_infos.addOneAssumeCapacity();
+        const multisampling_info =
+            arena.create(vk.PipelineMultisampleStateCreateInfo) catch @panic("OOM");
         multisampling_info.* = .{
             .sample_shading_enable = vk.FALSE,
             .rasterization_samples = samplesToVk(cmd.rasterization_samples),
@@ -2330,7 +2323,8 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .alpha_to_one_enable = vk.FALSE,
         };
 
-        const blend_attachment_state = blend_attachment_states.addOneAssumeCapacity();
+        const blend_attachment_state =
+            arena.create(vk.PipelineColorBlendAttachmentState) catch @panic("OOM");
         const color_write_mask: vk.ColorComponentFlags = .{
             .r_bit = cmd.color_write_mask.r,
             .g_bit = cmd.color_write_mask.g,
@@ -2356,7 +2350,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .dst_alpha_blend_factor = .zero,
             .alpha_blend_op = .add,
         };
-        const blend_state_info = blend_state_infos.addOneAssumeCapacity();
+        const blend_state_info = arena.create(vk.PipelineColorBlendStateCreateInfo) catch @panic("OOM");
         blend_state_info.* = .{
             .logic_op_enable = vk.FALSE,
             .logic_op = .clear,
@@ -2388,7 +2382,8 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
 
         var depth_stencil_state: ?*vk.PipelineDepthStencilStateCreateInfo = null;
         if (cmd.depth_state != null or cmd.stencil_state != null) {
-            depth_stencil_state = depth_stencil_state_infos.addOneAssumeCapacity();
+            depth_stencil_state =
+                arena.create(vk.PipelineDepthStencilStateCreateInfo) catch @panic("OOM");
             depth_stencil_state.?.* = .{
                 .flags = .{},
                 .depth_test_enable = vk.FALSE,
@@ -2431,8 +2426,8 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
 
         pipeline_infos.appendAssumeCapacity(.{
             .flags = .{},
-            .stage_count = @intCast(shader_stages_slice.len),
-            .p_stages = shader_stages_slice.ptr,
+            .stage_count = @intCast(shader_stages.items.len),
+            .p_stages = shader_stages.items.ptr,
             .p_vertex_input_state = &vertex_input,
             .p_input_assembly_state = input_assembly,
             .p_viewport_state = &viewport_state,
@@ -2454,8 +2449,8 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
     var pipelines: [global_options.init_pipelines_buf_len]vk.Pipeline = undefined;
     const create_result = self.backend.device.createGraphicsPipelines(
         self.backend.pipeline_cache,
-        @intCast(pipeline_infos.len),
-        &pipeline_infos.buffer,
+        @intCast(pipeline_infos.items.len),
+        pipeline_infos.items.ptr,
         null,
         &pipelines,
     ) catch |err| @panic(@errorName(err));
@@ -2470,7 +2465,10 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
 }
 
 pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeCmd) void {
-    var pipeline_infos: std.BoundedArray(vk.ComputePipelineCreateInfo, global_options.init_pipelines_buf_len) = .{};
+    const arena = self.arena.begin();
+    defer self.arena.end();
+    var pipeline_infos = std.ArrayListUnmanaged(vk.ComputePipelineCreateInfo)
+        .initCapacity(arena, cmds.len) catch @panic("OOM");
     for (cmds) |cmd| {
         pipeline_infos.appendAssumeCapacity(.{
             .flags = .{},
@@ -2489,8 +2487,8 @@ pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeC
     var pipelines: [global_options.init_pipelines_buf_len]vk.Pipeline = undefined;
     const create_result = self.backend.device.createComputePipelines(
         self.backend.pipeline_cache,
-        @intCast(pipeline_infos.len),
-        &pipeline_infos.buffer,
+        @intCast(pipeline_infos.items.len),
+        pipeline_infos.items.ptr,
         null,
         &pipelines,
     ) catch |err| @panic(@errorName(err));
