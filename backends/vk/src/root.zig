@@ -1516,7 +1516,7 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     defer self.arena.end();
 
     var write_sets = std.ArrayListUnmanaged(vk.WriteDescriptorSet)
-        .initCapacity(arena, global_options.update_desc_sets_buf_len) catch @panic("OOM");
+        .initCapacity(arena, updates.len) catch @panic("OOM");
 
     // Iterate over the updates
     var i: u32 = 0;
@@ -2453,19 +2453,19 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
     }
 
     // Create the pipelines
-    var pipelines: [global_options.init_pipelines_buf_len]vk.Pipeline = undefined;
+    const pipelines = arena.alloc(vk.Pipeline, cmds.len) catch @panic("OOM");
     const create_result = self.backend.device.createGraphicsPipelines(
         self.backend.pipeline_cache,
         @intCast(pipeline_infos.items.len),
         pipeline_infos.items.ptr,
         null,
-        &pipelines,
+        pipelines.ptr,
     ) catch |err| @panic(@errorName(err));
     switch (create_result) {
         .success => {},
         else => |err| @panic(@tagName(err)),
     }
-    for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
+    for (pipelines, cmds) |pipeline, cmd| {
         setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.name);
         cmd.result.* = .fromBackendType(pipeline);
     }
@@ -2491,19 +2491,19 @@ pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeC
     }
 
     // Create the pipelines
-    var pipelines: [global_options.init_pipelines_buf_len]vk.Pipeline = undefined;
+    const pipelines = arena.alloc(vk.Pipeline, cmds.len) catch @panic("OOM");
     const create_result = self.backend.device.createComputePipelines(
         self.backend.pipeline_cache,
         @intCast(pipeline_infos.items.len),
         pipeline_infos.items.ptr,
         null,
-        &pipelines,
+        pipelines.ptr,
     ) catch |err| @panic(@errorName(err));
     switch (create_result) {
         .success => {},
         else => |err| @panic(@tagName(err)),
     }
-    for (pipelines[0..cmds.len], cmds) |pipeline, cmd| {
+    for (pipelines, cmds) |pipeline, cmd| {
         setName(self.backend.debug_messenger, self.backend.device, pipeline, cmd.name);
         cmd.result.* = .fromBackendType(pipeline);
     }

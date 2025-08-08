@@ -23,10 +23,6 @@ pub const Options = struct {
     Backend: type,
     max_frames_in_flight: u4 = 2,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
-    init_pipelines_buf_len: u32 = 16,
-    init_desc_pool_buf_len: u32 = 16,
-    update_desc_sets_buf_len: u32 = 32,
-    combined_pipeline_layout_create_buf_len: u32 = 16,
 };
 
 pub const global_options: Options = root.gpu_options;
@@ -1321,7 +1317,6 @@ pub const Pipeline = enum(u64) {
         defer zone.end();
         log.debug("Pipeline.initGraphics ({})", .{cmds.len});
         if (std.debug.runtime_safety) {
-            assert(cmds.len < global_options.init_pipelines_buf_len);
             for (cmds) |cmd| {
                 // Support for up to 4 is guaranteed by our Vulkan version. Once we update to 1.4,
                 // we can bump this to 8.
