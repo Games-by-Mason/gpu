@@ -1,7 +1,7 @@
 .{
     .name = .gpu,
     .fingerprint = 0xbd89f8f2169abe59,
-    .minimum_zig_version = "0.15.0-dev.1493+5f7a0bbab",
+    .minimum_zig_version = "0.15.0-dev.1422+d8cecffe3",
     .version = "0.0.0",
     .dependencies = .{
         .tracy = .{
