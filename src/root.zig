@@ -1266,6 +1266,7 @@ pub const Pipeline = enum(u64) {
         /// We don't currently support the depth bounds check, as I wasn't able to get the correct
         /// behavior out of it on my AMD/nixOS setup.
         pub const DepthState = struct {
+            @"test": bool,
             write: bool,
             compare_op: CompareOp,
         };
@@ -1308,7 +1309,7 @@ pub const Pipeline = enum(u64) {
         alpha_to_coverage: bool,
         color_write_mask: ColorComponents,
         blend_state: ?AttachmentBlendState,
-        depth_state: ?DepthState,
+        depth_state: DepthState,
         stencil_state: ?StencilState,
         logic_op: ?LogicOp,
         blend_constants: [4]f32,

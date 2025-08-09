@@ -2457,48 +2457,38 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             };
         }
 
-        var depth_stencil_state: ?*vk.PipelineDepthStencilStateCreateInfo = null;
-        if (cmd.depth_state != null or cmd.stencil_state != null) {
-            depth_stencil_state =
-                arena.create(vk.PipelineDepthStencilStateCreateInfo) catch @panic("OOM");
-            depth_stencil_state.?.* = .{
-                .flags = .{},
-                .depth_test_enable = vk.FALSE,
-                .depth_write_enable = vk.FALSE,
-                .depth_compare_op = .never,
-                .depth_bounds_test_enable = vk.FALSE,
-                .stencil_test_enable = vk.FALSE,
-                .front = .{
-                    .fail_op = .keep,
-                    .pass_op = .keep,
-                    .depth_fail_op = .keep,
-                    .compare_op = .never,
-                    .compare_mask = 0,
-                    .write_mask = 0,
-                    .reference = 0,
-                },
-                .back = .{
-                    .fail_op = .keep,
-                    .pass_op = .keep,
-                    .depth_fail_op = .keep,
-                    .compare_op = .never,
-                    .compare_mask = 0,
-                    .write_mask = 0,
-                    .reference = 0,
-                },
-                .min_depth_bounds = 0.0,
-                .max_depth_bounds = 0.0,
-            };
-            if (cmd.depth_state) |s| {
-                depth_stencil_state.?.*.depth_test_enable = vk.TRUE;
-                depth_stencil_state.?.*.depth_write_enable = if (s.write) vk.TRUE else vk.FALSE;
-                depth_stencil_state.?.*.depth_compare_op = compareOpToVk(s.compare_op);
-            }
-            if (cmd.stencil_state) |s| {
-                depth_stencil_state.?.*.stencil_test_enable = vk.TRUE;
-                depth_stencil_state.?.*.front = stencilOpStateToVk(s.front);
-                depth_stencil_state.?.*.back = stencilOpStateToVk(s.back);
-            }
+        var depth_stencil_state: vk.PipelineDepthStencilStateCreateInfo = .{
+            .flags = .{},
+            .depth_test_enable = if (cmd.depth_state.@"test") vk.TRUE else vk.FALSE,
+            .depth_write_enable = if (cmd.depth_state.write) vk.TRUE else vk.FALSE,
+            .depth_compare_op = compareOpToVk(cmd.depth_state.compare_op),
+            .depth_bounds_test_enable = vk.FALSE,
+            .stencil_test_enable = vk.FALSE,
+            .front = .{
+                .fail_op = .keep,
+                .pass_op = .keep,
+                .depth_fail_op = .keep,
+                .compare_op = .never,
+                .compare_mask = 0,
+                .write_mask = 0,
+                .reference = 0,
+            },
+            .back = .{
+                .fail_op = .keep,
+                .pass_op = .keep,
+                .depth_fail_op = .keep,
+                .compare_op = .never,
+                .compare_mask = 0,
+                .write_mask = 0,
+                .reference = 0,
+            },
+            .min_depth_bounds = 0.0,
+            .max_depth_bounds = 0.0,
+        };
+        if (cmd.stencil_state) |s| {
+            depth_stencil_state.stencil_test_enable = vk.TRUE;
+            depth_stencil_state.front = stencilOpStateToVk(s.front);
+            depth_stencil_state.back = stencilOpStateToVk(s.back);
         }
 
         pipeline_infos.appendAssumeCapacity(.{
@@ -2510,7 +2500,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .p_viewport_state = &viewport_state,
             .p_rasterization_state = &rasterizer,
             .p_multisample_state = multisampling_info,
-            .p_depth_stencil_state = depth_stencil_state,
+            .p_depth_stencil_state = &depth_stencil_state,
             .p_color_blend_state = blend_state_info,
             .p_dynamic_state = &dynamic_state,
             .layout = cmd.layout.handle.asBackendType(),
