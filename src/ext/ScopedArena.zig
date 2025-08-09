@@ -10,8 +10,8 @@ const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 fba: FixedBufferAllocator,
 /// The start of this scope.
 watermark: usize,
-/// If more than or equal to `1/warn_ratio` of the storage is used, a warning will be emitted. Zero
-/// disables the warning.
+/// If more than to `1/warn_ratio` of the storage is used, a warning will be emitted. Zero disables
+/// the warning.
 warn_ratio: u8 = 4,
 
 /// We over-align the buffer so that initial alignment is unlikely to affect the effective capacity.

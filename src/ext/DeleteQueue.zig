@@ -24,8 +24,8 @@ pub const Handle = struct {
 
 /// The list of handles queued for deletion.
 handles: std.ArrayListUnmanaged(Handle) = .{},
-/// If more than or equal to `1/warn_ratio` of the storage is used, a warning will be emitted. Zero
-/// disables the warning.
+/// If more than `1/warn_ratio` of the storage is used, a warning will be emitted. Zero disables the
+/// warning.
 warn_ratio: u8 = 4,
 
 pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!@This() {
@@ -41,13 +41,6 @@ pub fn deinit(self: *@This(), gpa: Allocator, gx: *Gx) void {
 ///
 /// Checks for various relevant fields on GPU types.
 pub fn append(self: *@This(), resource: anytype) void {
-    if (self.warn_ratio != 0 and self.handles.items.len >= self.handles.capacity / self.warn_ratio) {
-        std.log.warn(
-            "delete queue {x} past 1/{} capacity",
-            .{ @intFromPtr(self), self.warn_ratio },
-        );
-    }
-
     switch (@typeInfo(@TypeOf(resource))) {
         .@"enum" => {
             comptime assert(@sizeOf(@TypeOf(resource)) == @sizeOf(u64));
@@ -77,6 +70,12 @@ pub fn append(self: *@This(), resource: anytype) void {
 
 /// Frees all queues resources and resets the queue.
 pub fn reset(self: *@This(), gx: *Gx) void {
+    if (self.warn_ratio != 0 and self.handles.items.len > self.handles.capacity / self.warn_ratio) {
+        std.log.warn(
+            "delete queue {x} past 1/{} capacity",
+            .{ @intFromPtr(self), self.warn_ratio },
+        );
+    }
     for (self.handles.items) |handle| {
         handle.deinit(handle.value, gx);
     }
