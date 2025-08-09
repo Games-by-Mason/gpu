@@ -47,11 +47,10 @@ pub fn append(self: *@This(), resource: anytype) void {
                     handle.deinit(gx);
                 }
             };
-            if (self.handles.items.len >= self.handles.capacity) @panic("OOB");
-            self.handles.appendAssumeCapacity(.{
+            self.handles.appendBounded(.{
                 .value = @intFromEnum(resource),
                 .deinit = &Deinit.deinit,
-            });
+            }) catch @panic("OOB");
         },
         .@"struct" => {
             self.append(resource.handle);
