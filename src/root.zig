@@ -1783,21 +1783,11 @@ pub const Access = packed struct {
 };
 
 pub const BufBarrier = struct {
-    backend: Backend.BufBarrier,
-
-    pub const Options = struct {
-        src_stages: BarrierStages,
-        src_access: Access,
-        dst_stages: BarrierStages,
-        dst_access: Access,
-        handle: BufHandle(.{}),
-    };
-
-    pub fn init(options: @This().Options) @This() {
-        return Backend.bufBarrierInit(options);
-    }
-
-    pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+    src_stages: BarrierStages,
+    src_access: Access,
+    dst_stages: BarrierStages,
+    dst_access: Access,
+    handle: BufHandle(.{}),
 };
 
 pub const ImageUpload = struct {
@@ -2119,17 +2109,6 @@ pub const CmdBuf = enum(u64) {
         return @enumFromInt(@intFromEnum(self));
     }
 };
-
-fn AsBackendSlice(Item: type) type {
-    const BackendItem = @FieldType(Item, "backend");
-    comptime assert(@sizeOf(Item) == @sizeOf(BackendItem));
-    comptime assert(@alignOf(Item) == @alignOf(BackendItem));
-    return struct {
-        pub fn mixin(slice: []const Item) []const BackendItem {
-            return @ptrCast(slice);
-        }
-    };
-}
 
 test {
     _ = ext;

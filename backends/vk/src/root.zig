@@ -2903,28 +2903,6 @@ fn rangeToVk(range: gpu.ImageBarrier.Range) vk.ImageSubresourceRange {
     };
 }
 
-pub fn bufBarrierInit(
-    options: gpu.BufBarrier.Options,
-) gpu.BufBarrier {
-    return .{
-        .backend = .{
-            .src_stage_mask = barrierStagesToVk(options.src_stages),
-            .src_access_mask = accessToVk(options.src_access),
-            .dst_stage_mask = barrierStagesToVk(options.dst_stages),
-            .dst_access_mask = accessToVk(options.dst_access),
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .buffer = options.handle.asBackendType(),
-            .offset = 0,
-            // I'm under the impression that in practice GPUs aren't using this value, so we're not
-            // going to complicate the API by asking for it. If this turns out to be incorrect we can
-            // always add it later, but this is further implied by the fact that AFAICT DX12 doesn't
-            // have a way to pass this value in.
-            .size = vk.WHOLE_SIZE,
-        },
-    };
-}
-
 fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
     comptime assert(std.meta.fields(gpu.BarrierStages).len == 10); // Update below if this fails!
     return .{
@@ -2996,13 +2974,32 @@ pub fn cmdBufBarriers(
         };
     }
 
-    const buffer_barriers = gpu.BufBarrier.asBackendSlice(options.buffer);
+    const buf_barriers = arena.alloc(vk.BufferMemoryBarrier2, options.buffer.len) catch @panic("OOM");
+    for (buf_barriers, options.buffer) |*vk_buf_barrier, gpu_buf_barrier| {
+        vk_buf_barrier.* = .{
+            .src_stage_mask = barrierStagesToVk(gpu_buf_barrier.src_stages),
+            .src_access_mask = accessToVk(gpu_buf_barrier.src_access),
+            .dst_stage_mask = barrierStagesToVk(gpu_buf_barrier.dst_stages),
+            .dst_access_mask = accessToVk(gpu_buf_barrier.dst_access),
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .buffer = gpu_buf_barrier.handle.asBackendType(),
+            .offset = 0,
+            // I'm under the impression that in practice GPUs aren't using this value, so we're not
+            // going to complicate the API by asking for it. If this turns out to be incorrect we
+            // can always add it later, but this is further implied by the fact that AFAICT DX12
+            // doesn't have a way to pass this value in. (Then again, DX12's barriers seem higher
+            // level in general...)
+            .size = vk.WHOLE_SIZE,
+        };
+    }
+
     self.backend.device.cmdPipelineBarrier2(cb.asBackendType(), &.{
         .dependency_flags = .{},
         .memory_barrier_count = 0,
         .p_memory_barriers = &.{},
-        .buffer_memory_barrier_count = @intCast(buffer_barriers.len),
-        .p_buffer_memory_barriers = buffer_barriers.ptr,
+        .buffer_memory_barrier_count = @intCast(buf_barriers.len),
+        .p_buffer_memory_barriers = buf_barriers.ptr,
         .image_memory_barrier_count = @intCast(image_barriers.len),
         .p_image_memory_barriers = image_barriers.ptr,
     });
@@ -3694,7 +3691,6 @@ pub const ShaderModule = vk.ShaderModule;
 pub const Pipeline = vk.Pipeline;
 pub const PipelineLayout = vk.PipelineLayout;
 pub const Sampler = vk.Sampler;
-pub const BufBarrier = vk.BufferMemoryBarrier2;
 pub const ColorSpace = vk.ColorSpaceKHR;
 pub const ImageFormat = vk.Format;
 
