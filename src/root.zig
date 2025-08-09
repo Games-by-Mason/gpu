@@ -2007,26 +2007,16 @@ pub const BufBarrier = extern struct {
 };
 
 pub const ImageUpload = struct {
-    pub const Region = extern struct {
-        pub const Options = struct {
-            aspect: ImageAspect,
-            buffer_offset: u64,
-            buffer_row_length: ?u32 = null,
-            buffer_image_height: ?u32 = null,
-            mip_level: u32 = 0,
-            base_array_layer: u32 = 0,
-            array_layers: u32 = 1,
-            image_offset: Offset = .{ .x = 0, .y = 0, .z = 0 },
-            image_extent: ImageExtent,
-        };
-
-        backend: Backend.ImageUploadRegion,
-
-        pub fn init(options: @This().Options) @This() {
-            return Backend.imageUploadRegionInit(options);
-        }
-
-        pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+    pub const Region = struct {
+        aspect: ImageAspect,
+        buffer_offset: u64,
+        buffer_row_length: ?u32 = null,
+        buffer_image_height: ?u32 = null,
+        mip_level: u32 = 0,
+        base_array_layer: u32 = 0,
+        array_layers: u32 = 1,
+        image_offset: Offset = .{ .x = 0, .y = 0, .z = 0 },
+        image_extent: ImageExtent,
     };
 
     pub const Offset = struct { x: i32, y: i32, z: i32 };
@@ -2036,51 +2026,6 @@ pub const ImageUpload = struct {
     base_mip_level: u32,
     mip_levels: u32,
     regions: []const Region,
-};
-
-pub const Attachment = struct {
-    backend: Backend.Attachment,
-
-    const LoadOp = union(enum) {
-        load: void,
-        clear_color: [4]f32,
-        clear_depth_stencil: struct { depth: f32, stencil: u32 },
-        dont_care: void,
-    };
-
-    const StoreOp = enum {
-        store,
-        dont_care,
-        none,
-    };
-
-    pub const Layout = enum {};
-
-    // Resolve options not currently supported through the public interface, some thought is needed
-    // to make this compatible with the DX12 style API. Store op is also assumed to be store for
-    // now.
-    pub const Options = struct {
-        pub const ResolveMode = enum {
-            none,
-            sample_zero,
-            average,
-            min,
-            max,
-        };
-
-        view: ImageView,
-        load_op: LoadOp,
-        store_op: StoreOp,
-
-        resolve_view: ?ImageView = null,
-        resolve_mode: ResolveMode = .none,
-    };
-
-    pub fn init(options: @This().Options) @This() {
-        return Backend.attachmentInit(options);
-    }
-
-    pub const asBackendSlice = AsBackendSlice(@This()).mixin;
 };
 
 pub const CmdBuf = enum(u64) {
@@ -2124,6 +2069,35 @@ pub const CmdBuf = enum(u64) {
     }
 
     pub const BeginRenderingOptions = struct {
+        pub const Attachment = struct {
+            view: ImageView,
+            load_op: LoadOp,
+            store_op: StoreOp,
+            resolve_view: ?ImageView = null,
+            resolve_mode: ResolveMode = .none,
+        };
+
+        pub const ResolveMode = enum {
+            none,
+            sample_zero,
+            average,
+            min,
+            max,
+        };
+
+        const LoadOp = union(enum) {
+            load: void,
+            clear_color: [4]f32,
+            clear_depth_stencil: struct { depth: f32, stencil: u32 },
+            dont_care: void,
+        };
+
+        const StoreOp = enum {
+            store,
+            dont_care,
+            none,
+        };
+
         color_attachments: []const Attachment = &.{},
         depth_attachment: ?Attachment = null,
         stencil_attachment: ?Attachment = null,
@@ -2284,21 +2258,10 @@ pub const CmdBuf = enum(u64) {
 
     pub const UploadBufferOptions = struct {
         pub const Region = extern struct {
-            pub const Options = struct {
-                src_offset: u64 = 0,
-                dst_offset: u64 = 0,
-                size: u64,
-            };
-
-            backend: Backend.BufferUploadRegion,
-
-            pub fn init(options: @This().Options) @This() {
-                return Backend.bufferUploadRegionInit(options);
-            }
-
-            pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+            src_offset: u64 = 0,
+            dst_offset: u64 = 0,
+            size: u64,
         };
-
         dst: BufHandle(.{ .transfer_dst = true }),
         src: BufHandle(.{ .transfer_src = true }),
         regions: []const Region,
@@ -2315,26 +2278,17 @@ pub const CmdBuf = enum(u64) {
     }
 
     pub const BlitOptions = struct {
+        pub const Subresource = struct {
+            mip_level: u32,
+            base_array_layer: u32,
+            array_layers: u32,
+            volume: Volume,
+        };
+
         pub const Region = struct {
-            pub const Options = struct {
-                pub const Subresource = struct {
-                    mip_level: u32,
-                    base_array_layer: u32,
-                    array_layers: u32,
-                    volume: Volume,
-                };
-                src: Subresource,
-                dst: Subresource,
-                aspect: ImageAspect,
-            };
-
-            backend: Backend.BlitRegion,
-
-            pub fn init(options: @This().Options) @This() {
-                return Backend.blitRegionInit(options);
-            }
-
-            pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+            src: Subresource,
+            dst: Subresource,
+            aspect: ImageAspect,
         };
 
         src: ImageHandle,

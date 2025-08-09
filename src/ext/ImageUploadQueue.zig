@@ -112,13 +112,11 @@ pub fn beginWrite(
         .src = self.staging,
         .base_mip_level = 0,
         .mip_levels = 1,
-        .regions = &.{
-            .init(.{
-                .aspect = .{ .color = true },
-                .image_extent = options.image.extent,
-                .buffer_offset = self.writer.pos,
-            }),
-        },
+        .regions = &.{.{
+            .aspect = .{ .color = true },
+            .image_extent = options.image.extent,
+            .buffer_offset = self.writer.pos,
+        }},
     });
 
     // Return the image to the user.

@@ -1250,12 +1250,62 @@ pub fn cmdBufCreate(
     return .fromBackendType(cb);
 }
 
+fn attachmentToVk(options: gpu.CmdBuf.BeginRenderingOptions.Attachment) vk.RenderingAttachmentInfo {
+    return .{
+        .image_view = options.view.asBackendType(),
+        .image_layout = .attachment_optimal,
+        .resolve_mode = switch (options.resolve_mode) {
+            .none => .{},
+            .sample_zero => .{ .sample_zero_bit = true },
+            .average => .{ .average_bit = true },
+            .min => .{ .min_bit = true },
+            .max => .{ .max_bit = true },
+        },
+        .resolve_image_view = if (options.resolve_view) |rv|
+            rv.asBackendType()
+        else
+            .null_handle,
+        .resolve_image_layout = if (options.resolve_view != null)
+            .attachment_optimal
+        else
+            .undefined,
+        .load_op = switch (options.load_op) {
+            .clear_color, .clear_depth_stencil => .clear,
+            .load => .load,
+            .dont_care => .dont_care,
+        },
+        .store_op = switch (options.store_op) {
+            .store => .store,
+            .dont_care => .dont_care,
+            .none => .none,
+        },
+        .clear_value = switch (options.load_op) {
+            .clear_color => |color| .{ .color = .{ .float_32 = color } },
+            .clear_depth_stencil => |ds| .{ .depth_stencil = .{
+                .depth = ds.depth,
+                .stencil = ds.stencil,
+            } },
+            else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
+        },
+    };
+}
+
 pub fn cmdBufBeginRendering(
     self: *Gx,
     cb: gpu.CmdBuf,
     options: gpu.CmdBuf.BeginRenderingOptions,
 ) void {
-    const color_attachments = gpu.Attachment.asBackendSlice(options.color_attachments);
+    const arena = self.arena.begin() catch @panic("OOM");
+    defer self.arena.end();
+
+    const color_attachments = arena.alloc(
+        vk.RenderingAttachmentInfo,
+        options.color_attachments.len,
+    ) catch @panic("OOM");
+    for (color_attachments, options.color_attachments) |*vk_attachment, gpu_attachment| {
+        vk_attachment.* = attachmentToVk(gpu_attachment);
+    }
+
     self.backend.device.cmdBeginRendering(cb.asBackendType(), &.{
         .flags = .{},
         .render_area = .{
@@ -1269,8 +1319,18 @@ pub fn cmdBufBeginRendering(
         .view_mask = 0,
         .color_attachment_count = @intCast(color_attachments.len),
         .p_color_attachments = color_attachments.ptr,
-        .p_depth_attachment = if (options.depth_attachment) |*a| &a.backend else null,
-        .p_stencil_attachment = if (options.stencil_attachment) |*a| &a.backend else null,
+        .p_depth_attachment = b: {
+            const vk_depth_attachment = options.depth_attachment orelse break :b null;
+            const gpu_depth_attachment = arena.create(vk.RenderingAttachmentInfo) catch @panic("OOM");
+            gpu_depth_attachment.* = attachmentToVk(vk_depth_attachment);
+            break :b gpu_depth_attachment;
+        },
+        .p_stencil_attachment = b: {
+            const vk_stencil_attachment = options.stencil_attachment orelse break :b null;
+            const gpu_stencil_attachment = arena.create(vk.RenderingAttachmentInfo) catch @panic("OOM");
+            gpu_stencil_attachment.* = attachmentToVk(vk_stencil_attachment);
+            break :b gpu_stencil_attachment;
+        },
     });
 }
 
@@ -2641,7 +2701,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         cb.blit(self, .{
             .src = .fromBackendType(present.handle.asBackendType()),
             .dst = .fromBackendType(swapchain_image),
-            .regions = &.{.init(.{
+            .regions = &.{.{
                 .src = .{
                     .mip_level = 0,
                     .base_array_layer = 0,
@@ -2655,7 +2715,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
                     .volume = .fromExtent2D(self.backend.swapchain_extent),
                 },
                 .aspect = .{ .color = true },
-            })},
+            }},
             .filter = present.filter,
         });
 
@@ -3254,32 +3314,8 @@ pub fn cmdBufBarriers(
     });
 }
 
-pub fn imageUploadRegionInit(options: gpu.ImageUpload.Region.Options) gpu.ImageUpload.Region {
-    return .{ .backend = .{
-        .buffer_offset = options.buffer_offset,
-        .buffer_row_length = options.buffer_row_length orelse 0,
-        .buffer_image_height = options.buffer_image_height orelse 0,
-        .image_subresource = .{
-            .aspect_mask = aspectToVk(options.aspect),
-            .mip_level = options.mip_level,
-            .base_array_layer = options.base_array_layer,
-            .layer_count = options.array_layers,
-        },
-        .image_offset = .{
-            .x = options.image_offset.x,
-            .y = options.image_offset.y,
-            .z = options.image_offset.z,
-        },
-        .image_extent = .{
-            .width = options.image_extent.width,
-            .height = options.image_extent.height,
-            .depth = options.image_extent.depth,
-        },
-    } };
-}
-
 fn blitSubresourceToVk(
-    self: gpu.CmdBuf.BlitOptions.Region.Options.Subresource,
+    self: gpu.CmdBuf.BlitOptions.Subresource,
     aspect: gpu.ImageAspect,
 ) vk.ImageSubresourceLayers {
     return .{
@@ -3301,78 +3337,44 @@ fn volumeToVk(volume: gpu.Volume) [2]vk.Offset3D {
     };
 }
 
-pub fn blitRegionInit(
-    options: gpu.CmdBuf.BlitOptions.Region.Options,
-) gpu.CmdBuf.BlitOptions.Region {
-    return .{ .backend = .{
-        .src_subresource = blitSubresourceToVk(options.src, options.aspect),
-        .src_offsets = volumeToVk(options.src.volume),
-        .dst_subresource = blitSubresourceToVk(options.dst, options.aspect),
-        .dst_offsets = volumeToVk(options.dst.volume),
-    } };
-}
-
-pub fn bufferUploadRegionInit(options: Gx.BufferUpload.Region.Options) Gx.BufferUpload.Region {
-    return .{ .backend = .{
-        .src_offset = options.src_offset,
-        .dst_offset = options.dst_offset,
-        .size = options.size,
-    } };
-}
-
-pub fn attachmentInit(options: gpu.Attachment.Options) gpu.Attachment {
-    return .{
-        .backend = .{
-            .image_view = options.view.asBackendType(),
-            .image_layout = .attachment_optimal,
-            .resolve_mode = switch (options.resolve_mode) {
-                .none => .{},
-                .sample_zero => .{ .sample_zero_bit = true },
-                .average => .{ .average_bit = true },
-                .min => .{ .min_bit = true },
-                .max => .{ .max_bit = true },
-            },
-            .resolve_image_view = if (options.resolve_view) |rv|
-                rv.asBackendType()
-            else
-                .null_handle,
-            .resolve_image_layout = if (options.resolve_view != null)
-                .attachment_optimal
-            else
-                .undefined,
-            .load_op = switch (options.load_op) {
-                .clear_color, .clear_depth_stencil => .clear,
-                .load => .load,
-                .dont_care => .dont_care,
-            },
-            .store_op = switch (options.store_op) {
-                .store => .store,
-                .dont_care => .dont_care,
-                .none => .none,
-            },
-            .clear_value = switch (options.load_op) {
-                .clear_color => |color| .{ .color = .{ .float_32 = color } },
-                .clear_depth_stencil => |ds| .{ .depth_stencil = .{
-                    .depth = ds.depth,
-                    .stencil = ds.stencil,
-                } },
-                else => .{ .color = .{ .float_32 = .{ 0.0, 0.0, 0.0, 0.0 } } },
-            },
-        },
-    };
-}
-
 pub fn cmdBufUploadImage(
     self: *Gx,
     cb: gpu.CmdBuf,
     dst: gpu.ImageHandle,
     src: gpu.BufHandle(.{}),
-    regions: []const gpu.ImageUpload.Region,
+    gpu_regions: []const gpu.ImageUpload.Region,
 ) void {
+    const arena = self.arena.begin() catch @panic("OOM");
+    defer self.arena.end();
+
+    const vk_regions = arena.alloc(vk.BufferImageCopy, gpu_regions.len) catch @panic("OOM");
+    for (vk_regions, gpu_regions) |*vk_region, gpu_region| {
+        vk_region.* = .{
+            .buffer_offset = gpu_region.buffer_offset,
+            .buffer_row_length = gpu_region.buffer_row_length orelse 0,
+            .buffer_image_height = gpu_region.buffer_image_height orelse 0,
+            .image_subresource = .{
+                .aspect_mask = aspectToVk(gpu_region.aspect),
+                .mip_level = gpu_region.mip_level,
+                .base_array_layer = gpu_region.base_array_layer,
+                .layer_count = gpu_region.array_layers,
+            },
+            .image_offset = .{
+                .x = gpu_region.image_offset.x,
+                .y = gpu_region.image_offset.y,
+                .z = gpu_region.image_offset.z,
+            },
+            .image_extent = .{
+                .width = gpu_region.image_extent.width,
+                .height = gpu_region.image_extent.height,
+                .depth = gpu_region.image_extent.depth,
+            },
+        };
+    }
+
     // `cmdCopyImage` has been superseded by `cmdCopyImage2`, however there's no benefit to the
     // new API unless you need a `pNext` chain, and as such we're opting to just save the extra
     // bytes.
-    const vk_regions = gpu.ImageUpload.Region.asBackendSlice(regions);
     self.backend.device.cmdCopyBufferToImage(
         cb.asBackendType(),
         src.asBackendType(),
@@ -3388,12 +3390,23 @@ pub fn cmdBufUploadBuffer(
     cb: gpu.CmdBuf,
     dst: Gx.Buf(.{}),
     src: Gx.Buf(.{}),
-    regions: []const Gx.BufferUpload.Region,
+    gpu_regions: []const Gx.BufferUpload.Region,
 ) void {
+    const arena = self.arena.begin() catch @panic("OOM");
+    defer self.arena.end();
+
+    const vk_regions = arena.alloc(vk.BufferImageCopy, gpu_regions.len) catch @panic("OOM");
+    for (vk_regions, gpu_regions) |*vk_region, gpu_region| {
+        vk_region.* = .{
+            .src_offset = gpu_region.src_offset,
+            .dst_offset = gpu_region.dst_offset,
+            .size = gpu_region.size,
+        };
+    }
+
     // `cmdCopyBuffer` has been superseded by `cmdCopyBuffer2`, however there's no benefit to the
     // new API unless you need a `pNext` chain, and as such we're opting to just save the extra
     // bytes.
-    const vk_regions = Gx.BufferUpload.Region.asBackendSlice(regions);
     self.backend.device.cmdCopyBuffer(
         cb.asBackendType(),
         src.asBackendType(),
@@ -3404,15 +3417,27 @@ pub fn cmdBufUploadBuffer(
 }
 
 pub fn cmdBufBlit(self: *Gx, cb: gpu.CmdBuf, options: gpu.CmdBuf.BlitOptions) void {
-    const vk_regions = gpu.CmdBuf.BlitOptions.Region.asBackendSlice(options.regions);
+    var arena = self.arena.begin() catch @panic("OOM");
+    defer self.arena.end();
+
+    const regions = arena.alloc(vk.ImageBlit, options.regions.len) catch @panic("OOM");
+    for (regions, options.regions) |*region_vk, region_gpu| {
+        region_vk.* = .{
+            .src_subresource = blitSubresourceToVk(region_gpu.src, region_gpu.aspect),
+            .src_offsets = volumeToVk(region_gpu.src.volume),
+            .dst_subresource = blitSubresourceToVk(region_gpu.dst, region_gpu.aspect),
+            .dst_offsets = volumeToVk(region_gpu.dst.volume),
+        };
+    }
+
     self.backend.device.cmdBlitImage(
         cb.asBackendType(),
         options.src.asBackendType(),
         .transfer_src_optimal,
         options.dst.asBackendType(),
         .transfer_dst_optimal,
-        @intCast(vk_regions.len),
-        vk_regions.ptr,
+        @intCast(regions.len),
+        regions.ptr,
         filterToVk(options.filter),
     );
 }
@@ -3977,10 +4002,6 @@ pub const PipelineLayout = vk.PipelineLayout;
 pub const Sampler = vk.Sampler;
 pub const ImageBarrier = vk.ImageMemoryBarrier2;
 pub const BufBarrier = vk.BufferMemoryBarrier2;
-pub const ImageUploadRegion = vk.BufferImageCopy;
-pub const BufferUploadRegion = vk.BufferCopy;
-pub const BlitRegion = vk.ImageBlit;
-pub const Attachment = vk.RenderingAttachmentInfo;
 pub const ColorSpace = vk.ColorSpaceKHR;
 pub const ImageFormat = vk.Format;
 
