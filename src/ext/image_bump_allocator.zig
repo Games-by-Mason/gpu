@@ -143,16 +143,15 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
                         image_name,
                     });
                 }
-                if (self.count() >= self.available.capacity) @panic("OOB");
                 const name: DebugName = .{ .str = self.name, .index = self.count() };
-                self.available.appendAssumeCapacity(.{
+                self.available.appendBounded(.{
                     .name = name,
                     .memory = .init(gx, .{
                         .name = name,
                         .size = self.page_size,
                     }),
                     .dedicated = false,
-                });
+                }) catch @panic("OOB");
             }
             return self.available.items[self.available.items.len - 1];
         }
@@ -189,16 +188,15 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
             // If we decided on making a dedicated allocation for this image, create it and early
             // out
             if (dedicated) {
-                if (self.count() >= self.full.capacity) @panic("OOB");
                 const result = Image.initDedicated(gx, .{
                     .name = options.name,
                     .image = options.image,
                 });
-                self.full.appendAssumeCapacity(.{
+                self.full.appendBounded(.{
                     .name = options.name,
                     .memory = result.memory,
                     .dedicated = true,
-                });
+                }) catch @panic("OOB");
                 return result.image;
             }
 

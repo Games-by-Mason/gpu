@@ -153,9 +153,8 @@ pub fn RenderTarget(kind: ImageKind) type {
                 gx: *Gx,
                 options: ImageBumpAllocator(kind).AllocOptions,
             ) RenderTarget(kind) {
-                if (self.images.items.len == self.images.capacity) @panic("OOB");
                 const rt: RenderTarget(kind) = @enumFromInt(self.images.items.len);
-                self.info.appendAssumeCapacity(options);
+                self.info.appendBounded(options) catch @panic("OOB");
                 _ = self.images.addOneAssumeCapacity();
                 rt.init(self, gx);
                 return rt;
