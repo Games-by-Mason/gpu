@@ -113,10 +113,10 @@ pub const Options = struct {
     max_swapchain_images: u32 = 8,
     /// Backend specific options.
     backend: Backend.Options,
-    /// This allocator will be used to create an arena for temporary allocations, e.g. for
-    /// translating API independent struts to backend specific structs. If you want to avoid dynamic
-    /// allocation at runtime you can back this with a fixed buffer allocator.
-    arena: Allocator,
+    /// The log2 of the number of bytes to reserve for the arena. The arena is used for temporary
+    /// allocations, e.g. translating API independent struts to backend specific structs. It's
+    /// allocated up front and cannot grow.
+    arena_capacity_log2: usize,
 };
 
 /// If the requested level is not available, a warning will be emitted.
@@ -153,13 +153,11 @@ pub fn init(gpa: Allocator, options: Options) @This() {
     assert(options.frames_in_flight > 0);
     assert(options.frames_in_flight <= gpu.global_options.max_frames_in_flight);
 
-    var arena: gpu.ext.ScopedArena = .init(options.arena);
-
-    const backend_result = Backend.init(gpa, &arena, options);
+    const backend_result = Backend.init(gpa, options);
 
     var gx: @This() = .{
         .backend = backend_result.backend,
-        .arena = arena,
+        .arena = gpu.ext.ScopedArena.init(gpa, options.arena_capacity_log2) catch @panic("OOM"),
         .device = backend_result.device,
         .frames_in_flight = options.frames_in_flight,
         .timestamp_queries = options.timestamp_queries,
@@ -177,7 +175,7 @@ pub fn init(gpa: Allocator, options: Options) @This() {
 /// Destroys the graphics context. Must not be in use, see `waitIdle`.
 pub fn deinit(self: *@This(), gpa: Allocator) void {
     Backend.deinit(self, gpa);
-    self.arena.deinit();
+    self.arena.deinit(gpa);
     self.* = undefined;
 }
 

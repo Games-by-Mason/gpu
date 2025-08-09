@@ -17,4 +17,5 @@ pub const gaussian = @import("ext/gaussian.zig");
 test {
     _ = colors;
     _ = gaussian;
+    _ = ScopedArena;
 }

@@ -240,14 +240,17 @@ const InstanceExts = struct {
 
 pub fn init(
     gpa: Allocator,
-    scoped_arena: *gpu.ext.ScopedArena,
     options: Gx.Options,
 ) btypes.BackendInitResult {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
 
-    const arena = scoped_arena.begin();
-    defer scoped_arena.end();
+    // We don't use the scoped arena here because the amount of allocation we do is entirely up to
+    // the user's computer. e.g. it could report more or less extensions, and we can't predict how
+    // much memory is needed.
+    var arena_allocator: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
 
     log.info("Graphics API: Vulkan {}.{}.{} (variant {})", .{
         vk_version.major,
@@ -1087,7 +1090,7 @@ pub fn pipelineLayoutCreate(
     self: *Gx,
     options: gpu.Pipeline.Layout.InitOptions,
 ) gpu.Pipeline.Layout {
-    const arena = self.arena.begin();
+    const arena = self.arena.begin() catch @panic("OOM");
     defer self.arena.end();
 
     // Create the descriptor set layout
@@ -1429,7 +1432,7 @@ pub fn descPoolDestroy(self: *Gx, pool: gpu.DescPool) void {
 }
 
 pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
-    const arena = self.arena.begin();
+    const arena = self.arena.begin() catch @panic("OOM");
     defer self.arena.end();
 
     // Create the descriptor pool
@@ -1519,7 +1522,7 @@ pub fn descPoolCreate(self: *Gx, options: gpu.DescPool.Options) gpu.DescPool {
 
 /// Rational for the auto batching can be found in `Gx.updateDescSets`.
 pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
-    const arena = self.arena.begin();
+    const arena = self.arena.begin() catch @panic("OOM");
     defer self.arena.end();
 
     var write_sets = std.ArrayListUnmanaged(vk.WriteDescriptorSet)
@@ -2220,7 +2223,7 @@ fn stencilOpStateToVk(self: gpu.Pipeline.InitGraphicsCmd.StencilState.OpState) v
 }
 
 pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphicsCmd) void {
-    const arena = self.arena.begin();
+    const arena = self.arena.begin() catch @panic("OOM");
     defer self.arena.end();
 
     // Settings that are constant across all our pipelines
@@ -2479,7 +2482,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
 }
 
 pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeCmd) void {
-    const arena = self.arena.begin();
+    const arena = self.arena.begin() catch @panic("OOM");
     defer self.arena.end();
     var pipeline_infos = std.ArrayListUnmanaged(vk.ComputePipelineCreateInfo)
         .initCapacity(arena, cmds.len) catch @panic("OOM");
