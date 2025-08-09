@@ -98,14 +98,20 @@ pub fn beginWrite(
     // side, which increases complexity. In practice, even when uploading 1000s of images, I was not
     // able to measure a difference in performance, the bottleneck is clearly the actual copy so
     // we're opting to keep thing simple.
-    cb.barriers(gx, .{ .image = &.{
-        .undefinedToTransferDst(.{
-            .handle = image.handle,
-            .src_stages = .{ .top_of_pipe = true },
-            .range = .first,
-            .aspect = .{ .color = true },
-        }),
-    } });
+    cb.barriers(gx, .{ .image = &.{.{
+        .image = image.handle,
+        .range = .first(.{ .color = true }),
+        .src = .{
+            .stages = .{ .top_of_pipe = true },
+            .access = .{},
+            .layout = .undefined,
+        },
+        .dst = .{
+            .stages = .{ .all_transfer = true },
+            .access = .{ .transfer_write = true },
+            .layout = .transfer_dst,
+        },
+    }} });
 
     cb.uploadImage(gx, .{
         .dst = image.handle,

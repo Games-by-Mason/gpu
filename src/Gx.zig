@@ -216,6 +216,20 @@ pub const EndFrameOptions = struct {
     // designed for desktop and console, though, and so this very marginal increase is not expected
     // to be a problem.
     pub const Present = struct {
+        pub const Range = struct {
+            pub const first: @This() = .{
+                .base_mip_level = 0,
+                .mip_levels = 1,
+                .base_array_layer = 0,
+                .array_layers = 1,
+            };
+
+            base_mip_level: u32,
+            mip_levels: u32,
+            base_array_layer: u32,
+            array_layers: u32,
+        };
+
         /// The image to present. Must be in the "present blit" layout.
         handle: gpu.ImageHandle,
         /// The extent of the source image to present.
@@ -228,7 +242,7 @@ pub const EndFrameOptions = struct {
         /// the value from the event.
         surface_extent: Extent2D,
         /// The range of the source image to present.
-        range: gpu.ImageRange,
+        range: Range,
         /// The filter to use when blitting the source to the swapchain.
         filter: gpu.ImageFilter,
     };

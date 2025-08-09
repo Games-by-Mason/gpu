@@ -1129,7 +1129,13 @@ pub const BarrierStages = packed struct {
     top_of_pipe: bool = false,
     vertex: bool = false,
     fragment: bool = false,
+    early_fragment_tests: bool = false,
+    late_fragment_tests: bool = false,
+    color_attachment_output: bool = false,
     compute: bool = false,
+    all_transfer: bool = false,
+    copy: bool = false,
+    blit: bool = false,
     bottom_of_pipe: bool = false,
 };
 
@@ -1726,269 +1732,58 @@ pub const Device = struct {
     surface_format: SurfaceFormatQuery.Result,
 };
 
-pub const ImageRange = struct {
-    pub const first: @This() = .{
-        .base_mip_level = 0,
-        .mip_levels = 1,
-        .base_array_layer = 0,
-        .array_layers = 1,
-    };
-    base_mip_level: u32,
-    mip_levels: u32,
-    base_array_layer: u32,
-    array_layers: u32,
-};
-
-pub const ImageBarrier = extern struct {
-    backend: Backend.ImageBarrier,
-
-    pub const UndefinedToTransferDstOptions = struct {
-        handle: ImageHandle,
-        src_stages: BarrierStages,
-        range: ImageRange,
+pub const ImageBarrier = struct {
+    pub const Range = struct {
+        base_mip_level: u32,
+        mip_levels: u32,
+        base_array_layer: u32,
+        array_layers: u32,
         aspect: ImageAspect,
+
+        pub fn first(aspect: ImageAspect) @This() {
+            return .{
+                .base_mip_level = 0,
+                .mip_levels = 1,
+                .base_array_layer = 0,
+                .array_layers = 1,
+                .aspect = aspect,
+            };
+        }
     };
 
-    pub fn undefinedToTransferDst(options: UndefinedToTransferDstOptions) @This() {
-        return Backend.imageBarrierUndefinedToTransferDst(options);
-    }
-
-    pub const UndefinedToColorAttachmentOptions = struct {
-        handle: ImageHandle,
-        src_stages: BarrierStages,
-        range: ImageRange,
+    const End = struct {
+        stages: BarrierStages,
+        access: Access,
+        layout: Layout,
     };
 
-    pub fn undefinedToColorAttachment(options: UndefinedToColorAttachmentOptions) @This() {
-        return Backend.imageBarrierUndefinedToColorAttachment(options);
-    }
-
-    pub const UndefinedToDepthStencilAttachmentOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        aspect: ImageAspect,
+    pub const Layout = enum {
+        undefined,
+        general,
+        read_only,
+        attachment,
+        transfer_src,
+        transfer_dst,
     };
 
-    pub fn undefinedToDepthStencilAttachmentAfterWrite(
-        options: UndefinedToDepthStencilAttachmentOptions,
-    ) @This() {
-        return Backend.imageBarrierUndefinedToDepthStencilAttachmentAfterWrite(options);
-    }
-
-    pub const UndefinedToGeneralOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        src_stages: BarrierStages,
-        dst_stages: BarrierStages,
-        dst_access: Access,
-        aspect: ImageAspect,
-    };
-
-    pub fn undefinedToGeneral(options: UndefinedToGeneralOptions) @This() {
-        return Backend.imageBarrierUndefinedToGeneral(options);
-    }
-
-    pub const GeneralToGeneralOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        src_stages: BarrierStages,
-        src_access: Access,
-        dst_stages: BarrierStages,
-        dst_access: Access,
-        aspect: ImageAspect,
-    };
-
-    pub fn generalToGeneral(options: GeneralToGeneralOptions) @This() {
-        return Backend.imageBarrierGeneralToGeneral(options);
-    }
-
-    pub const TransferDstToReadOnlyOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        dst_stages: BarrierStages,
-        aspect: ImageAspect,
-    };
-
-    pub fn transferDstToReadOnly(options: TransferDstToReadOnlyOptions) @This() {
-        return Backend.imageBarrierTransferDstToReadOnly(options);
-    }
-
-    pub const ColorAttachmentToReadOnlyOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        dst_stages: BarrierStages,
-    };
-
-    pub fn colorAttachmentToReadOnly(options: ColorAttachmentToReadOnlyOptions) @This() {
-        return Backend.imageBarrierColorAttachmentToReadOnly(options);
-    }
-
-    pub const ColorAttachmentToGeneralOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        dst_access: Access,
-        dst_stages: BarrierStages,
-    };
-
-    pub fn colorAttachmentToGeneral(options: ColorAttachmentToGeneralOptions) @This() {
-        return Backend.imageBarrierColorAttachmentToGeneral(options);
-    }
-
-    pub const GeneralToReadOnlyOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        src_stages: BarrierStages,
-        src_access: Access,
-        dst_stages: BarrierStages,
-        aspect: ImageAspect,
-    };
-
-    pub fn generalToReadOnly(options: GeneralToReadOnlyOptions) @This() {
-        return Backend.imageBarrierGeneralToReadOnly(options);
-    }
-
-    pub const ReadOnlyToGeneralOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        src_stages: BarrierStages,
-        dst_stages: BarrierStages,
-        dst_access: Access,
-        aspect: ImageAspect,
-    };
-
-    pub fn readOnlyToGeneral(options: ReadOnlyToGeneralOptions) @This() {
-        return Backend.imageBarrierReadOnlyToGeneral(options);
-    }
-
-    pub const ColorAttachmentToTransferSrcOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-    };
-
-    pub fn colorAttachmentToTransferSrc(options: ColorAttachmentToTransferSrcOptions) @This() {
-        return Backend.imageBarrierColorAttachmentToTransferSrc(options);
-    }
-
-    pub const ColorAttachmentToBlitSrcOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-    };
-
-    /// This may not be a "real" layout if the backend manually implements blitting.
-    pub fn colorAttachmentToBlitSrc(options: ColorAttachmentToBlitSrcOptions) @This() {
-        return Backend.imageBarrierColorAttachmentToBlitSrc(options);
-    }
-
-    pub const GeneralToBlitSrcOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        src_stages: BarrierStages,
-        aspect: ImageAspect,
-    };
-
-    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
-    pub fn generalToBlitSrc(options: GeneralToBlitSrcOptions) @This() {
-        return Backend.imageBarrierGeneralToBlitSrc(options);
-    }
-
-    pub const BlitSrcToReadOnlyOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        dst_stages: BarrierStages,
-        aspect: ImageAspect,
-    };
-
-    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
-    pub fn blitSrcToReadOnly(options: BlitSrcToReadOnlyOptions) @This() {
-        return Backend.imageBarrierBlitSrcToReadOnly(options);
-    }
-
-    pub const BlitSrcToGeneralOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        dst_stages: BarrierStages,
-        dst_access: Access,
-        aspect: ImageAspect,
-    };
-
-    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
-    pub fn blitSrcToGeneral(options: BlitSrcToGeneralOptions) @This() {
-        return Backend.imageBarrierBlitSrcToGeneral(options);
-    }
-
-    pub const BlitDstToReadOnlyOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        dst_stages: BarrierStages,
-        aspect: ImageAspect,
-    };
-
-    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
-    pub fn blitDstToReadOnly(options: BlitDstToReadOnlyOptions) @This() {
-        return Backend.imageBarrierBlitDstToReadOnly(options);
-    }
-
-    pub const BlitDstToGeneralOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        dst_stages: BarrierStages,
-        dst_access: Access,
-        aspect: ImageAspect,
-    };
-
-    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
-    pub fn blitDstToGeneral(options: BlitDstToGeneralOptions) @This() {
-        return Backend.imageBarrierBlitDstToGeneral(options);
-    }
-
-    pub const UndefinedToBlitDstOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-        src_stages: BarrierStages,
-        aspect: ImageAspect,
-    };
-
-    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
-    pub fn undefinedToBlitDst(options: UndefinedToBlitDstOptions) @This() {
-        return Backend.imageBarrierUndefinedToBlitDst(options);
-    }
-
-    pub const UndefinedToColorAttachmentAfterBlitOptions = struct {
-        handle: ImageHandle,
-        range: ImageRange,
-    };
-
-    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
-    pub fn undefinedToColorAttachmentAfterBlit(
-        options: UndefinedToColorAttachmentAfterBlitOptions,
-    ) @This() {
-        return Backend.imageBarrierUndefinedToColorAttachmentAfterBlit(options);
-    }
-
-    pub const UndefinedToGeneralAfterBlitOptions = struct {
-        handle: ImageHandle,
-        dst_stages: BarrierStages,
-        dst_access: Access,
-        range: ImageRange,
-        aspect: ImageAspect,
-    };
-
-    /// See `colorAttachmentToBlitSrc`, similar disclaimer applies here.
-    pub fn undefinedToGeneralAfterBlit(
-        options: UndefinedToGeneralAfterBlitOptions,
-    ) @This() {
-        return Backend.imageBarrierUndefinedToGeneralAfterBlit(options);
-    }
-
-    pub const asBackendSlice = AsBackendSlice(@This()).mixin;
+    image: ImageHandle,
+    range: Range,
+    src: End,
+    dst: End,
 };
 
 pub const Access = packed struct {
-    read: bool = false,
-    write: bool = false,
+    shader_read: bool = false,
+    shader_write: bool = false,
+    transfer_read: bool = false,
+    transfer_write: bool = false,
+    color_attachment_read: bool = false,
+    color_attachment_write: bool = false,
+    depth_stencil_attachment_read: bool = false,
+    depth_stencil_attachment_write: bool = false,
 };
 
-pub const BufBarrier = extern struct {
+pub const BufBarrier = struct {
     backend: Backend.BufBarrier,
 
     pub const Options = struct {
