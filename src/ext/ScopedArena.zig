@@ -50,13 +50,17 @@ pub fn begin(self: *@This()) Allocator.Error!Allocator {
 
 /// Ends the current scope.
 pub fn end(self: *@This()) void {
+    assert(self.fba.end_index > self.watermark);
+
     if (self.warn_ratio != 0 and self.fba.end_index >= self.fba.buffer.len / self.warn_ratio) {
         std.log.warn(
             "scoped arena {x} past 1/{} capacity",
             .{ @intFromPtr(self), self.warn_ratio },
         );
     }
-    assert(self.fba.end_index != self.watermark);
+
+    const freed = self.fba.buffer[self.watermark..self.fba.end_index];
+
     self.fba.end_index = self.watermark;
     const prev_watermark: *usize = @ptrFromInt(std.mem.alignForward(
         usize,
@@ -64,6 +68,8 @@ pub fn end(self: *@This()) void {
         @alignOf(usize),
     ));
     self.watermark = prev_watermark.*;
+
+    @memset(freed, undefined);
 }
 
 test "all" {
@@ -74,56 +80,90 @@ test "all" {
     defer arena.deinit(std.testing.allocator);
 
     for (0..2) |_| {
-        const scope0 = try arena.begin();
-        defer arena.end();
+        const scope_0_restore = arena.fba.end_index;
+        try std.testing.expectEqual(scope_0_restore, 0);
 
-        const a0 = try scope0.create(u8);
+        const scope_0 = try arena.begin();
+
+        const a0 = try scope_0.create(u8);
         a0.* = 0;
-        const a1 = try scope0.create(u16);
+        const a1 = try scope_0.create(u16);
         a1.* = 1;
 
         {
-            const scope1 = try arena.begin();
-            defer arena.end();
+            const scope_1_restore = arena.fba.end_index;
+            const scope_1 = try arena.begin();
 
-            const a2 = try scope1.create(u32);
+            const a2 = try scope_1.create(u32);
             a2.* = 2;
-            const a3 = try scope1.create(u64);
+            const a3 = try scope_1.create(u64);
             a3.* = 3;
 
             try std.testing.expectEqual(2, a2.*);
             try std.testing.expectEqual(3, a3.*);
+
+            arena.end();
+
+            try std.testing.expectEqual(scope_1_restore, arena.fba.end_index);
         }
 
         {
-            const scope1 = try arena.begin();
-            defer arena.end();
+            const scope_1_restore = arena.fba.end_index;
+            _ = try arena.begin();
+            arena.end();
+            try std.testing.expectEqual(scope_1_restore, arena.fba.end_index);
+        }
 
-            const a4 = try scope1.create(u8);
+        {
+            const scope_1_restore = arena.fba.end_index;
+            const scope_1 = try arena.begin();
+
+            const a4 = try scope_1.create(u8);
             a4.* = 4;
-            const a5 = try scope1.create(u32);
+            const a5 = try scope_1.create(u32);
             a5.* = 5;
 
             try std.testing.expectEqual(4, a4.*);
             try std.testing.expectEqual(5, a5.*);
 
             {
-                const scope2 = try arena.begin();
-                defer arena.end();
+                const scope_2_restore = arena.fba.end_index;
+                _ = try arena.begin();
 
-                const a6 = try scope2.create(u4);
+                const scope_3_restore = arena.fba.end_index;
+                const scope_3 = try arena.begin();
+
+                const a6 = try scope_3.create(u4);
                 a6.* = 6;
-                const a7 = try scope2.create(u4);
+                const a7 = try scope_3.create(u4);
                 a7.* = 7;
 
-                try std.testing.expectError(error.OutOfMemory, scope2.create(u256));
+                try std.testing.expectError(error.OutOfMemory, scope_3.create(u256));
 
                 try std.testing.expectEqual(6, a6.*);
                 try std.testing.expectEqual(7, a7.*);
+
+                arena.end();
+
+                try std.testing.expectEqual(scope_3_restore, arena.fba.end_index);
+
+                arena.end();
+
+                try std.testing.expectEqual(scope_2_restore, arena.fba.end_index);
             }
+
+            arena.end();
+
+            try std.testing.expectEqual(scope_1_restore, arena.fba.end_index);
         }
 
         try std.testing.expectEqual(0, a0.*);
         try std.testing.expectEqual(1, a1.*);
+
+        arena.end();
+
+        try std.testing.expectEqual(scope_0_restore, arena.fba.end_index);
     }
+
+    try std.testing.expectEqual(0, arena.fba.end_index);
 }
