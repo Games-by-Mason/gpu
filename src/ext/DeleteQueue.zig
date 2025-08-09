@@ -24,6 +24,9 @@ pub const Handle = struct {
 
 /// The list of handles queued for deletion.
 handles: std.ArrayListUnmanaged(Handle) = .{},
+/// If more than `1/warn_ratio` of the storage is used, a warning will be emitted. Zero disables the
+/// warning.
+warn_ratio: u8 = 4,
 
 pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!@This() {
     return .{ .handles = try std.ArrayListUnmanaged(Handle).initCapacity(gpa, capacity) };
@@ -38,6 +41,10 @@ pub fn deinit(self: *@This(), gpa: Allocator, gx: *Gx) void {
 ///
 /// Checks for various relevant fields on GPU types.
 pub fn append(self: *@This(), resource: anytype) void {
+    if (self.warn_ratio != 0 and self.handles.items.len > self.handles.capacity / self.warn_ratio) {
+        std.log.warn("delete queue past 1/{} capacity", .{self.warn_ratio});
+    }
+
     switch (@typeInfo(@TypeOf(resource))) {
         .@"enum" => {
             comptime assert(@sizeOf(@TypeOf(resource)) == @sizeOf(u64));
