@@ -1133,7 +1133,6 @@ pub const BarrierStages = packed struct {
     late_fragment_tests: bool = false,
     color_attachment_output: bool = false,
     compute: bool = false,
-    all_transfer: bool = false,
     copy: bool = false,
     blit: bool = false,
     bottom_of_pipe: bool = false,

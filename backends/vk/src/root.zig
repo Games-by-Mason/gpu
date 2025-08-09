@@ -2697,7 +2697,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
                         .layout = .undefined,
                     },
                     .dst = .{
-                        .stages = .{ .all_transfer = true },
+                        .stages = .{ .blit = true },
                         .access = .{ .transfer_write = true },
                         .layout = .transfer_dst,
                     },
@@ -2926,7 +2926,7 @@ pub fn bufBarrierInit(
 }
 
 fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
-    comptime assert(std.meta.fields(gpu.BarrierStages).len == 11); // Update below if this fails!
+    comptime assert(std.meta.fields(gpu.BarrierStages).len == 10); // Update below if this fails!
     return .{
         .top_of_pipe_bit = stages.top_of_pipe,
         .vertex_shader_bit = stages.vertex,
@@ -2935,7 +2935,6 @@ fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
         .fragment_shader_bit = stages.fragment,
         .color_attachment_output_bit = stages.color_attachment_output,
         .compute_shader_bit = stages.compute,
-        .all_transfer_bit = stages.all_transfer,
         .copy_bit = stages.copy,
         .blit_bit = stages.blit,
         .bottom_of_pipe_bit = stages.bottom_of_pipe,

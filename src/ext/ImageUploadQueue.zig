@@ -107,7 +107,7 @@ pub fn beginWrite(
             .layout = .undefined,
         },
         .dst = .{
-            .stages = .{ .all_transfer = true },
+            .stages = .{ .copy = true },
             .access = .{ .transfer_write = true },
             .layout = .transfer_dst,
         },
