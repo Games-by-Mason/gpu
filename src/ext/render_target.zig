@@ -146,8 +146,10 @@ pub fn RenderTarget(kind: ImageKind) type {
                 self.* = undefined;
             }
 
-            /// Allocates a render target. The width and height are automatically scaled according to
-            /// the current virtual extent divided by the current physical extent.
+            /// Allocates a render target. The width and height are automatically scaled according
+            /// to the current virtual extent divided by the current physical extent. Handles are
+            /// sequentially increasing integers, lower handles may be given preference for
+            /// optimizations by the graphics drivers as they are allocated first.
             pub fn alloc(
                 self: *@This(),
                 gx: *Gx,
