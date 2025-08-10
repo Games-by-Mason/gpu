@@ -72,6 +72,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
         available: std.ArrayListUnmanaged(Page),
         full: std.ArrayListUnmanaged(Page),
         offset: u64,
+        used: bool = false,
 
         pub const Options = struct {
             /// The debug name used for allocations exposed to validation layers and tools like
@@ -115,6 +116,9 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
         }
 
         pub fn deinit(self: *@This(), gpa: Allocator, gx: *Gx) void {
+            if (!self.used) {
+                log.warn("image bump allocator \"{s}\" not used", .{self.name});
+            }
             for (self.available.items) |page| page.memory.deinit(gx);
             self.available.deinit(gpa);
             for (self.full.items) |page| page.memory.deinit(gx);
@@ -165,6 +169,9 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
         /// allocate a new one if needed. If the image is too big or the driver prefers a dedicated
         /// allocation, it will be given a dedicated page.
         pub fn alloc(self: *@This(), gx: *Gx, options: AllocOptions) Image {
+            // Mark this allocator as used.
+            self.used = true;
+
             // Decide on an allocation strategy
             const reqs = options.image.memoryRequirements(gx);
             const dedicated = switch (reqs.dedicated) {

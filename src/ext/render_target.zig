@@ -134,7 +134,7 @@ pub fn RenderTarget(kind: ImageKind) type {
             pub fn deinit(self: *@This(), gpa: Allocator, gx: *Gx) void {
                 for (self.info.items, 0..) |info, i| {
                     if (!self.used.isSet(i)) {
-                        log.warn("render target '{f}' not used", .{info.name});
+                        log.warn("render target \"{f}\" not used", .{info.name});
                     }
                 }
 
