@@ -2928,7 +2928,7 @@ fn rangeToVk(range: gpu.ImageBarrier.Range) vk.ImageSubresourceRange {
 }
 
 fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
-    comptime assert(std.meta.fields(gpu.BarrierStages).len == 10); // Update below if this fails!
+    comptime assert(std.meta.fields(gpu.BarrierStages).len == 11); // Update below if this fails!
     return .{
         .top_of_pipe_bit = stages.top_of_pipe,
         .vertex_shader_bit = stages.vertex,
@@ -2940,11 +2940,12 @@ fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
         .copy_bit = stages.copy,
         .blit_bit = stages.blit,
         .bottom_of_pipe_bit = stages.bottom_of_pipe,
+        .all_commands_bit = stages.all_commands,
     };
 }
 
 fn accessToVk(access: gpu.Access) vk.AccessFlags2 {
-    comptime assert(std.meta.fields(gpu.Access).len == 8); // Update below if this fails!
+    comptime assert(std.meta.fields(gpu.Access).len == 10); // Update below if this fails!
     return .{
         .shader_read_bit = access.shader_read,
         .shader_write_bit = access.shader_write,
@@ -2954,6 +2955,8 @@ fn accessToVk(access: gpu.Access) vk.AccessFlags2 {
         .color_attachment_write_bit = access.color_attachment_write,
         .depth_stencil_attachment_read_bit = access.depth_stencil_attachment_read,
         .depth_stencil_attachment_write_bit = access.depth_stencil_attachment_write,
+        .memory_read_bit = access.memory_read,
+        .memory_write_bit = access.memory_write,
     };
 }
 
@@ -3328,7 +3331,8 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
         break :b std.math.maxInt(u32);
     } else surface_capabilities.max_image_count;
     // XXX: make configurable or latency mode takes care of it?
-    const min_image_count = @min(max_images, surface_capabilities.min_image_count + 1);
+    _ = max_images;
+    const min_image_count = 2;//@min(max_images, surface_capabilities.min_image_count + 1);
 
     var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
         .surface = self.surface,
