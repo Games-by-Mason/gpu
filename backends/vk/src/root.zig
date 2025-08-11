@@ -172,6 +172,7 @@ const DeviceExts = struct {
     khr_calibrated_timestamps: bool = false,
     ext_calibrated_timestamps: bool = false,
     amd_anti_lag: bool = false,
+    nv_low_latency_2: bool = false,
 
     fn add(self: *@This(), ext: *const vk.ExtensionProperties) void {
         const name: []const u8 = std.mem.span(@as([*:0]const u8, @ptrCast(ext.extension_name[0..].ptr)));
@@ -203,6 +204,9 @@ const DeviceExts = struct {
         }
         if (self.amd_anti_lag) {
             result.append(gpa, vk.extensions.amd_anti_lag.name) catch @panic("OOM");
+        }
+        if (self.nv_low_latency_2) {
+            result.append(gpa, vk.extensions.nv_low_latency_2.name) catch @panic("OOM");
         }
 
         // Required if timestamp queries are enabled
@@ -3362,6 +3366,14 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
 
     self.swapchain = self.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
     if (hdr_metadata) |some| self.updateHdrMetadataImpl(some);
+    if (self.physical_device.device_exts.nv_low_latency_2) {
+        self.device.setLatencySleepModeNV(self.swapchain, &.{
+            .low_latency_mode = vk.TRUE,
+            .low_latency_boost = vk.TRUE,
+            // XXX: ...configurable?
+            .minimum_interval_us = 1000,
+        }) catch |err| @panic(@errorName(err)); // XXX: errors?
+    }
     setName(self.debug_messenger, self.device, self.swapchain, .{ .str = "Main" });
     assert(self.swapchain_images.items.len == 0);
     assert(self.swapchain_views.items.len == 0);
@@ -3416,9 +3428,12 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
 }
 
 pub fn sleepBeforeInput(self: *Gx) void {
+    // XXX: blocking color for these?
+    const zone = Zone.begin(.{ .src = @src() });
+    defer zone.end();
     if (self.backend.physical_device.device_exts.amd_anti_lag) {
-        const zone = Zone.begin(.{ .name = "AMD Anti Lag (input)", .src = @src() });
-        defer zone.end();
+        const amd_zone = Zone.begin(.{ .name = "AMD Anti Lag (input)", .src = @src() });
+        defer amd_zone.end();
         self.backend.device.antiLagUpdateAMD(&.{
             .mode = .on_amd,
             .max_fps = self.backend.max_fps,
@@ -3427,6 +3442,22 @@ pub fn sleepBeforeInput(self: *Gx) void {
                 .frame_index = self.backend.latency_frame,
             },
         });
+    }
+    if (self.backend.physical_device.device_exts.nv_low_latency_2) {
+        const nv_zone = Zone.begin(.{ .name = "AMD Anti Lag (input)", .src = @src() });
+        defer nv_zone.end();
+        // XXX: temp semaphore for now...
+        const semaphore = self.backend.device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
+        defer self.backend.device.destroySemaphore(semaphore, null);
+        self.backend.device.latencySleepNV(self.backend.swapchain, &.{
+            .signal_semaphore = semaphore,
+            .value = 1,
+        }) catch |err| @panic(@errorName(err)); // XXX: errors?
+        _ = self.backend.device.waitSemaphores(&.{
+            .semaphore_count = 1,
+            .p_semaphores = &.{semaphore},
+            .p_values = &.{1},
+        }, std.math.maxInt(u64)) catch |err| @panic(@errorName(err)); // XXX: max wait? errors/result?
     }
 }
 
