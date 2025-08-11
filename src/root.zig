@@ -21,7 +21,7 @@ pub const tracy_gpu_pool = "gpu";
 /// named `gpu_options` to configure the library.
 pub const Options = struct {
     Backend: type,
-    max_frames_in_flight: u4 = 2,
+    max_frames_in_flight: u5 = 2,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
 };
 

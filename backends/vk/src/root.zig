@@ -16,6 +16,10 @@ pub const vk = @import("vulkan");
 
 const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
+// XXX: ...clean this up
+max_fps: u8 = 0,
+latency_frame: u64 = 0,
+
 // Context
 surface: vk.SurfaceKHR,
 base_wrapper: vk.BaseWrapper,
@@ -77,22 +81,25 @@ pub const Options = struct {
 const graphics_queue_name = "Graphics Queue";
 
 const DeviceFeatures = struct {
-    // Keep in sync with `supersetOf`
+    // Keep in sync with `supersetOf` and `initEmpty`
+    vk10: vk.PhysicalDeviceFeatures2 = .{ .features = .{} },
     vk11: vk.PhysicalDeviceVulkan11Features = .{},
     vk12: vk.PhysicalDeviceVulkan12Features = .{},
     vk13: vk.PhysicalDeviceVulkan13Features = .{},
-    vk10: vk.PhysicalDeviceFeatures2 = .{ .features = .{} },
+    amd_anti_lag: vk.PhysicalDeviceAntiLagFeaturesAMD = .{},
 
     fn initEmpty(self: *@This()) void {
         self.vk10 = .{ .p_next = &self.vk11, .features = .{} };
         self.vk11 = .{ .p_next = &self.vk12 };
         self.vk12 = .{ .p_next = &self.vk13 };
-        self.vk13 = .{};
+        self.vk13 = .{ .p_next = &self.amd_anti_lag };
+        self.amd_anti_lag = .{};
     }
 
     const InitRequiredOptions = struct {
         host_query_reset: bool,
         sampler_anisotropy: bool,
+        amd_anti_lag: bool,
     };
 
     fn initRequired(self: *@This(), options: InitRequiredOptions) void {
@@ -119,6 +126,8 @@ const DeviceFeatures = struct {
 
         // Roadmap 2024
         self.vk11.shader_draw_parameters = vk.TRUE;
+
+        self.amd_anti_lag.anti_lag = @intFromBool(options.amd_anti_lag);
     }
 
     fn supersetOf(superset: *@This(), subset: *@This()) bool {
@@ -126,6 +135,7 @@ const DeviceFeatures = struct {
         if (!featuresSupersetOf(superset.vk11, subset.vk11)) return false;
         if (!featuresSupersetOf(superset.vk12, subset.vk12)) return false;
         if (!featuresSupersetOf(superset.vk13, subset.vk13)) return false;
+        if (!featuresSupersetOf(superset.amd_anti_lag, subset.amd_anti_lag)) return false;
         return true;
     }
 
@@ -161,6 +171,7 @@ const DeviceExts = struct {
     ext_hdr_metadata: bool = false,
     khr_calibrated_timestamps: bool = false,
     ext_calibrated_timestamps: bool = false,
+    amd_anti_lag: bool = false,
 
     fn add(self: *@This(), ext: *const vk.ExtensionProperties) void {
         const name: []const u8 = std.mem.span(@as([*:0]const u8, @ptrCast(ext.extension_name[0..].ptr)));
@@ -189,6 +200,9 @@ const DeviceExts = struct {
         // Optional extensions
         if (self.ext_hdr_metadata) {
             result.append(gpa, vk.extensions.ext_hdr_metadata.name) catch @panic("OOM");
+        }
+        if (self.amd_anti_lag) {
+            result.append(gpa, vk.extensions.amd_anti_lag.name) catch @panic("OOM");
         }
 
         // Required if timestamp queries are enabled
@@ -463,6 +477,12 @@ pub fn init(
         log.debug("\t* min uniform buffer offset alignment: {}", .{properties.limits.min_uniform_buffer_offset_alignment});
         log.debug("\t* min storage buffer offset alignment: {}", .{properties.limits.min_storage_buffer_offset_alignment});
 
+        var device_exts: DeviceExts = .{};
+        const supported_device_extensions = instance_proxy.enumerateDeviceExtensionPropertiesAlloc(device, null, arena) catch |err| @panic(@errorName(err));
+        for (supported_device_extensions) |extension_properties| {
+            device_exts.add(&extension_properties);
+        }
+
         var features: DeviceFeatures = .{};
         features.initEmpty();
         instance_proxy.getPhysicalDeviceFeatures2(device, features.root());
@@ -470,6 +490,7 @@ pub fn init(
         required_features.initRequired(.{
             .host_query_reset = options.timestamp_queries,
             .sampler_anisotropy = false,
+            .amd_anti_lag = device_exts.amd_anti_lag,
         });
 
         const supports_required_features = features.supersetOf(&required_features);
@@ -497,12 +518,6 @@ pub fn init(
             break @intCast(qfi);
         } else null;
         log.debug("\t* queue family index: {?}", .{queue_family_index});
-
-        var device_exts: DeviceExts = .{};
-        const supported_device_extensions = instance_proxy.enumerateDeviceExtensionPropertiesAlloc(device, null, arena) catch |err| @panic(@errorName(err));
-        for (supported_device_extensions) |extension_properties| {
-            device_exts.add(&extension_properties);
-        }
 
         const device_ext_list = device_exts.alloc(arena, options.timestamp_queries);
 
@@ -662,12 +677,13 @@ pub fn init(
     queue_zone.end();
 
     const device_proxy_zone = tracy.Zone.begin(.{ .name = "create device proxy", .src = @src() });
+    const device_exts = best_physical_device.device_exts.alloc(arena, options.timestamp_queries).?;
     var features: DeviceFeatures = .{};
     features.initRequired(.{
         .host_query_reset = options.timestamp_queries,
         .sampler_anisotropy = best_physical_device.sampler_anisotropy,
+        .amd_anti_lag = best_physical_device.device_exts.amd_anti_lag,
     });
-    const device_exts = best_physical_device.device_exts.alloc(arena, options.timestamp_queries).?;
     const device_create_info: vk.DeviceCreateInfo = .{
         .p_queue_create_infos = &queue_create_infos,
         .queue_create_info_count = @intCast(queue_create_infos.len),
@@ -2748,6 +2764,24 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         // End the command buffer, we use our wrapper that also ends the GPU zone we created
         cmdBufEnd(self, cb);
 
+        if (self.backend.physical_device.device_exts.amd_anti_lag) {
+            const reduce_latency_zone = Zone.begin(.{
+                .name = "AMD Anti lag (present)",
+                .src = @src(),
+                .color = gpu.global_options.blocking_zone_color,
+            });
+            defer reduce_latency_zone.end();
+            self.backend.device.antiLagUpdateAMD(&.{
+                .mode = .on_amd,
+                .max_fps = self.backend.max_fps,
+                .p_presentation_info = &.{
+                    .stage = .present_amd,
+                    .frame_index = self.backend.latency_frame,
+                },
+            });
+            self.backend.latency_frame +%= 1;
+        }
+
         // Submit the command buffer, making sure to wait on the present semaphore for this
         // swapchain, image and to signal the command pool ready semaphore for this frame in flight.
         self.backend.device.queueSubmit(
@@ -3293,6 +3327,7 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
     const max_images = if (surface_capabilities.max_image_count == 0) b: {
         break :b std.math.maxInt(u32);
     } else surface_capabilities.max_image_count;
+    // XXX: make configurable or latency mode takes care of it?
     const min_image_count = @min(max_images, surface_capabilities.min_image_count + 1);
 
     var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
@@ -3378,6 +3413,21 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
     }
 
     self.recreate_swapchain = false;
+}
+
+pub fn sleepBeforeInput(self: *Gx) void {
+    if (self.backend.physical_device.device_exts.amd_anti_lag) {
+        const zone = Zone.begin(.{ .name = "AMD Anti Lag (input)", .src = @src() });
+        defer zone.end();
+        self.backend.device.antiLagUpdateAMD(&.{
+            .mode = .on_amd,
+            .max_fps = self.backend.max_fps,
+            .p_presentation_info = &.{
+                .stage = .input_amd,
+                .frame_index = self.backend.latency_frame,
+            },
+        });
+    }
 }
 
 const PhysicalDevice = struct {

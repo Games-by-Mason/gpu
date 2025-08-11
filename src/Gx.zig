@@ -32,7 +32,7 @@ arena: gpu.ext.ScopedArena,
 /// Device information, initialized at init time.
 device: Device,
 /// The number of frames that can be in flight at once.
-frames_in_flight: u4,
+frames_in_flight: u5,
 /// The current frame in flight.
 frame: u8 = 0,
 /// Whether or not we're currently in between `beginFrame` and `endFrame`.
@@ -82,7 +82,7 @@ pub const Options = struct {
         .patch = 0,
     },
     /// The number of frames in flight.
-    frames_in_flight: u4,
+    frames_in_flight: u5,
     /// The device type rankings. Higher ranked device types are prioritized, rank 0 devices are
     /// skipped.
     device_type_ranks: std.EnumArray(Device.Kind, u8) = default_device_type_ranks,
@@ -270,7 +270,7 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
     Backend.endFrame(self, options);
     const Frame = @TypeOf(self.frame);
     const FramesInFlight = @TypeOf(self.frames_in_flight);
-    comptime assert(std.math.maxInt(FramesInFlight) < std.math.maxInt(Frame));
+    comptime assert(std.math.maxInt(FramesInFlight) <= std.math.maxInt(Frame));
     self.frame = (self.frame + 1) % self.frames_in_flight;
     assert(self.in_frame);
     self.in_frame = false;
@@ -327,4 +327,9 @@ pub fn waitIdle(self: *const @This()) void {
 pub fn setHdrMetadata(self: *@This(), metadata: gpu.HdrMetadata) void {
     self.hdr_metadata = metadata;
     Backend.updateHdrMetadata(metadata);
+}
+
+// XXX: naming, maybe enforce calling
+pub fn sleepBeforeInput(self: *@This()) void {
+    Backend.sleepBeforeInput(self);
 }
