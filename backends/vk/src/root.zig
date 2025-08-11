@@ -3447,7 +3447,12 @@ pub fn sleepBeforeInput(self: *Gx) void {
         const nv_zone = Zone.begin(.{ .name = "AMD Anti Lag (input)", .src = @src() });
         defer nv_zone.end();
         // XXX: temp semaphore for now...
-        const semaphore = self.backend.device.createSemaphore(&.{}, null) catch |err| @panic(@errorName(err));
+        const semaphore = self.backend.device.createSemaphore(&.{
+            .p_next = &vk.SemaphoreTypeCreateInfo{
+                .semaphore_type = .timeline,
+                .initial_value = 0,
+            },
+        }, null) catch |err| @panic(@errorName(err));
         defer self.backend.device.destroySemaphore(semaphore, null);
         self.backend.device.latencySleepNV(self.backend.swapchain, &.{
             .signal_semaphore = semaphore,
