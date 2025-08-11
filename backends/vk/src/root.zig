@@ -124,6 +124,9 @@ const DeviceFeatures = struct {
         self.vk12.shader_uniform_texel_buffer_array_non_uniform_indexing = vk.TRUE;
         self.vk12.shader_storage_texel_buffer_array_non_uniform_indexing = vk.TRUE;
 
+        // XXX: temp for nv low latency
+        self.vk12.timeline_semaphore = vk.TRUE;
+
         // Roadmap 2024
         self.vk11.shader_draw_parameters = vk.TRUE;
 
@@ -3336,7 +3339,7 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
     } else surface_capabilities.max_image_count;
     // XXX: make configurable or latency mode takes care of it?
     _ = max_images;
-    const min_image_count = 2;//@min(max_images, surface_capabilities.min_image_count + 1);
+    const min_image_count = 2; //@min(max_images, surface_capabilities.min_image_count + 1);
 
     var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
         .surface = self.surface,
