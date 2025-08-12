@@ -253,8 +253,8 @@ pub const EndFrameOptions = struct {
 
 /// Ends the current frame.
 ///
-/// Drivers may sometimes block here instead of on `acquireNextImage`.
-pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
+/// Returns the nanoseconds spent blocked on the GPU.
+pub fn endFrame(self: *@This(), options: EndFrameOptions) u64 {
     const zone = Zone.begin(.{ .src = @src() });
     defer zone.end();
     if (options.present) |present| {
@@ -267,13 +267,15 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
         .color = gpu.global_options.blocking_zone_color,
     });
     defer blocking_zone.end();
-    Backend.endFrame(self, options);
+    const blocking_ns = Backend.endFrame(self, options);
     const Frame = @TypeOf(self.frame);
     const FramesInFlight = @TypeOf(self.frames_in_flight);
     comptime assert(std.math.maxInt(FramesInFlight) <= std.math.maxInt(Frame));
     self.frame = (self.frame + 1) % self.frames_in_flight;
     assert(self.in_frame);
     self.in_frame = false;
+
+    return blocking_ns;
 }
 
 /// The result of `acquireNextImage`.

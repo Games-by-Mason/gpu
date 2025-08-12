@@ -10,6 +10,7 @@ pub const ImageUploadQueue = @import("ext/ImageUploadQueue.zig");
 pub const ModTimer = @import("ext/mod_timer.zig").ModTimer;
 pub const RenderTarget = @import("ext/render_target.zig").RenderTarget;
 pub const ScopedArena = @import("ext/ScopedArena.zig");
+pub const FramePacer = @import("ext/FramePacer.zig");
 pub const bufPart = @import("ext/buf_part.zig").bufPart;
 pub const colors = @import("ext/colors.zig");
 pub const gaussian = @import("ext/gaussian.zig");
