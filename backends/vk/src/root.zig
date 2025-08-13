@@ -16,10 +16,6 @@ pub const vk = @import("vulkan");
 
 const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
-// XXX: ...clean this up
-max_fps: u8 = 0,
-latency_frame: u64 = 0,
-
 // Context
 surface: vk.SurfaceKHR,
 base_wrapper: vk.BaseWrapper,
@@ -86,20 +82,17 @@ const DeviceFeatures = struct {
     vk11: vk.PhysicalDeviceVulkan11Features = .{},
     vk12: vk.PhysicalDeviceVulkan12Features = .{},
     vk13: vk.PhysicalDeviceVulkan13Features = .{},
-    // amd_anti_lag: vk.PhysicalDeviceAntiLagFeaturesAMD = .{},
 
     fn initEmpty(self: *@This()) void {
         self.vk10 = .{ .p_next = &self.vk11, .features = .{} };
         self.vk11 = .{ .p_next = &self.vk12 };
         self.vk12 = .{ .p_next = &self.vk13 };
-        self.vk13 = .{}; // .p_next = &self.amd_anti_lag };
-        // self.amd_anti_lag = .{};
+        self.vk13 = .{};
     }
 
     const InitRequiredOptions = struct {
         host_query_reset: bool,
         sampler_anisotropy: bool,
-        // amd_anti_lag: bool,
     };
 
     fn initRequired(self: *@This(), options: InitRequiredOptions) void {
@@ -124,13 +117,8 @@ const DeviceFeatures = struct {
         self.vk12.shader_uniform_texel_buffer_array_non_uniform_indexing = vk.TRUE;
         self.vk12.shader_storage_texel_buffer_array_non_uniform_indexing = vk.TRUE;
 
-        // XXX: temp for nv low latency
-        self.vk12.timeline_semaphore = vk.TRUE;
-
         // Roadmap 2024
         self.vk11.shader_draw_parameters = vk.TRUE;
-
-        // self.amd_anti_lag.anti_lag = @intFromBool(options.amd_anti_lag);
     }
 
     fn supersetOf(superset: *@This(), subset: *@This()) bool {
@@ -138,7 +126,6 @@ const DeviceFeatures = struct {
         if (!featuresSupersetOf(superset.vk11, subset.vk11)) return false;
         if (!featuresSupersetOf(superset.vk12, subset.vk12)) return false;
         if (!featuresSupersetOf(superset.vk13, subset.vk13)) return false;
-        // if (!featuresSupersetOf(superset.amd_anti_lag, subset.amd_anti_lag)) return false;
         return true;
     }
 
@@ -174,8 +161,6 @@ const DeviceExts = struct {
     ext_hdr_metadata: bool = false,
     khr_calibrated_timestamps: bool = false,
     ext_calibrated_timestamps: bool = false,
-    // amd_anti_lag: bool = false,
-    nv_low_latency_2: bool = false,
 
     fn add(self: *@This(), ext: *const vk.ExtensionProperties) void {
         const name: []const u8 = std.mem.span(@as([*:0]const u8, @ptrCast(ext.extension_name[0..].ptr)));
@@ -204,12 +189,6 @@ const DeviceExts = struct {
         // Optional extensions
         if (self.ext_hdr_metadata) {
             result.append(gpa, vk.extensions.ext_hdr_metadata.name) catch @panic("OOM");
-        }
-        // if (self.amd_anti_lag) {
-        //     result.append(gpa, vk.extensions.amd_anti_lag.name) catch @panic("OOM");
-        // }
-        if (self.nv_low_latency_2) {
-            result.append(gpa, vk.extensions.nv_low_latency_2.name) catch @panic("OOM");
         }
 
         // Required if timestamp queries are enabled
@@ -497,7 +476,6 @@ pub fn init(
         required_features.initRequired(.{
             .host_query_reset = options.timestamp_queries,
             .sampler_anisotropy = false,
-            // .amd_anti_lag = device_exts.amd_anti_lag,
         });
 
         const supports_required_features = features.supersetOf(&required_features);
@@ -587,7 +565,6 @@ pub fn init(
                 arena,
             ) catch |err| @panic(@errorName(err));
             for (present_modes) |present_mode| {
-                log.warn("{}", .{present_mode}); // XXX: ...
                 switch (present_mode) {
                     .fifo_relaxed_khr => best_present_mode = present_mode,
                     else => {},
@@ -597,7 +574,7 @@ pub fn init(
         } else .{ null, null, null };
 
         log.debug("\t* best surface format: {?}", .{surface_format});
-        log.warn("\t* present mode: {?}", .{present_mode}); // XXX: ...
+        log.debug("\t* present mode: {?}", .{present_mode});
         log.debug("\t* device extensions: {}", .{device_exts});
 
         const composite_alpha: ?vk.CompositeAlphaFlagsKHR = b: {
@@ -690,7 +667,6 @@ pub fn init(
     features.initRequired(.{
         .host_query_reset = options.timestamp_queries,
         .sampler_anisotropy = best_physical_device.sampler_anisotropy,
-        // .amd_anti_lag = best_physical_device.device_exts.amd_anti_lag,
     });
     const device_create_info: vk.DeviceCreateInfo = .{
         .p_queue_create_infos = &queue_create_infos,
@@ -853,7 +829,7 @@ pub fn init(
     };
 
     // Set up the swapchain
-    result.backend.setSwapchainExtent(options.surface_extent, null);
+    result.backend.setSwapchainExtent(options.surface_extent, null, options.low_latency);
 
     return result;
 }
@@ -2593,90 +2569,7 @@ pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeC
     }
 }
 
-// XXX: ...
-var image_index: u32 = undefined;
-pub fn acquireNextImage(self: *Gx, surface_extent: gpu.Extent2D) u64 {
-    // Acquire the next swapchain image
-    const acquire_zone = Zone.begin(.{ .name = "acquire", .src = @src() });
-    defer acquire_zone.end();
-
-    // Mark the swapchain as dirty if the extent has changed. Many platforms will consider this
-    // sub-optimal, but this isn't guaranteed. Wayland for example appears to never, or at least
-    // rarely, report the swapchain as out of date or suboptimal.
-    if (!std.meta.eql(surface_extent, self.backend.swapchain_extent)) {
-        self.backend.recreate_swapchain = true;
-    }
-
-    // If the swapchain needs to be recreated, do so immediately. In theory in all except the
-    // case where the swapchain is out of date, you could defer this work until the user
-    // finishes resizing the window for a smoother experience.
-    //
-    // In practice, this is not viable.
-    //
-    // Empirically, under Wayland and under Windows drawing on a swapchain with the incorrect
-    // size results in the image being stretched to fill the window without regard for aspect
-    // ratio. This is almost certainly not what you want for any real application.
-    //
-    // You could attempt to compensate for this by adjusting your viewport, but this will break
-    // X11 which empirically does *not* stretch the image, but leaves it the image at actual
-    // size and pads the rest of the window with black.
-    //
-    // Theoretically you could use `VK_EXT_swapchain_maintenance1` to force the desired behavior
-    // in these cases, but again this is not viable in practice, as only 24% of Windows devices
-    // and 30% of Linux devices support it at the time of writing (https://vulkan.gpuinfo.org/)
-    // despite it having been available for years.
-    //
-    // If one was determined to elide the recreation, they would need to adjust the final stage
-    // of their renderer for each of these backends individually, since there's no one size fits
-    // all situation. I would be hesitant to do such a thing, though, as it's unclear to me if
-    // the observed behavior is even guaranteed.
-    //
-    // Instead, we just recreate the swapchain immediately. The only downside is a slightly
-    // lower framerate during the resize than would otherwise be possible.
-    if (self.backend.recreate_swapchain) {
-        // XXX: what to do with blocking number here?
-        self.backend.setSwapchainExtent(surface_extent, self.hdr_metadata);
-    }
-
-    // Actually acquire the image. Drivers typically block either here or on present if the
-    // image isn't yet available.
-    const blocking_zone = Zone.begin(.{
-        .src = @src(),
-        .color = gpu.global_options.blocking_zone_color,
-    });
-    defer blocking_zone.end();
-    while (true) {
-        const really_acquire_zone = Zone.begin(.{ .name = "really acquire", .src = @src() });
-        defer really_acquire_zone.end();
-        var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
-        const acquire_result_or_err = self.backend.device.acquireNextImageKHR(
-            self.backend.swapchain,
-            std.math.maxInt(u64),
-            self.backend.image_availables[self.frame],
-            .null_handle,
-        );
-        const blocking_ns = blocking_timer.read();
-        const acquire_result = acquire_result_or_err catch |err| switch (err) {
-            error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                // XXX: what to do with block time here?
-                self.backend.setSwapchainExtent(surface_extent, self.hdr_metadata);
-                continue;
-            },
-            error.OutOfHostMemory,
-            error.OutOfDeviceMemory,
-            error.Unknown,
-            error.SurfaceLostKHR,
-            error.DeviceLost,
-            => @panic(@errorName(err)),
-        };
-        image_index = acquire_result.image_index;
-        return blocking_ns;
-    }
-}
-
 pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) u64 {
-    var blocking_ns: u64 = 0; // XXX: ...
-
     // Check if we're presenting an image this frame
     const present = options.present orelse {
         // If not, just wrap up the command pool by signaling the fence for this frame and then
@@ -2698,82 +2591,91 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) u64 {
             }},
             self.backend.cmd_pool_ready[self.frame],
         ) catch |err| @panic(@errorName(err));
-        return blocking_ns; // XXX: ...
+        return 0;
     };
 
-    blocking_ns += acquireNextImage(self, present.surface_extent);
-    // // Acquire the next swapchain image
-    // const image_index = b: {
-    //     const acquire_zone = Zone.begin(.{ .name = "acquire", .src = @src() });
-    //     defer acquire_zone.end();
+    const image_index: u32, const acquire_ns: u64 = b: {
+        // Acquire the next swapchain image
+        const acquire_zone = Zone.begin(.{ .name = "acquire", .src = @src() });
+        defer acquire_zone.end();
 
-    //     // Mark the swapchain as dirty if the extent has changed. Many platforms will consider this
-    //     // sub-optimal, but this isn't guaranteed. Wayland for example appears to never, or at least
-    //     // rarely, report the swapchain as out of date or suboptimal.
-    //     if (!std.meta.eql(present.surface_extent, self.backend.swapchain_extent)) {
-    //         self.backend.recreate_swapchain = true;
-    //     }
+        // Mark the swapchain as dirty if the extent has changed. Many platforms will consider this
+        // sub-optimal, but this isn't guaranteed. Wayland for example appears to never, or at least
+        // rarely, report the swapchain as out of date or suboptimal.
+        if (!std.meta.eql(present.surface_extent, self.backend.swapchain_extent)) {
+            self.backend.recreate_swapchain = true;
+        }
 
-    //     // If the swapchain needs to be recreated, do so immediately. In theory in all except the
-    //     // case where the swapchain is out of date, you could defer this work until the user
-    //     // finishes resizing the window for a smoother experience.
-    //     //
-    //     // In practice, this is not viable.
-    //     //
-    //     // Empirically, under Wayland and under Windows drawing on a swapchain with the incorrect
-    //     // size results in the image being stretched to fill the window without regard for aspect
-    //     // ratio. This is almost certainly not what you want for any real application.
-    //     //
-    //     // You could attempt to compensate for this by adjusting your viewport, but this will break
-    //     // X11 which empirically does *not* stretch the image, but leaves it the image at actual
-    //     // size and pads the rest of the window with black.
-    //     //
-    //     // Theoretically you could use `VK_EXT_swapchain_maintenance1` to force the desired behavior
-    //     // in these cases, but again this is not viable in practice, as only 24% of Windows devices
-    //     // and 30% of Linux devices support it at the time of writing (https://vulkan.gpuinfo.org/)
-    //     // despite it having been available for years.
-    //     //
-    //     // If one was determined to elide the recreation, they would need to adjust the final stage
-    //     // of their renderer for each of these backends individually, since there's no one size fits
-    //     // all situation. I would be hesitant to do such a thing, though, as it's unclear to me if
-    //     // the observed behavior is even guaranteed.
-    //     //
-    //     // Instead, we just recreate the swapchain immediately. The only downside is a slightly
-    //     // lower framerate during the resize than would otherwise be possible.
-    //     if (self.backend.recreate_swapchain) {
-    //         self.backend.setSwapchainExtent(present.surface_extent, self.hdr_metadata);
-    //     }
+        // If the swapchain needs to be recreated, do so immediately. In theory in all except the
+        // case where the swapchain is out of date, you could defer this work until the user
+        // finishes resizing the window for a smoother experience.
+        //
+        // In practice, this is not viable.
+        //
+        // Empirically, under Wayland and under Windows drawing on a swapchain with the incorrect
+        // size results in the image being stretched to fill the window without regard for aspect
+        // ratio. This is almost certainly not what you want for any real application.
+        //
+        // You could attempt to compensate for this by adjusting your viewport, but this will break
+        // X11 which empirically does *not* stretch the image, but leaves it the image at actual
+        // size and pads the rest of the window with black.
+        //
+        // Theoretically you could use `VK_EXT_swapchain_maintenance1` to force the desired behavior
+        // in these cases, but again this is not viable in practice, as only 24% of Windows devices
+        // and 30% of Linux devices support it at the time of writing (https://vulkan.gpuinfo.org/)
+        // despite it having been available for years.
+        //
+        // If one was determined to elide the recreation, they would need to adjust the final stage
+        // of their renderer for each of these backends individually, since there's no one size fits
+        // all situation. I would be hesitant to do such a thing, though, as it's unclear to me if
+        // the observed behavior is even guaranteed.
+        //
+        // Instead, we just recreate the swapchain immediately. The only downside is a slightly
+        // lower framerate during the resize than would otherwise be possible.
+        if (self.backend.recreate_swapchain) {
+            self.backend.setSwapchainExtent(
+                present.surface_extent,
+                self.hdr_metadata,
+                self.low_latency,
+            );
+        }
 
-    //     // Actually acquire the image. Drivers typically block either here or on present if the
-    //     // image isn't yet available.
-    //     const blocking_zone = Zone.begin(.{
-    //         .src = @src(),
-    //         .color = gpu.global_options.blocking_zone_color,
-    //     });
-    //     defer blocking_zone.end();
-    //     while (true) {
-    //         const really_acquire_zone = Zone.begin(.{ .name = "really acquire", .src = @src() });
-    //         defer really_acquire_zone.end();
-    //         const acquire_result = self.backend.device.acquireNextImageKHR(
-    //             self.backend.swapchain,
-    //             std.math.maxInt(u64),
-    //             self.backend.image_availables[self.frame],
-    //             .null_handle,
-    //         ) catch |err| switch (err) {
-    //             error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-    //                 self.backend.setSwapchainExtent(present.surface_extent, self.hdr_metadata);
-    //                 continue;
-    //             },
-    //             error.OutOfHostMemory,
-    //             error.OutOfDeviceMemory,
-    //             error.Unknown,
-    //             error.SurfaceLostKHR,
-    //             error.DeviceLost,
-    //             => @panic(@errorName(err)),
-    //         };
-    //         break :b acquire_result.image_index;
-    //     }
-    // };
+        // Actually acquire the image. Drivers typically block either here or on present if the
+        // image isn't yet available.
+        while (true) {
+            const acquire_blocking_zone = Zone.begin(.{
+                .name = "vkAcquireNextImageKHR",
+                .src = @src(),
+                .color = gpu.global_options.blocking_zone_color,
+            });
+            defer acquire_blocking_zone.end();
+            var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
+            const acquire_result_or_err = self.backend.device.acquireNextImageKHR(
+                self.backend.swapchain,
+                std.math.maxInt(u64),
+                self.backend.image_availables[self.frame],
+                .null_handle,
+            );
+            const acquire_ns = blocking_timer.read();
+            const acquire_result = acquire_result_or_err catch |err| switch (err) {
+                error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
+                    self.backend.setSwapchainExtent(
+                        present.surface_extent,
+                        self.hdr_metadata,
+                        self.low_latency,
+                    );
+                    continue;
+                },
+                error.OutOfHostMemory,
+                error.OutOfDeviceMemory,
+                error.Unknown,
+                error.SurfaceLostKHR,
+                error.DeviceLost,
+                => @panic(@errorName(err)),
+            };
+            break :b .{ acquire_result.image_index, acquire_ns };
+        }
+    };
 
     const swapchain_image = self.backend.swapchain_images.items[image_index];
 
@@ -2878,26 +2780,12 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) u64 {
     }
 
     // Actually present the image
-    {
-        const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
-        defer queue_present_zone.end();
-        // if (self.backend.physical_device.device_exts.amd_anti_lag) {
-        //     const reduce_latency_zone = Zone.begin(.{
-        //         .name = "AMD Anti lag (present)",
-        //         .src = @src(),
-        //         .color = gpu.global_options.blocking_zone_color,
-        //     });
-        //     defer reduce_latency_zone.end();
-        //     self.backend.device.antiLagUpdateAMD(&.{
-        //         .mode = .on_amd,
-        //         .max_fps = self.backend.max_fps,
-        //         .p_presentation_info = &.{
-        //             .stage = .present_amd,
-        //             .frame_index = self.backend.latency_frame,
-        //         },
-        //     });
-        //     self.backend.latency_frame +%= 1;
-        // }
+    const present_ns: u64 = ns: {
+        const queue_present_zone = Zone.begin(.{
+            .name = "queue present",
+            .src = @src(),
+            .color = gpu.global_options.blocking_zone_color,
+        });
         var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
         const result_or_err = self.backend.device.queuePresentKHR(
             self.backend.queue,
@@ -2910,7 +2798,8 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) u64 {
                 .p_results = null,
             },
         );
-        blocking_ns += blocking_timer.read();
+        queue_present_zone.end();
+        const present_ns = blocking_timer.read();
         const result = result_or_err catch |err| b: switch (err) {
             error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
                 self.backend.recreate_swapchain = true;
@@ -2926,9 +2815,10 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) u64 {
         if (result == .suboptimal_khr) {
             self.backend.recreate_swapchain = true;
         }
-    }
+        break :ns present_ns;
+    };
 
-    return blocking_ns;
+    return acquire_ns + present_ns;
 }
 
 pub fn samplerCreate(
@@ -3288,6 +3178,10 @@ fn updateHdrMetadataImpl(self: *@This(), metadata: gpu.HdrMetadata) void {
     }
 }
 
+pub fn setLowLatency(self: *@This()) void {
+    self.backend.recreate_swapchain = true;
+}
+
 fn aspectToVk(self: gpu.ImageAspect) vk.ImageAspectFlags {
     return .{
         .color_bit = self.color,
@@ -3369,7 +3263,12 @@ fn destroySwapchainViewsAndResetImages(self: *@This()) void {
     self.swapchain_images.clearRetainingCapacity();
 }
 
-fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.HdrMetadata) void {
+fn setSwapchainExtent(
+    self: *@This(),
+    extent: gpu.Extent2D,
+    hdr_metadata: ?gpu.HdrMetadata,
+    low_latency: bool,
+) void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
 
@@ -3428,10 +3327,13 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
     const max_images = if (surface_capabilities.max_image_count == 0) b: {
         break :b std.math.maxInt(u32);
     } else surface_capabilities.max_image_count;
-    // XXX: make configurable or latency mode takes care of it?
-    _ = max_images;
-    const min_image_count = 2;
-    // const min_image_count = @min(max_images, surface_capabilities.min_image_count + 1);
+    const min_image_count = if (low_latency) b: {
+        // In low latency mode, create the shortest swapchain possible.
+        break :b surface_capabilities.min_image_count;
+    } else b: {
+        // Otherwise, follow the general best practice of adding one frame of buffer to the minimum.
+        break :b @min(max_images, surface_capabilities.min_image_count + 1);
+    };
 
     var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
         .surface = self.surface,
@@ -3465,14 +3367,6 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
 
     self.swapchain = self.device.createSwapchainKHR(&swapchain_create_info, null) catch |err| @panic(@errorName(err));
     if (hdr_metadata) |some| self.updateHdrMetadataImpl(some);
-    if (self.physical_device.device_exts.nv_low_latency_2) {
-        self.device.setLatencySleepModeNV(self.swapchain, &.{
-            .low_latency_mode = vk.TRUE,
-            .low_latency_boost = vk.TRUE,
-            // XXX: ...configurable?
-            .minimum_interval_us = 1000,
-        }) catch |err| @panic(@errorName(err)); // XXX: errors?
-    }
     setName(self.debug_messenger, self.device, self.swapchain, .{ .str = "Main" });
     assert(self.swapchain_images.items.len == 0);
     assert(self.swapchain_views.items.len == 0);
@@ -3524,45 +3418,6 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
     }
 
     self.recreate_swapchain = false;
-}
-
-pub fn sleepBeforeInput(self: *Gx) void {
-    // XXX: blocking color for these?
-    const zone = Zone.begin(.{ .src = @src() });
-    defer zone.end();
-    // if (self.backend.physical_device.device_exts.amd_anti_lag) {
-    //     const amd_zone = Zone.begin(.{ .name = "AMD Anti Lag (input)", .src = @src() });
-    //     defer amd_zone.end();
-    //     self.backend.device.antiLagUpdateAMD(&.{
-    //         .mode = .on_amd,
-    //         .max_fps = self.backend.max_fps,
-    //         .p_presentation_info = &.{
-    //             .stage = .input_amd,
-    //             .frame_index = self.backend.latency_frame,
-    //         },
-    //     });
-    // }
-    if (self.backend.physical_device.device_exts.nv_low_latency_2) {
-        const nv_zone = Zone.begin(.{ .name = "AMD Anti Lag (input)", .src = @src() });
-        defer nv_zone.end();
-        // XXX: temp semaphore for now...
-        const semaphore = self.backend.device.createSemaphore(&.{
-            .p_next = &vk.SemaphoreTypeCreateInfo{
-                .semaphore_type = .timeline,
-                .initial_value = 0,
-            },
-        }, null) catch |err| @panic(@errorName(err));
-        defer self.backend.device.destroySemaphore(semaphore, null);
-        self.backend.device.latencySleepNV(self.backend.swapchain, &.{
-            .signal_semaphore = semaphore,
-            .value = 1,
-        }) catch |err| @panic(@errorName(err)); // XXX: errors?
-        _ = self.backend.device.waitSemaphores(&.{
-            .semaphore_count = 1,
-            .p_semaphores = &.{semaphore},
-            .p_values = &.{1},
-        }, std.math.maxInt(u64)) catch |err| @panic(@errorName(err)); // XXX: max wait? errors/result?
-    }
 }
 
 const PhysicalDevice = struct {

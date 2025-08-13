@@ -80,12 +80,12 @@
 //! allow users to control whether or not this part of the integration is enabled.
 //!
 //! First off, when you desire low input latency, you should set your swapchain image count to the
-//! minimum value. The pacer can't do this for you.
+//! minimum value by calling `gx.setLowLatency(true)`, or enabling low latency mode on init.
 //!
 //! Next, you may have noticed that `update` takes an argument labeled `slop_ns`, and returns a
 //! `u64`. Slop is the amount of time the CPU spent blocked on the GPU this frame (e.g. because the
 //! swapchain queue was full.) Our goal is to move that time spent blocking to before we poll for
-//! input.
+//! input. You can get this from `gx.slop_ns`.
 //!
 //! The value returned by `update` is the number of nanoseconds the frame pacer is recommending that
 //! you wait before polling input. You can sleep during this time (e.g. with something like
@@ -154,9 +154,10 @@ pub fn init(refresh_rate_hz: f32) @This() {
     };
 }
 
-/// Slop is the amount of time the CPU spent blocked on the GPU this frame. You may pass in `0` if
-/// this value is unknown, this wil disable input latency reduction. The return value is the
-/// suggested number of nanoseconds to delay before polling for user input.
+/// Slop is the amount of time the CPU spent blocked on the GPU this frame, you can get this from
+/// `gx.slop_ns`. Alternatigvely you may pass in `0` if this value is unknown for some reason or you
+/// don't care about lowering input latency, this wil disable input latency reduction. The return
+/// value is the suggested number of nanoseconds to delay before polling for user input.
 pub fn update(self: *@This(), slop_ns: u64) u64 {
     // Lap the frame timer, conver to useful units.
     const delta_ns = self.timer.lap();

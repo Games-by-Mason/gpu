@@ -35,6 +35,8 @@ device: Device,
 frames_in_flight: u5,
 /// The current frame in flight.
 frame: u8 = 0,
+/// The amount of time the last frame spent blocke don the GPU.
+slop_ns: u64 = 0,
 /// Whether or not we're currently in between `beginFrame` and `endFrame`.
 in_frame: bool = false,
 /// Whether or not timestamp queries are enabled.
@@ -45,6 +47,8 @@ tracy_queries: [gpu.global_options.max_frames_in_flight]u16 = @splat(0),
 validation: Validation,
 /// HDR metadata.
 hdr_metadata: ?gpu.HdrMetadata = null,
+/// See `setLowLatency`.
+low_latency: bool,
 
 pub const PlatformWindow = enum(u64) { _ };
 
@@ -108,9 +112,11 @@ pub const Options = struct {
     /// The max number of swapchain images.
     ///
     /// Most backend APIs don't actually provide a guarantee here, but in practice there are never
-    /// more than two or three, and setting an upper bound lets us avoid making dynamic allocations
+    /// more than two or three. Setting an upper bound lets us avoid making dynamic allocations
     /// when the swapchain is recreated.
     max_swapchain_images: u32 = 8,
+    /// See `setLowLatency`.
+    low_latency: bool = true,
     /// Backend specific options.
     backend: Backend.Options,
     /// The log2 of the number of bytes to reserve for the arena. The arena is used for temporary
@@ -153,6 +159,8 @@ pub fn init(gpa: Allocator, options: Options) @This() {
     assert(options.frames_in_flight > 0);
     assert(options.frames_in_flight <= gpu.global_options.max_frames_in_flight);
 
+    log.debug("low latency: {}", .{options.low_latency});
+
     const backend_result = Backend.init(gpa, options);
 
     var gx: @This() = .{
@@ -162,6 +170,7 @@ pub fn init(gpa: Allocator, options: Options) @This() {
         .frames_in_flight = options.frames_in_flight,
         .timestamp_queries = options.timestamp_queries,
         .validation = options.validation,
+        .low_latency = options.low_latency,
     };
 
     if (options.max_alignment) {
@@ -254,7 +263,7 @@ pub const EndFrameOptions = struct {
 /// Ends the current frame.
 ///
 /// Returns the nanoseconds spent blocked on the GPU.
-pub fn endFrame(self: *@This(), options: EndFrameOptions) u64 {
+pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
     const zone = Zone.begin(.{ .src = @src() });
     defer zone.end();
     if (options.present) |present| {
@@ -267,15 +276,13 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) u64 {
         .color = gpu.global_options.blocking_zone_color,
     });
     defer blocking_zone.end();
-    const blocking_ns = Backend.endFrame(self, options);
+    self.slop_ns = Backend.endFrame(self, options);
     const Frame = @TypeOf(self.frame);
     const FramesInFlight = @TypeOf(self.frames_in_flight);
     comptime assert(std.math.maxInt(FramesInFlight) <= std.math.maxInt(Frame));
     self.frame = (self.frame + 1) % self.frames_in_flight;
     assert(self.in_frame);
     self.in_frame = false;
-
-    return blocking_ns;
 }
 
 /// The result of `acquireNextImage`.
@@ -331,7 +338,12 @@ pub fn setHdrMetadata(self: *@This(), metadata: gpu.HdrMetadata) void {
     Backend.updateHdrMetadata(metadata);
 }
 
-// XXX: naming, maybe enforce calling
-pub fn sleepBeforeInput(self: *@This()) void {
-    Backend.sleepBeforeInput(self);
+/// When true, hints to the backend to prefer a swapchain with lower latency at the expense of less
+/// forgiveness for going over the frame budget.
+pub fn setLowLatency(self: *@This(), enabled: bool) void {
+    if (enabled != self.low_latency) {
+        log.debug("low latency: {}", .{enabled});
+        self.low_latency = enabled;
+        Backend.updateLowLatency(self);
+    }
 }
