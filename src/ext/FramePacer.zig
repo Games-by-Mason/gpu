@@ -132,12 +132,33 @@ smoothed_delta_s: f32,
 /// The frame timer.
 timer: std.time.Timer,
 
+const plot_smoothed_delta_s = "FP: Smoothed Delta S";
+const plot_delta_s = "FP: Delta S";
+const plot_slop_ms = "FP: Slop MS";
+const plot_sleep_ms = "FP: Sleep MS";
+
+const plot_names: []const [:0]const u8 = &.{
+    plot_smoothed_delta_s,
+    plot_delta_s,
+    plot_slop_ms,
+    plot_sleep_ms,
+};
+
 /// You may pass `0` in for the refresh rate if it is unknown. This will disable the latency
 /// reduction and the smoothed delta time will take slightly longer to converge.
 ///
 /// It's tempting to make this parameter nullable instead of using in band signaling. In practice,
 /// many operating systems and platform layers already use 0 as "unknown".
 pub fn init(refresh_rate_hz: f32) @This() {
+    for (plot_names) |name| {
+        tracy.plotConfig(.{
+            .name = name,
+            .format = .number,
+            .mode = .line,
+            .fill = true,
+        });
+    }
+
     return .{
         .refresh_rate_hz = refresh_rate_hz,
         .smoothed_delta_s = b: {
@@ -175,30 +196,53 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
         self.smoothed_rwa,
     );
 
-    // Early out if we don't know the target refresh rate. Without it, we have no way to bound
-    // our sleep amount in the event that our headroom is too low on a given platform and will
-    // death spiral, so we don't request any sleep.
-    if (refresh_period_ms == 0) {
-        self.sleep_ms = 0;
-        return 0;
-    }
+    // Calculate the recommended sleep time before input latency.
+    const sleep_ns: u64 = b: {
+        // Early out if we don't know the target refresh rate. Without it, we have no way to bound
+        // our sleep amount in the event that our headroom is too low on a given platform and will
+        // death spiral, so we don't request any sleep.
+        if (refresh_period_ms == 0) {
+            self.sleep_ms = 0;
+            break :b 0;
+        }
 
-    // If our frame time overshot our max, scale back our sleep amount. Ideally this will never
-    // happen. Under normal circumstnaces, scale towards leaving headroom slop only.
-    if (delta_ms > refresh_period_ms + self.overshoot_ms) {
-        self.sleep_ms *= self.overshoot_scale;
-    } else {
-        const diff = slop_ms - self.headroom_ms;
-        self.sleep_ms += diff * self.sleep_rwa;
-    }
+        // If our frame time overshot our max, scale back our sleep amount. Ideally this will never
+        // happen. Under normal circumstnaces, scale towards leaving headroom slop only.
+        if (delta_ms > refresh_period_ms + self.overshoot_ms) {
+            self.sleep_ms *= self.overshoot_scale;
+        } else {
+            const diff = slop_ms - self.headroom_ms;
+            self.sleep_ms += diff * self.sleep_rwa;
+        }
 
-    // Clamp to the headroom allowed range.
-    self.sleep_ms = std.math.clamp(
-        self.sleep_ms,
-        0.0,
-        @max(refresh_period_ms - self.headroom_ms, 0.0),
-    );
+        // Clamp to the headroom allowed range.
+        self.sleep_ms = std.math.clamp(
+            self.sleep_ms,
+            0.0,
+            @max(refresh_period_ms - self.headroom_ms, 0.0),
+        );
 
-    // Return the recommended delay in nanoseconds
-    return @intFromFloat(self.sleep_ms * std.time.ns_per_ms);
+        // Break with the recommended delay in nanoseconds
+        break :b @intFromFloat(self.sleep_ms * std.time.ns_per_ms);
+    };
+
+    // Tracy plots
+    tracy.plot(.{
+        .name = plot_slop_ms,
+        .value = .{ .f32 = slop_ms },
+    });
+    tracy.plot(.{
+        .name = plot_delta_s,
+        .value = .{ .f32 = delta_s },
+    });
+    tracy.plot(.{
+        .name = plot_smoothed_delta_s,
+        .value = .{ .f32 = self.smoothed_delta_s },
+    });
+    tracy.plot(.{
+        .name = plot_sleep_ms,
+        .value = .{ .f32 = self.sleep_ms },
+    });
+
+    return sleep_ns;
 }
