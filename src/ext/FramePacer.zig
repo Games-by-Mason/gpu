@@ -206,10 +206,11 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
             break :b 0;
         }
 
-        // If our frame time overshot our max, scale back our sleep amount. Ideally this will never
-        // happen. Under normal circumstances, scale towards leaving headroom slop only.
+        // Check our timing and adjust the sleep amount as needed.
         if (delta_ms > refresh_period_ms + self.overshoot_ms) {
-            // If we're sleeping a significant amount during an overshoot, log this in Tracy
+            // If our frame time overshot our max due to sleeping, scale back our sleep amount.
+            // Ideally this will never happen due to sleeping, if it happens often our headroom is
+            // too low.
             if (self.sleep_ms > 0.15) {
                 tracy.message(.{
                     .text = "frame pacer overshot",
@@ -218,6 +219,7 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
             }
             self.sleep_ms *= self.overshoot_scale;
         } else {
+            // Under normal circumstances, scale towards leaving headroom slop only.
             const diff = slop_ms - self.headroom_ms;
             self.sleep_ms += diff * self.sleep_rwa;
         }
