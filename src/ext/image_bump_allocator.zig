@@ -69,6 +69,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
 
         name: [:0]const u8,
         page_size: u64,
+        initial_pages: usize,
         available: std.ArrayListUnmanaged(Page),
         full: std.ArrayListUnmanaged(Page),
         offset: u64,
@@ -100,6 +101,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
                 .available = available,
                 .full = full,
                 .offset = 0,
+                .initial_pages = options.initial_pages,
             };
             for (0..options.initial_pages) |_| {
                 const name: DebugName = .{ .str = options.name, .index = result.count() };
@@ -138,7 +140,7 @@ pub fn ImageBumpAllocator(kind: ImageKind) type {
 
         fn peekPage(self: *@This(), gx: *Gx, image_name: DebugName) Page {
             if (self.available.items.len == 0) {
-                if (self.full.items.len > 0) {
+                if (self.initial_pages > 0) {
                     // If we had to dynamically allocate, unless we were allocated with no pages in
                     // which case this was likely intentional (e.g. a render target pool may start
                     // with no pages in case the device wants all dedicated allocations.)
