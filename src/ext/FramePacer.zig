@@ -22,7 +22,7 @@
 //! Why input latency? Because if you're using a FIFO presentation mode and vsync, then once the
 //! swapchain image queue is full, you'll block waiting for the next vblank. You're blocking *after*
 //! having polled for input and rendered the frame, increasing the time between the player's input
-//! ocurring and being displayed on screen.
+//! occurring and being displayed on screen.
 //!
 //! ## In a perfect world...
 //!
@@ -64,7 +64,7 @@
 //!
 //! This value is calculated by timing how often update is called, and returning an average with a
 //! bias towards recent calls. This mitigates variability in update time due to the swapchain
-//! queueing up frames, and the fact that you can't trust the refresh rate reported by the OS (it
+//! queuing up frames, and the fact that you can't trust the refresh rate reported by the OS (it
 //! may be unavailable, or flat out wrong in the case of VRR.)
 //!
 //! You should still pass in the refresh rate on init if you have it since this prewarms the
@@ -91,7 +91,7 @@
 //! you wait before polling input. You can sleep during this time (e.g. with something like
 //! `SDL_DelayPrecise`), or do other useful work that doesn't depend on user input.
 //!
-//! The difference is the most noticable at 60hz. The higher your refresh rate, the lower input
+//! The difference is the most noticeable at 60hz. The higher your refresh rate, the lower input
 //! latency gets naturally since you're polling more often. You may want to use something like
 //! [`GBMS`](https://github.com/Games-by-Mason/gbms/)'s latency test shader to observe the
 //! difference.
@@ -114,7 +114,7 @@ const Zone = tracy.Zone;
 /// new value in response to a display changed event if possible.
 refresh_rate_hz: f32,
 /// The amount of headroom to leave. Configurable.
-headroom_ms: f32 = 0.5,
+headroom_ms: f32 = 2.0,
 /// If a frame time overshoots the target by more than this much, scale back the sleep amount.
 overshoot_ms: f32 = 1.0,
 /// The amount to scale back the sleep on overshoot.
@@ -147,7 +147,7 @@ const plot_names: []const [:0]const u8 = &.{
 /// You may pass `0` in for the refresh rate if it is unknown. This will disable the latency
 /// reduction and the smoothed delta time will take slightly longer to converge.
 ///
-/// It's tempting to make this parameter nullable instead of using in band signaling. In practice,
+/// It's tempting to make this parameter optional instead of using in band signaling. In practice,
 /// many operating systems and platform layers already use 0 as "unknown".
 pub fn init(refresh_rate_hz: f32) @This() {
     for (plot_names) |name| {
@@ -163,10 +163,10 @@ pub fn init(refresh_rate_hz: f32) @This() {
         .refresh_rate_hz = refresh_rate_hz,
         .smoothed_delta_s = b: {
             if (refresh_rate_hz == 0) {
-                // Prewarm to 60hz in absence of a known refresh rate
+                // Pre-warm to 60hz in absence of a known refresh rate
                 break :b 1.0 / 60.0;
             } else {
-                // Prewarm to the specified refresh rate. It may not be correct (e.g. in the case of
+                // Pre-warm to the specified refresh rate. It may not be correct (e.g. in the case of
                 // VRR) but it's a good starting point.
                 break :b 1.0 / refresh_rate_hz;
             }
@@ -176,7 +176,7 @@ pub fn init(refresh_rate_hz: f32) @This() {
 }
 
 /// Slop is the amount of time the CPU spent blocked on the GPU this frame, you can get this from
-/// `gx.slop_ns`. Alternatigvely you may pass in `0` if this value is unknown for some reason or you
+/// `gx.slop_ns`. Alternatively you may pass in `0` if this value is unknown for some reason or you
 /// don't care about lowering input latency, this wil disable input latency reduction. The return
 /// value is the suggested number of nanoseconds to delay before polling for user input.
 pub fn update(self: *@This(), slop_ns: u64) u64 {
@@ -207,8 +207,15 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
         }
 
         // If our frame time overshot our max, scale back our sleep amount. Ideally this will never
-        // happen. Under normal circumstnaces, scale towards leaving headroom slop only.
+        // happen. Under normal circumstances, scale towards leaving headroom slop only.
         if (delta_ms > refresh_period_ms + self.overshoot_ms) {
+            // If we're sleeping a significant amount during an overshoot, log this in Tracy
+            if (self.sleep_ms > 0.15) {
+                tracy.message(.{
+                    .text = "frame pacer overshot",
+                    .callstack_depth = 0,
+                });
+            }
             self.sleep_ms *= self.overshoot_scale;
         } else {
             const diff = slop_ms - self.headroom_ms;
