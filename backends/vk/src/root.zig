@@ -3178,7 +3178,7 @@ fn updateHdrMetadataImpl(self: *@This(), metadata: gpu.HdrMetadata) void {
     }
 }
 
-pub fn setLowLatency(self: *@This()) void {
+pub fn updateLowLatency(self: *Gx) void {
     self.backend.recreate_swapchain = true;
 }
 
