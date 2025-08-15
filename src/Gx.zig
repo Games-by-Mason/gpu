@@ -35,7 +35,9 @@ device: Device,
 frames_in_flight: u5,
 /// The current frame in flight.
 frame: u8 = 0,
-/// The amount of time the last frame spent blocke don the GPU.
+/// Slop so far on this frame.
+slop_accum_ns: u64 = 0,
+/// The amount of time the last frame spent blocked on the GPU.
 slop_ns: u64 = 0,
 /// Whether or not we're currently in between `beginFrame` and `endFrame`.
 in_frame: bool = false,
@@ -276,13 +278,15 @@ pub fn endFrame(self: *@This(), options: EndFrameOptions) void {
         .color = gpu.global_options.blocking_zone_color,
     });
     defer blocking_zone.end();
-    self.slop_ns = Backend.endFrame(self, options);
+    self.slop_accum_ns += Backend.endFrame(self, options);
     const Frame = @TypeOf(self.frame);
     const FramesInFlight = @TypeOf(self.frames_in_flight);
     comptime assert(std.math.maxInt(FramesInFlight) <= std.math.maxInt(Frame));
     self.frame = (self.frame + 1) % self.frames_in_flight;
     assert(self.in_frame);
     self.in_frame = false;
+    self.slop_ns = self.slop_accum_ns;
+    self.slop_accum_ns = undefined;
 }
 
 /// The result of `acquireNextImage`.
@@ -300,7 +304,7 @@ pub fn beginFrame(self: *@This()) void {
     defer zone.end();
     assert(!self.in_frame);
     self.in_frame = true;
-    Backend.beginFrame(self);
+    self.slop_accum_ns = Backend.beginFrame(self);
     self.tracy_queries[self.frame] = 0;
 }
 

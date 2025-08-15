@@ -1726,22 +1726,26 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     );
 }
 
-pub fn beginFrame(self: *Gx) void {
-    {
+pub fn beginFrame(self: *Gx) u64 {
+    const wait_ns = b: {
         const wait_zone = Zone.begin(.{
             .src = @src(),
             .name = "wait for cmd pool",
+            .color = gpu.global_options.blocking_zone_color,
         });
         defer wait_zone.end();
         const cmd_pool_fence = self.backend.cmd_pool_ready[self.frame];
+        var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
         assert(self.backend.device.waitForFences(
             1,
             &.{cmd_pool_fence},
             vk.TRUE,
             std.math.maxInt(u64),
         ) catch |err| @panic(@errorName(err)) == .success);
+        const wait_ns = blocking_timer.read();
         self.backend.device.resetFences(1, &.{cmd_pool_fence}) catch |err| @panic(@errorName(err));
-    }
+        break :b wait_ns;
+    };
 
     const reset_cmd_pool_zone = Zone.begin(.{
         .src = @src(),
@@ -1842,6 +1846,8 @@ pub fn beginFrame(self: *Gx) void {
             ) catch |err| @panic(@errorName(err));
         }
     }
+
+    return wait_ns;
 }
 
 fn imageOptionsToVk(options: btypes.ImageOptions) vk.ImageCreateInfo {
