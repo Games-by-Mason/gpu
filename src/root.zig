@@ -21,7 +21,7 @@ pub const tracy_gpu_pool = "gpu";
 /// named `gpu_options` to configure the library.
 pub const Options = struct {
     Backend: type,
-    max_frames_in_flight: u4 = 2,
+    max_frames_in_flight: u5 = 2,
     blocking_zone_color: tracy.Color = .dark_sea_green4,
 };
 
@@ -1136,6 +1136,7 @@ pub const BarrierStages = packed struct {
     copy: bool = false,
     blit: bool = false,
     bottom_of_pipe: bool = false,
+    all_commands: bool = false,
 };
 
 fn EnumBitSet(T: type) type {
@@ -1781,6 +1782,8 @@ pub const Access = packed struct {
     color_attachment_write: bool = false,
     depth_stencil_attachment_read: bool = false,
     depth_stencil_attachment_write: bool = false,
+    memory_read: bool = false,
+    memory_write: bool = false,
 };
 
 pub const BufBarrier = struct {

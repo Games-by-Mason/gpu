@@ -77,11 +77,11 @@ pub const Options = struct {
 const graphics_queue_name = "Graphics Queue";
 
 const DeviceFeatures = struct {
-    // Keep in sync with `supersetOf`
+    // Keep in sync with `supersetOf` and `initEmpty`
+    vk10: vk.PhysicalDeviceFeatures2 = .{ .features = .{} },
     vk11: vk.PhysicalDeviceVulkan11Features = .{},
     vk12: vk.PhysicalDeviceVulkan12Features = .{},
     vk13: vk.PhysicalDeviceVulkan13Features = .{},
-    vk10: vk.PhysicalDeviceFeatures2 = .{ .features = .{} },
 
     fn initEmpty(self: *@This()) void {
         self.vk10 = .{ .p_next = &self.vk11, .features = .{} };
@@ -463,6 +463,12 @@ pub fn init(
         log.debug("\t* min uniform buffer offset alignment: {}", .{properties.limits.min_uniform_buffer_offset_alignment});
         log.debug("\t* min storage buffer offset alignment: {}", .{properties.limits.min_storage_buffer_offset_alignment});
 
+        var device_exts: DeviceExts = .{};
+        const supported_device_extensions = instance_proxy.enumerateDeviceExtensionPropertiesAlloc(device, null, arena) catch |err| @panic(@errorName(err));
+        for (supported_device_extensions) |extension_properties| {
+            device_exts.add(&extension_properties);
+        }
+
         var features: DeviceFeatures = .{};
         features.initEmpty();
         instance_proxy.getPhysicalDeviceFeatures2(device, features.root());
@@ -497,12 +503,6 @@ pub fn init(
             break @intCast(qfi);
         } else null;
         log.debug("\t* queue family index: {?}", .{queue_family_index});
-
-        var device_exts: DeviceExts = .{};
-        const supported_device_extensions = instance_proxy.enumerateDeviceExtensionPropertiesAlloc(device, null, arena) catch |err| @panic(@errorName(err));
-        for (supported_device_extensions) |extension_properties| {
-            device_exts.add(&extension_properties);
-        }
 
         const device_ext_list = device_exts.alloc(arena, options.timestamp_queries);
 
@@ -662,12 +662,12 @@ pub fn init(
     queue_zone.end();
 
     const device_proxy_zone = tracy.Zone.begin(.{ .name = "create device proxy", .src = @src() });
+    const device_exts = best_physical_device.device_exts.alloc(arena, options.timestamp_queries).?;
     var features: DeviceFeatures = .{};
     features.initRequired(.{
         .host_query_reset = options.timestamp_queries,
         .sampler_anisotropy = best_physical_device.sampler_anisotropy,
     });
-    const device_exts = best_physical_device.device_exts.alloc(arena, options.timestamp_queries).?;
     const device_create_info: vk.DeviceCreateInfo = .{
         .p_queue_create_infos = &queue_create_infos,
         .queue_create_info_count = @intCast(queue_create_infos.len),
@@ -829,7 +829,7 @@ pub fn init(
     };
 
     // Set up the swapchain
-    result.backend.setSwapchainExtent(options.surface_extent, null);
+    result.backend.setSwapchainExtent(options.surface_extent, null, options.low_latency);
 
     return result;
 }
@@ -1726,22 +1726,26 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
     );
 }
 
-pub fn beginFrame(self: *Gx) void {
-    {
+pub fn beginFrame(self: *Gx) u64 {
+    const wait_ns = b: {
         const wait_zone = Zone.begin(.{
             .src = @src(),
             .name = "wait for cmd pool",
+            .color = gpu.global_options.blocking_zone_color,
         });
         defer wait_zone.end();
         const cmd_pool_fence = self.backend.cmd_pool_ready[self.frame];
+        var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
         assert(self.backend.device.waitForFences(
             1,
             &.{cmd_pool_fence},
             vk.TRUE,
             std.math.maxInt(u64),
         ) catch |err| @panic(@errorName(err)) == .success);
+        const wait_ns = blocking_timer.read();
         self.backend.device.resetFences(1, &.{cmd_pool_fence}) catch |err| @panic(@errorName(err));
-    }
+        break :b wait_ns;
+    };
 
     const reset_cmd_pool_zone = Zone.begin(.{
         .src = @src(),
@@ -1842,6 +1846,8 @@ pub fn beginFrame(self: *Gx) void {
             ) catch |err| @panic(@errorName(err));
         }
     }
+
+    return wait_ns;
 }
 
 fn imageOptionsToVk(options: btypes.ImageOptions) vk.ImageCreateInfo {
@@ -2569,7 +2575,7 @@ pub fn pipelinesCreateCompute(self: *Gx, cmds: []const gpu.Pipeline.InitComputeC
     }
 }
 
-pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
+pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) u64 {
     // Check if we're presenting an image this frame
     const present = options.present orelse {
         // If not, just wrap up the command pool by signaling the fence for this frame and then
@@ -2591,11 +2597,11 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
             }},
             self.backend.cmd_pool_ready[self.frame],
         ) catch |err| @panic(@errorName(err));
-        return;
+        return 0;
     };
 
-    // Acquire the next swapchain image
-    const image_index = b: {
+    const image_index: u32, const acquire_ns: u64 = b: {
+        // Acquire the next swapchain image
         const acquire_zone = Zone.begin(.{ .name = "acquire", .src = @src() });
         defer acquire_zone.end();
 
@@ -2633,25 +2639,37 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         // Instead, we just recreate the swapchain immediately. The only downside is a slightly
         // lower framerate during the resize than would otherwise be possible.
         if (self.backend.recreate_swapchain) {
-            self.backend.setSwapchainExtent(present.surface_extent, self.hdr_metadata);
+            self.backend.setSwapchainExtent(
+                present.surface_extent,
+                self.hdr_metadata,
+                self.low_latency,
+            );
         }
 
         // Actually acquire the image. Drivers typically block either here or on present if the
         // image isn't yet available.
-        const blocking_zone = Zone.begin(.{
-            .src = @src(),
-            .color = gpu.global_options.blocking_zone_color,
-        });
-        defer blocking_zone.end();
         while (true) {
-            const acquire_result = self.backend.device.acquireNextImageKHR(
+            const acquire_blocking_zone = Zone.begin(.{
+                .name = "vkAcquireNextImageKHR",
+                .src = @src(),
+                .color = gpu.global_options.blocking_zone_color,
+            });
+            defer acquire_blocking_zone.end();
+            var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
+            const acquire_result_or_err = self.backend.device.acquireNextImageKHR(
                 self.backend.swapchain,
                 std.math.maxInt(u64),
                 self.backend.image_availables[self.frame],
                 .null_handle,
-            ) catch |err| switch (err) {
+            );
+            const acquire_ns = blocking_timer.read();
+            const acquire_result = acquire_result_or_err catch |err| switch (err) {
                 error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
-                    self.backend.setSwapchainExtent(present.surface_extent, self.hdr_metadata);
+                    self.backend.setSwapchainExtent(
+                        present.surface_extent,
+                        self.hdr_metadata,
+                        self.low_latency,
+                    );
                     continue;
                 },
                 error.OutOfHostMemory,
@@ -2661,7 +2679,7 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
                 error.DeviceLost,
                 => @panic(@errorName(err)),
             };
-            break :b acquire_result.image_index;
+            break :b .{ acquire_result.image_index, acquire_ns };
         }
     };
 
@@ -2768,10 +2786,14 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
     }
 
     // Actually present the image
-    {
-        const queue_present_zone = Zone.begin(.{ .name = "queue present", .src = @src() });
-        defer queue_present_zone.end();
-        const result = self.backend.device.queuePresentKHR(
+    const present_ns: u64 = ns: {
+        const queue_present_zone = Zone.begin(.{
+            .name = "queue present",
+            .src = @src(),
+            .color = gpu.global_options.blocking_zone_color,
+        });
+        var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
+        const result_or_err = self.backend.device.queuePresentKHR(
             self.backend.queue,
             &.{
                 .wait_semaphore_count = 1,
@@ -2781,7 +2803,10 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
                 .p_image_indices = &.{image_index},
                 .p_results = null,
             },
-        ) catch |err| b: switch (err) {
+        );
+        queue_present_zone.end();
+        const present_ns = blocking_timer.read();
+        const result = result_or_err catch |err| b: switch (err) {
             error.OutOfDateKHR, error.FullScreenExclusiveModeLostEXT => {
                 self.backend.recreate_swapchain = true;
                 break :b .success;
@@ -2796,7 +2821,10 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) void {
         if (result == .suboptimal_khr) {
             self.backend.recreate_swapchain = true;
         }
-    }
+        break :ns present_ns;
+    };
+
+    return acquire_ns + present_ns;
 }
 
 pub fn samplerCreate(
@@ -2894,7 +2922,7 @@ fn rangeToVk(range: gpu.ImageBarrier.Range) vk.ImageSubresourceRange {
 }
 
 fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
-    comptime assert(std.meta.fields(gpu.BarrierStages).len == 10); // Update below if this fails!
+    comptime assert(std.meta.fields(gpu.BarrierStages).len == 11); // Update below if this fails!
     return .{
         .top_of_pipe_bit = stages.top_of_pipe,
         .vertex_shader_bit = stages.vertex,
@@ -2906,11 +2934,12 @@ fn barrierStagesToVk(stages: gpu.BarrierStages) vk.PipelineStageFlags2 {
         .copy_bit = stages.copy,
         .blit_bit = stages.blit,
         .bottom_of_pipe_bit = stages.bottom_of_pipe,
+        .all_commands_bit = stages.all_commands,
     };
 }
 
 fn accessToVk(access: gpu.Access) vk.AccessFlags2 {
-    comptime assert(std.meta.fields(gpu.Access).len == 8); // Update below if this fails!
+    comptime assert(std.meta.fields(gpu.Access).len == 10); // Update below if this fails!
     return .{
         .shader_read_bit = access.shader_read,
         .shader_write_bit = access.shader_write,
@@ -2920,6 +2949,8 @@ fn accessToVk(access: gpu.Access) vk.AccessFlags2 {
         .color_attachment_write_bit = access.color_attachment_write,
         .depth_stencil_attachment_read_bit = access.depth_stencil_attachment_read,
         .depth_stencil_attachment_write_bit = access.depth_stencil_attachment_write,
+        .memory_read_bit = access.memory_read,
+        .memory_write_bit = access.memory_write,
     };
 }
 
@@ -3153,6 +3184,10 @@ fn updateHdrMetadataImpl(self: *@This(), metadata: gpu.HdrMetadata) void {
     }
 }
 
+pub fn updateLowLatency(self: *Gx) void {
+    self.backend.recreate_swapchain = true;
+}
+
 fn aspectToVk(self: gpu.ImageAspect) vk.ImageAspectFlags {
     return .{
         .color_bit = self.color,
@@ -3234,7 +3269,12 @@ fn destroySwapchainViewsAndResetImages(self: *@This()) void {
     self.swapchain_images.clearRetainingCapacity();
 }
 
-fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.HdrMetadata) void {
+fn setSwapchainExtent(
+    self: *@This(),
+    extent: gpu.Extent2D,
+    hdr_metadata: ?gpu.HdrMetadata,
+    low_latency: bool,
+) void {
     const zone = tracy.Zone.begin(.{ .src = @src() });
     defer zone.end();
 
@@ -3293,7 +3333,13 @@ fn setSwapchainExtent(self: *@This(), extent: gpu.Extent2D, hdr_metadata: ?gpu.H
     const max_images = if (surface_capabilities.max_image_count == 0) b: {
         break :b std.math.maxInt(u32);
     } else surface_capabilities.max_image_count;
-    const min_image_count = @min(max_images, surface_capabilities.min_image_count + 1);
+    const min_image_count = if (low_latency) b: {
+        // In low latency mode, create the shortest swapchain possible.
+        break :b surface_capabilities.min_image_count;
+    } else b: {
+        // Otherwise, follow the general best practice of adding one frame of buffer to the minimum.
+        break :b @min(max_images, surface_capabilities.min_image_count + 1);
+    };
 
     var swapchain_create_info: vk.SwapchainCreateInfoKHR = .{
         .surface = self.surface,
@@ -3485,12 +3531,13 @@ fn vkDebugCallback(
     if (data) |d| {
         switch (level) {
             .warn => switch (d.*.message_id_number) {
-                // Ignore `BestPractices-vkCreateDevice-physical-device-features-not-retrieved`, this is
-                // a false positive--we're using `vkGetPhysicalDeviceFeatures2`.
+                // Ignore `BestPractices-vkCreateDevice-physical-device-features-not-retrieved`,
+                // this is a false positive--we're using `vkGetPhysicalDeviceFeatures2`.
                 584333584 => return vk.FALSE,
                 // Ignore `BestPractices-vkBindBufferMemory-small-dedicated-allocation` and
-                // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering strategy is
-                // designed around this but we often have so little total memory that we trip it anyway!
+                // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering
+                // is designed around this but we often have so little total memory that we trip it
+                // anyway!
                 280337739, -40745094 => return vk.FALSE,
                 // Don't warn us that validation is on every time validation is on, but do log it as
                 // debug
@@ -3504,11 +3551,16 @@ fn vkDebugCallback(
                         level = .debug;
                     }
                 },
-                // Don't warn us about functions that return errors. This could be useful, but it leads to
-                // false positives and Zig forces us to handle errors anyway. The false positive I hit is on
-                // an Intel UHD GPU and occurs during device creation, presumably internally something calls
+                // Don't warn us about functions that return errors. This could be useful, but it
+                // leads to false positives and Zig forces us to handle errors anyway. The false
+                // positive I hit is on an Intel UHD GPU and occurs during device creation,
+                // presumably internally something calls
                 // `vkGetPhysicalDeviceImageFormatProperties2`.
                 1405170735 => level = .debug,
+                // Don't warn us that creating a double buffered swapchain makes it less forgiving
+                // to miss vblank, we're accepting this tradeoff for lower input latency when the
+                // user asks for it. This is often the right tradeoff to make!
+                1424876368 => level = .debug,
                 else => {},
             },
             .err => switch (d.*.message_id_number) {
