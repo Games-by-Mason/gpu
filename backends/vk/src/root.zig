@@ -3531,12 +3531,13 @@ fn vkDebugCallback(
     if (data) |d| {
         switch (level) {
             .warn => switch (d.*.message_id_number) {
-                // Ignore `BestPractices-vkCreateDevice-physical-device-features-not-retrieved`, this is
-                // a false positive--we're using `vkGetPhysicalDeviceFeatures2`.
+                // Ignore `BestPractices-vkCreateDevice-physical-device-features-not-retrieved`,
+                // this is a false positive--we're using `vkGetPhysicalDeviceFeatures2`.
                 584333584 => return vk.FALSE,
                 // Ignore `BestPractices-vkBindBufferMemory-small-dedicated-allocation` and
-                // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering strategy is
-                // designed around this but we often have so little total memory that we trip it anyway!
+                // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering
+                // is designed around this but we often have so little total memory that we trip it
+                // anyway!
                 280337739, -40745094 => return vk.FALSE,
                 // Don't warn us that validation is on every time validation is on, but do log it as
                 // debug
@@ -3550,11 +3551,16 @@ fn vkDebugCallback(
                         level = .debug;
                     }
                 },
-                // Don't warn us about functions that return errors. This could be useful, but it leads to
-                // false positives and Zig forces us to handle errors anyway. The false positive I hit is on
-                // an Intel UHD GPU and occurs during device creation, presumably internally something calls
+                // Don't warn us about functions that return errors. This could be useful, but it
+                // leads to false positives and Zig forces us to handle errors anyway. The false
+                // positive I hit is on an Intel UHD GPU and occurs during device creation,
+                // presumably internally something calls
                 // `vkGetPhysicalDeviceImageFormatProperties2`.
                 1405170735 => level = .debug,
+                // Don't warn us that creating a double buffered swapchain makes it less forgiving
+                // to miss vblank, we're accepting this tradeoff for lower input latency when the
+                // user asks for it. This is often the right tradeoff to make!
+                1424876368 => level = .debug,
                 else => {},
             },
             .err => switch (d.*.message_id_number) {
