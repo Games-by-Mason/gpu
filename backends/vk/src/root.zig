@@ -1728,6 +1728,13 @@ pub fn descSetsUpdate(self: *Gx, updates: []const gpu.DescSet.Update) void {
 
 pub fn beginFrame(self: *Gx) u64 {
     const wait_ns = b: {
+        // If the swapchain is full, the CPU has to wait on the GPU. Typically you'd expect this to
+        // occur while acquiring the next image or presenting, but some drivers (e.g. Nvidia) end up
+        // blocking here instead. I suspect that their drivers are creating more swapchain images
+        // than we ask for, and then remapping the indices as if there were only two. This would
+        // explain both why execution is able to get to this point before blocking, and why Nvidia
+        // cards appear to have higher latency than other cards. For other possible blocking
+        // locations, search this file for `Timer.start()`.
         const wait_zone = Zone.begin(.{
             .src = @src(),
             .name = "wait for cmd pool",
@@ -2655,6 +2662,8 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) u64 {
                 .color = gpu.global_options.blocking_zone_color,
             });
             defer acquire_blocking_zone.end();
+            // The driver is allowed to block here on the GPU if the swapchain is full. For other
+            // possible blocking locations, search this file for `Timer.start()`.
             var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
             const acquire_result_or_err = self.backend.device.acquireNextImageKHR(
                 self.backend.swapchain,
@@ -2792,6 +2801,9 @@ pub fn endFrame(self: *Gx, options: Gx.EndFrameOptions) u64 {
             .src = @src(),
             .color = gpu.global_options.blocking_zone_color,
         });
+        // The driver may block here if the swapchain is full. The driver is allowed to block here
+        // on the GPU if the swapchain is full. For other possible blocking locations, search this
+        // file for `Timer.start()`.
         var blocking_timer = std.time.Timer.start() catch |err| @panic(@errorName(err));
         const result_or_err = self.backend.device.queuePresentKHR(
             self.backend.queue,

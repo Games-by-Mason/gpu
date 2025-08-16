@@ -109,6 +109,10 @@
 //!
 //! The defaults are intended to be good for most projects. If you have to change them, consider
 //! filing an issue--maybe the defaults should be updated!
+//!
+//! If you're implementing the slop counter yourself, keep in mind that there are a few different
+//! places the driver is allowed to block the CPU on the GPU, and different drivers have different
+//! approaches here. See the Vulakn backend for `Gx` as reference for the possible blocking calls.
 
 const std = @import("std");
 const geom = @import("geom");
