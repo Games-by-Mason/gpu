@@ -135,7 +135,10 @@ headroom_ms: f32 = 2.0,
 /// less aggressive value to mitigate the chance of the driver overhead being larger than the
 /// headroom which would lead to a death spiral.
 headroom_safe_ms: f32 = 5.0,
-/// If a frame time overshoots the target by more than this much, scale back the sleep amount.
+/// If a frame time overshoots the target by more than this much, scale back the sleep amount. A
+/// better approach may involve checking the sum of the last two frames is over twice the refresh
+/// period, due to buffering being late once is actually okay, but this is simple and works well
+/// enough.
 overshoot_ms: f32 = 1.0,
 /// The amount to scale back the sleep on overshoot.
 overshoot_scale: f32 = 0.9,
