@@ -124,7 +124,7 @@ const Zone = tracy.Zone;
 refresh_rate_hz: f32,
 /// If the refresh rate is unknown, never introduce a sleep that would lower the FPS below this
 /// rate.
-refresh_rate_safe_hz: f32 = 1.0 / 60.0,
+refresh_rate_safe_hz: f32 = 60.0,
 /// The amount of headroom to leave. Configurable.
 headroom_ms: f32 = 2.0,
 /// The amount of headroom to leave when the refresh rate is unknown. Configurable, defaults to a
@@ -216,7 +216,7 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
         // If our frame time overshot our max due to sleeping, scale back our sleep amount.
         // Ideally this will never happen due to sleeping, if it happens often our headroom is
         // too low. 0.15 is just an arbitrary epsilon that prevents showing the warning
-        // unecessarily when performance is bad for unrelated reasons.
+        // unnecessarily when performance is bad for unrelated reasons.
         if (self.sleep_ms > 0.15) {
             tracy.message(.{
                 .text = "frame pacer overshot",
