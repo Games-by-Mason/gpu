@@ -4,7 +4,9 @@ A light graphics API abstraction designed for bindless rendering on desktop and 
 
 # Status
 
-Work in progress, not yet usable. Check back soon.
+GPU is alpha software. Using it means participating in its development.
+
+Once I've shipped a commercial game using GPU, I'll start to stabilize the API and remove this disclaimer.
 
 ## Goals
 
@@ -27,9 +29,9 @@ LunarG provides validation layers for Vulkan which are enabled by default for de
 
 # Backends
 
-A Vulkan backend is provided in-repo for the time being. Vulkan was chosen because it's generally the strictest of the relevant APIs, and supports largest number of relevant platforms: Windows, Linux, and Switch.
+A Vulkan backend is provided in-repo for the time being. Vulkan was chosen as the first backend because it's generally the strictest of the relevant APIs, and supports largest number of relevant platforms: Windows, Linux, and Switch.
 
-As the library matures, the Vulkan backend will be moved into its own repo.
+As the library matures, the Vulkan backend will be moved into its own repo, and the API will stabilize enough to justify effort on alternate backends. This will involve resolving [#7](https://github.com/Games-by-Mason/gpu/issues/7).
 
 The ability to ship backends as separate projects is important, because some major console creators are cowards who fear open source, and as such backends for those targets can't be developed in public.
 
@@ -38,3 +40,18 @@ The ability to ship backends as separate projects is important, because some maj
 This library is light on documentation. You are expected to use it to access the functionality of the underlying API, documentation is typically only present where significant abstraction has been added on top of what is exposed by backend.
 
 When terminology differs between backends, Vulkan terminology is generally favored.
+
+# Extensions
+
+The `src/ext` folder is provided for abstractions that are *not* part of the core library, but that users of the core library are highly likely to find useful. These include things like:
+
+* A deletion queue
+* A frame pacer
+* An image upload queue
+* An image bump allocator
+* A scoped arena
+* A mod timer
+* A render target pool
+* Color conversions, Gaussian functions, etc...
+
+For additional useful shader functionality, see [gbms](https://github.com/Games-by-Mason/gbms/).
