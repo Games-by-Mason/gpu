@@ -100,6 +100,15 @@
 //! by setting the headroom near 0 if your game render's very fast, but you don't want to do this--
 //! you're going to reintroduce judder if there are even minor timing variations as you'll be able
 //! to see in something like the GBMS latency tester.
+//!
+//! # Tuning
+//!
+//! Windows and Nvidia are the worst offenders when it comes to input latency, and also the most
+//! common hardware + os combo on Steam right now. You'll want to make sure your game feels good on
+//! a setup like this, but make sure the options feel good on other common setups.
+//!
+//! The defaults are intended to be good for most projects. If you have to change them, consider
+//! filing an issue--maybe the defaults should be updated!
 
 const std = @import("std");
 const geom = @import("geom");
@@ -113,8 +122,15 @@ const Zone = tracy.Zone;
 /// changes. Note that querying this value from some platforms is slow, prefer only polling for a
 /// new value in response to a display changed event if possible.
 refresh_rate_hz: f32,
+/// If the refresh rate is unknown, never introduce a sleep that would lower the FPS below this
+/// rate.
+refresh_rate_safe_hz: f32 = 1.0 / 60.0,
 /// The amount of headroom to leave. Configurable.
 headroom_ms: f32 = 2.0,
+/// The amount of headroom to leave when the refresh rate is unknown. Configurable, defaults to a
+/// less aggressive value to mitigate the chance of the driver overhead being larger than the
+/// headroom which would lead to a death spiral.
+headroom_safe_ms: f32 = 5.0,
 /// If a frame time overshoots the target by more than this much, scale back the sleep amount.
 overshoot_ms: f32 = 1.0,
 /// The amount to scale back the sleep on overshoot.
@@ -144,8 +160,7 @@ const plot_names: []const [:0]const u8 = &.{
     plot_sleep_ms,
 };
 
-/// You may pass `0` in for the refresh rate if it is unknown. This will disable the latency
-/// reduction and the smoothed delta time will take slightly longer to converge.
+/// You may pass `0` in for the refresh rate if it is unknown.
 ///
 /// It's tempting to make this parameter optional instead of using in band signaling. In practice,
 /// many operating systems and platform layers already use 0 as "unknown".
@@ -177,17 +192,17 @@ pub fn init(refresh_rate_hz: f32) @This() {
 
 /// Slop is the amount of time the CPU spent blocked on the GPU this frame, you can get this from
 /// `gx.slop_ns`. Alternatively you may pass in `0` if this value is unknown for some reason or you
-/// don't care about lowering input latency, this wil disable input latency reduction. The return
-/// value is the suggested number of nanoseconds to delay before polling for user input.
+/// don't care about lowering input latency. The return value is the suggested number of nanoseconds
+/// to delay before polling for user input.
 pub fn update(self: *@This(), slop_ns: u64) u64 {
-    // Lap the frame timer, conver to useful units.
+    // Lap the frame timer, get constants and convert to useful units
     const delta_ns = self.timer.lap();
-
-    // Unit conversions
-    const slop_ms: f32 = @as(f32, @floatFromInt(slop_ns)) / std.time.ns_per_ms;
     const delta_s = @as(f32, @floatFromInt(delta_ns)) / std.time.ns_per_s;
     const delta_ms = @as(f32, @floatFromInt(delta_ns)) / std.time.ns_per_ms;
-    const refresh_period_ms = if (self.refresh_rate_hz == 0) 0 else 1000.0 / self.refresh_rate_hz;
+    const slop_ms: f32 = @as(f32, @floatFromInt(slop_ns)) / std.time.ns_per_ms;
+    const headroom_ms = if (self.refresh_rate_hz == 0) self.headroom_safe_ms else self.headroom_ms;
+    const rate_hz = if (self.refresh_rate_hz == 0) self.refresh_rate_safe_hz else self.refresh_rate_hz;
+    const refresh_period_ms = 1000.0 / rate_hz;
 
     // Update the smoothed delta time.
     self.smoothed_delta_s = lerp(
@@ -196,44 +211,31 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
         self.smoothed_rwa,
     );
 
-    // Calculate the recommended sleep time before input latency.
-    const sleep_ns: u64 = b: {
-        // Early out if we don't know the target refresh rate. Without it, we have no way to bound
-        // our sleep amount in the event that our headroom is too low on a given platform and will
-        // death spiral, so we don't request any sleep.
-        if (refresh_period_ms == 0) {
-            self.sleep_ms = 0;
-            break :b 0;
+    // Check our timing and adjust the sleep amount as needed.
+    if (delta_ms > refresh_period_ms + self.overshoot_ms) {
+        // If our frame time overshot our max due to sleeping, scale back our sleep amount.
+        // Ideally this will never happen due to sleeping, if it happens often our headroom is
+        // too low. 0.15 is just an arbitrary epsilon that prevents showing the warning
+        // unecessarily when performance is bad for unrelated reasons.
+        if (self.sleep_ms > 0.15) {
+            tracy.message(.{
+                .text = "frame pacer overshot",
+                .callstack_depth = 0,
+            });
         }
+        self.sleep_ms *= self.overshoot_scale;
+    } else {
+        // Under normal circumstances, scale towards leaving headroom slop only.
+        const diff = slop_ms - headroom_ms;
+        self.sleep_ms += diff * self.sleep_rwa;
+    }
 
-        // Check our timing and adjust the sleep amount as needed.
-        if (delta_ms > refresh_period_ms + self.overshoot_ms) {
-            // If our frame time overshot our max due to sleeping, scale back our sleep amount.
-            // Ideally this will never happen due to sleeping, if it happens often our headroom is
-            // too low.
-            if (self.sleep_ms > 0.15) {
-                tracy.message(.{
-                    .text = "frame pacer overshot",
-                    .callstack_depth = 0,
-                });
-            }
-            self.sleep_ms *= self.overshoot_scale;
-        } else {
-            // Under normal circumstances, scale towards leaving headroom slop only.
-            const diff = slop_ms - self.headroom_ms;
-            self.sleep_ms += diff * self.sleep_rwa;
-        }
-
-        // Clamp to the headroom allowed range.
-        self.sleep_ms = std.math.clamp(
-            self.sleep_ms,
-            0.0,
-            @max(refresh_period_ms - self.headroom_ms, 0.0),
-        );
-
-        // Break with the recommended delay in nanoseconds
-        break :b @intFromFloat(self.sleep_ms * std.time.ns_per_ms);
-    };
+    // Clamp to the headroom allowed range.
+    self.sleep_ms = std.math.clamp(
+        self.sleep_ms,
+        0.0,
+        @max(refresh_period_ms - headroom_ms, 0.0),
+    );
 
     // Tracy plots
     tracy.plot(.{
@@ -253,5 +255,6 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
         .value = .{ .f32 = self.sleep_ms },
     });
 
-    return sleep_ns;
+    // Return the recommended delay in nanoseconds
+    return @intFromFloat(self.sleep_ms * std.time.ns_per_ms);
 }
