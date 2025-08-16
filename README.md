@@ -6,6 +6,8 @@ A light graphics API abstraction designed for bindless rendering on desktop and 
 
 GPU is alpha software. Using it means participating in its development.
 
+It has enough functionality to provide a lot of value, but simultaneously, **it is very early.** It may be missing basic features I happen to not need yet, and the existing API may evolve significantly over time.
+
 Once I've shipped a commercial game using GPU, I'll start to stabilize the API and remove this disclaimer.
 
 ## Goals
