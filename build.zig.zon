@@ -1,16 +1,16 @@
 .{
     .name = .gpu,
     .fingerprint = 0xbd89f8f2169abe59,
-    .minimum_zig_version = "0.15.0-dev.1422+d8cecffe3",
+    .minimum_zig_version = "0.15.0-dev.1564+2761cc8be",
     .version = "0.0.0",
     .dependencies = .{
         .tracy = .{
             .url = "git+https://github.com/Games-By-Mason/tracy_zig#1cb0471b169637ebfc0a4f5ce827a3502412e564",
             .hash = "tracy-0.0.0-R7l8BVxEAQDC2E_f6SlQZy5_4BAI2klvP5equvriL47a",
         },
-        .vulkan_zig = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#e492b17810d775986e2eefd751f5526d9c3b2618",
-            .hash = "vulkan-0.0.0-r7Ytx5w-AwB0hzckD1mPHma0VgtiJ2DHj5dvgzWVwk2e",
+        .vulkan = .{
+            .url = "git+https://github.com/Snektron/vulkan-zig#93bc6f1ac3e13dd98d918e242dc892f179a0d0f5",
+            .hash = "vulkan-0.0.0-r7YtxwA_AwAU4rmOITZD_KJs11Kie1sv0t-pcMDQGIqw",
         },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.313.tar.gz",

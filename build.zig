@@ -80,14 +80,14 @@ fn buildVulkanBackend(
     vk_backend.addImport("gpu", gpu);
 
     const vulkan_headers = b.dependency("vulkan_headers", .{});
-    const vulkan_zig = b.dependency("vulkan_zig", .{
+    const vulkan = b.dependency("vulkan", .{
         .target = native_target,
         .optimize = optimize,
     });
-    const generator = vulkan_zig.artifact("vulkan-zig-generator");
+    const generator = vulkan.artifact("vulkan-zig-generator");
     var run_generator = b.addRunArtifact(generator);
     run_generator.addFileArg(vulkan_headers.path("registry/vk.xml"));
     const vk_zig = run_generator.addOutputFileArg("vk.zig");
-    const vulkan = b.addModule("vulkan", .{ .root_source_file = vk_zig });
-    vk_backend.addImport("vulkan", vulkan);
+    const vulkan_module = b.addModule("vulkan", .{ .root_source_file = vk_zig });
+    vk_backend.addImport("vulkan", vulkan_module);
 }
