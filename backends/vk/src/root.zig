@@ -3573,6 +3573,15 @@ fn vkDebugCallback(
                 // to miss vblank, we're accepting this tradeoff for lower input latency when the
                 // user asks for it. This is often the right tradeoff to make!
                 1424876368 => level = .debug,
+                // Demote the warning about small dedicated allocations. This can be a useful one,
+                // but Dear IMGUI violates it, leading to false positives. Turning this off is OK
+                // because if you use this library as intended it won't come up.
+                1147161417 => level = .debug,
+                // Demote the warning about binding vertex buffers without using them. Dear IMGUI
+                // violates this which leads to false positives, and if you're using this library as
+                // intended you're very unlikely to be using vertex buffers at all directly so
+                // turning this off should be OK.
+                -920984000 => level = .debug,
                 else => {},
             },
             .err => switch (d.*.message_id_number) {
