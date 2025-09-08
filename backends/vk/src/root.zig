@@ -14,7 +14,7 @@ const global_options = gpu.global_options;
 
 pub const vk = @import("vulkan");
 
-const vk_version = vk.makeApiVersion(0, 1, 3, 0);
+pub const vk_version = vk.makeApiVersion(0, 1, 3, 0);
 
 // Context
 surface: vk.SurfaceKHR,
