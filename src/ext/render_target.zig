@@ -4,6 +4,7 @@ const std = @import("std");
 const gpu = @import("../root.zig");
 
 const log = std.log.scoped(.gpu);
+const assert = std.debug.assert;
 
 const Allocator = std.mem.Allocator;
 const Gx = gpu.Gx;
@@ -35,6 +36,23 @@ pub fn RenderTarget(kind: ImageKind) type {
     return enum(u32) {
         _,
 
+        /// An optional render target.
+        pub const Optional = enum(u32) {
+            none = std.math.maxInt(u32),
+            _,
+
+            comptime {
+                const Cap = @FieldType(Pool.Options, "capacity");
+                assert(std.math.maxInt(Cap) < @intFromEnum(@This().none));
+            }
+
+            /// Returns the unwrapped render target or null.
+            pub fn unwrap(self: @This()) ?RenderTarget(kind) {
+                if (self == .none) return null;
+                return @enumFromInt(@intFromEnum(self));
+            }
+        };
+
         /// Internal helper for initializing a render target.
         fn init(self: @This(), pool: *Pool, gx: *Gx) void {
             // Initialize the image
@@ -43,6 +61,12 @@ pub fn RenderTarget(kind: ImageKind) type {
             info.image.extent.width = scaled.width;
             info.image.extent.height = scaled.height;
             pool.images.items[@intFromEnum(self)] = pool.allocator.alloc(gx, info);
+        }
+
+        /// Returns this render target as an optional.
+        pub fn toOptional(self: @This()) Optional {
+            assert(@intFromEnum(self) != @intFromEnum(Optional.none));
+            return @enumFromInt(@intFromEnum(self));
         }
 
         /// Internal helper for getting the current extent of a handle.
