@@ -1890,14 +1890,14 @@ pub const CmdBuf = enum(u64) {
         depth_attachment: ?Attachment = null,
         stencil_attachment: ?Attachment = null,
         area: Rect2D,
-        viewport: Viewport,
-        scissor: Rect2D,
+        viewport: ?Viewport,
+        scissor: ?Rect2D,
     };
 
     pub fn beginRendering(self: @This(), gx: *Gx, options: BeginRenderingOptions) void {
         Backend.cmdBufBeginRendering(gx, self, options);
-        Backend.cmdBufSetViewport(gx, self, options.viewport);
-        Backend.cmdBufSetScissor(gx, self, options.scissor);
+        if (options.viewport) |viewport| Backend.cmdBufSetViewport(gx, self, viewport);
+        if (options.scissor) |scissor| Backend.cmdBufSetScissor(gx, self, scissor);
     }
 
     pub fn endRendering(self: @This(), gx: *Gx) void {
