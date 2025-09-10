@@ -142,7 +142,7 @@ headroom_safe_ms: f32 = 5.0,
 overshoot_ms: f32 = 1.0,
 /// The amount to scale back the sleep on overshoot.
 overshoot_scale: f32 = 0.9,
-/// The current sleep amount. Updated by `sleep`.
+/// The current sleep amount. Updated by `update`.
 sleep_ms: f32 = 0.0,
 /// The ratio of the slop to convert to sleep each update.
 sleep_rwa: f32 = 0.1,
@@ -150,10 +150,20 @@ sleep_rwa: f32 = 0.1,
 smoothed_rwa: f32 = 0.1,
 /// The max smooth frame time.
 max_smoothed_s: f32 = 1.0 / 30.0,
-/// The smoothed delta time. Updated by `sleep`.
+/// The smoothed delta time. Updated by `update`.
 smoothed_delta_s: f32,
+/// The unsmoothed delta time. Updated by `update`. Prefer `smoothed_delta_s`.
+raw_delta_s: f32,
+/// The slop time. Updated by `update`.
+slop_s: f32 = 0.0,
 /// The frame timer.
 timer: std.time.Timer,
+/// Used to track sleep time.
+sleep_timer: std.time.Timer,
+/// Used to accumulate sleep time.
+sleep_accum_s: f32 = 0.0,
+/// The time spent sleeping this frame.
+sleep_s: f32 = 0.0,
 
 const plot_smoothed_delta_s = "FP: Smoothed Delta S";
 const plot_delta_s = "FP: Delta S";
@@ -181,19 +191,23 @@ pub fn init(refresh_rate_hz: f32) @This() {
         });
     }
 
+    const warmed_delta_s = b: {
+        if (refresh_rate_hz == 0) {
+            // Pre-warm to 60hz in absence of a known refresh rate
+            break :b 1.0 / 60.0;
+        } else {
+            // Pre-warm to the specified refresh rate. It may not be correct (e.g. in the case of
+            // VRR) but it's a good starting point.
+            break :b 1.0 / refresh_rate_hz;
+        }
+    };
+
     return .{
         .refresh_rate_hz = refresh_rate_hz,
-        .smoothed_delta_s = b: {
-            if (refresh_rate_hz == 0) {
-                // Pre-warm to 60hz in absence of a known refresh rate
-                break :b 1.0 / 60.0;
-            } else {
-                // Pre-warm to the specified refresh rate. It may not be correct (e.g. in the case of
-                // VRR) but it's a good starting point.
-                break :b 1.0 / refresh_rate_hz;
-            }
-        },
+        .smoothed_delta_s = warmed_delta_s,
+        .raw_delta_s = warmed_delta_s,
         .timer = std.time.Timer.start() catch |err| @panic(@errorName(err)),
+        .sleep_timer = std.time.Timer.start() catch |err| @panic(@errorName(err)),
     };
 }
 
@@ -207,16 +221,21 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
     const delta_s = @as(f32, @floatFromInt(delta_ns)) / std.time.ns_per_s;
     const delta_ms = @as(f32, @floatFromInt(delta_ns)) / std.time.ns_per_ms;
     const slop_ms: f32 = @as(f32, @floatFromInt(slop_ns)) / std.time.ns_per_ms;
+    const slop_s: f32 = @as(f32, @floatFromInt(slop_ns)) / std.time.ns_per_s;
     const headroom_ms = if (self.refresh_rate_hz == 0) self.headroom_safe_ms else self.headroom_ms;
     const rate_hz = if (self.refresh_rate_hz == 0) self.refresh_rate_safe_hz else self.refresh_rate_hz;
     const refresh_period_ms = 1000.0 / rate_hz;
 
-    // Update the smoothed delta time.
+    // Update the delta time and smoothed delta time.
+    self.raw_delta_s = delta_s;
+    self.slop_s = slop_s;
     self.smoothed_delta_s = lerp(
         self.smoothed_delta_s,
         @min(delta_s, self.max_smoothed_s),
         self.smoothed_rwa,
     );
+    self.sleep_s = self.sleep_accum_s;
+    self.sleep_accum_s = 0.0;
 
     // Check our timing and adjust the sleep amount as needed.
     if (delta_ms > refresh_period_ms + self.overshoot_ms) {
@@ -264,4 +283,21 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
 
     // Return the recommended delay in nanoseconds
     return @intFromFloat(self.sleep_ms * std.time.ns_per_ms);
+}
+
+/// Call this before sleeping the main thread for the sleep to not count against the calculated CPU
+/// time.
+pub fn beginSleep(self: *@This()) void {
+    self.sleep_timer.reset();
+}
+
+/// See `beginSleep`.
+pub fn endSleep(self: *@This()) void {
+    self.sleep_accum_s += @as(f32, @floatFromInt(self.sleep_timer.read())) / std.time.ns_per_s;
+}
+
+/// Returns the time last frame spent on CPU work, not including time spend blocked on the GPU or
+/// time spent sleeping as accounted for by `beginSleep`/`endSleep`.
+pub fn cpuS(self: *@This()) f32 {
+    return self.raw_delta_s - self.slop_s - self.sleep_s;
 }

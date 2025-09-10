@@ -22,7 +22,7 @@ pub const tracy_gpu_pool = "gpu";
 pub const Options = struct {
     Backend: type,
     max_frames_in_flight: u5 = 2,
-    blocking_zone_color: tracy.Color = .dark_sea_green4,
+    blocking_zone_color: tracy.Color = .dim_gray,
 };
 
 pub const global_options: Options = root.gpu_options;
