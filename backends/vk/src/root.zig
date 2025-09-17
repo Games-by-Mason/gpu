@@ -3795,4 +3795,7 @@ pub const named_image_formats: btypes.NamedImageFormats = .{
     .r4g4b4a4_unorm = @intFromEnum(vk.Format.r4g4b4a4_unorm_pack16),
     .b4g4r4a4_unorm = @intFromEnum(vk.Format.b4g4r4a4_unorm_pack16),
     .r5g5b5a1_unorm = @intFromEnum(vk.Format.r5g5b5a1_unorm_pack16),
+
+    .bc7_unorm = @intFromEnum(vk.Format.bc7_unorm_block),
+    .bc7_srgb = @intFromEnum(vk.Format.bc7_srgb_block),
 };

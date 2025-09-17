@@ -57,6 +57,9 @@ pub const NamedImageFormats = struct {
     r4g4b4a4_unorm: i32,
     b4g4r4a4_unorm: i32,
     r5g5b5a1_unorm: i32,
+
+    bc7_unorm: i32,
+    bc7_srgb: i32,
 };
 
 pub const ImageOptions = struct {

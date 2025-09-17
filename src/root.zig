@@ -761,6 +761,11 @@ pub const ImageFormat = enum(i32) {
     /// DX12 channel order is ambiguous, see enum docs.
     r5g5b5a1_unorm = Backend.named_image_formats.r5g5b5a1_unorm,
 
+    /// DX12 requires support as a 2D or 3D sampled image.
+    bc7_unorm = Backend.named_image_formats.bc7_unorm,
+    /// DX12 requires support as a 2D or 3D sampled image.
+    bc7_srgb = Backend.named_image_formats.bc7_srgb,
+
     _,
 
     pub inline fn fromBackendType(value: Backend.ImageFormat) @This() {
