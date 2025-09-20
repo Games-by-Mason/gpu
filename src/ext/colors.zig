@@ -170,6 +170,18 @@ test srgbToLinearUnorm {
     );
 }
 
+/// Helper function for converting a sRGB unorm color to a linear unorm color.
+pub fn srgbUnormToLinearUnorm(Output: type, Input: type, input: Input) Output {
+    return floatToUnorm(Output, srgbToLinear([4]f32, unormToFloat([4]f32, input)));
+}
+
+test srgbUnormToLinearUnorm {
+    try std.testing.expectEqual(
+        [4]u8{ 0x00, 0x08, 0x44, 0xff },
+        srgbUnormToLinearUnorm([4]u8, [4]u8, .{ 1, 51, 141, 255 }),
+    );
+}
+
 /// A generic color type for use in writing generic conversions. Not recommended for general
 /// application use, provide your own color type for this.
 pub fn AnyColor(Input: type) type {
