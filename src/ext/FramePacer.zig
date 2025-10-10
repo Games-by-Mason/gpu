@@ -150,9 +150,11 @@ sleep_rwa: f32 = 0.1,
 smoothed_rwa: f32 = 0.1,
 /// The max smooth frame time.
 max_smoothed_s: f32 = 1.0 / 30.0,
-/// The smoothed delta time. Updated by `update`.
+/// The unscaled smoothed delta time. Updated by `update`.
 smoothed_delta_s: f32,
-/// The unsmoothed delta time. Updated by `update`. Prefer `smoothed_delta_s`.
+/// The unscaled smoothed delta time. Updated by `update`. Prefer `smoothed_delta_s`.
+smoothed_delta_s_unscaled: f32,
+/// The unsmoothed, unscaled delta time. Updated by `update`. Prefer `smoothed_delta_s`.
 raw_delta_s: f32,
 /// The slop time. Updated by `update`.
 slop_s: f32 = 0.0,
@@ -164,14 +166,17 @@ sleep_timer: std.time.Timer,
 sleep_accum_s: f32 = 0.0,
 /// The time spent sleeping this frame.
 sleep_s: f32 = 0.0,
+/// The amount to scale smoothed delta time. Defaults to 1, can be set to other values to speed up
+/// or slow down the entire game.
+time_scale: f32 = 1.0,
 
-const plot_smoothed_delta_s = "FP: Smoothed Delta S";
+const plot_smoothed_delta_s_unscaled = "FP: Smoothed Delta S (unscaled)";
 const plot_delta_s = "FP: Delta S";
 const plot_slop_ms = "FP: Slop MS";
 const plot_sleep_ms = "FP: Sleep MS";
 
 const plot_names: []const [:0]const u8 = &.{
-    plot_smoothed_delta_s,
+    plot_smoothed_delta_s_unscaled,
     plot_delta_s,
     plot_slop_ms,
     plot_sleep_ms,
@@ -204,6 +209,7 @@ pub fn init(refresh_rate_hz: f32) @This() {
 
     return .{
         .refresh_rate_hz = refresh_rate_hz,
+        .smoothed_delta_s_unscaled = warmed_delta_s,
         .smoothed_delta_s = warmed_delta_s,
         .raw_delta_s = warmed_delta_s,
         .timer = std.time.Timer.start() catch |err| @panic(@errorName(err)),
@@ -229,11 +235,12 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
     // Update the delta time and smoothed delta time.
     self.raw_delta_s = delta_s;
     self.slop_s = slop_s;
-    self.smoothed_delta_s = lerp(
-        self.smoothed_delta_s,
+    self.smoothed_delta_s_unscaled = lerp(
+        self.smoothed_delta_s_unscaled,
         @min(delta_s, self.max_smoothed_s),
         self.smoothed_rwa,
     );
+    self.smoothed_delta_s = self.smoothed_delta_s_unscaled * self.time_scale;
     self.sleep_s = self.sleep_accum_s;
     self.sleep_accum_s = 0.0;
 
@@ -273,8 +280,8 @@ pub fn update(self: *@This(), slop_ns: u64) u64 {
         .value = .{ .f32 = delta_s },
     });
     tracy.plot(.{
-        .name = plot_smoothed_delta_s,
-        .value = .{ .f32 = self.smoothed_delta_s },
+        .name = plot_smoothed_delta_s_unscaled,
+        .value = .{ .f32 = self.smoothed_delta_s_unscaled },
     });
     tracy.plot(.{
         .name = plot_sleep_ms,
