@@ -39,6 +39,8 @@ The ability to ship backends as separate projects is important, because some maj
 
 # Documentation
 
+Generated docs can be found [here](https://docs.gamesbymason.com/gpu/), you can generate up to date docs yourself with `zig build docs`.
+
 This library is light on documentation. You are expected to use it to access the functionality of the underlying API, documentation is typically only present where significant abstraction has been added on top of what is exposed by backend.
 
 When terminology differs between backends, Vulkan terminology is generally favored.
