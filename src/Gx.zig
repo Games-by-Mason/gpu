@@ -131,9 +131,11 @@ pub const Options = struct {
 pub const Validation = enum(u8) {
     /// The default validation level for this build mode.
     pub const default: @This() = switch (builtin.mode) {
+        // In debug builds, we request all validation.
         .Debug => .all,
-        .ReleaseSafe => .minimal,
-        .ReleaseFast, .ReleaseSmall => .none,
+        // In all other builds, we assume we may be redistributing the build, and therefore don't
+        // enable validation by default.
+        .ReleaseSafe, .ReleaseFast, .ReleaseSmall => .none,
     };
 
     /// Enables all graphics API validation and debug output, may have a high performance cost.
