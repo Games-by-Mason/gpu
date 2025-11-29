@@ -3467,49 +3467,6 @@ const enabled_validation_features_fast = [_]vk.ValidationFeatureEnableEXT{
     .synchronization_validation_ext,
 };
 
-const FormatDebugMessage = struct {
-    severity: vk.DebugUtilsMessageSeverityFlagsEXT,
-    message_type: vk.DebugUtilsMessageTypeFlagsEXT,
-    data: [*c]const vk.DebugUtilsMessengerCallbackDataEXT,
-    userdata: ?*anyopaque,
-
-    pub fn format(data: FormatDebugMessage, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.writeAll("vulkan debug message:\n");
-
-        if (data.data) |d| {
-            try writer.writeAll("\t* id: ");
-            if (d.*.p_message_id_name) |name| {
-                try writer.print("{s}", .{name});
-            } else {
-                try writer.writeAll("null");
-            }
-            try writer.print(" ({})\n", .{d.*.message_id_number});
-
-            if (d.*.p_message) |message| {
-                try writer.print("\t* message: {s}", .{message});
-            }
-
-            if (d.*.queue_label_count > 0) {
-                try writer.writeByte('\n');
-                if (d.*.p_queue_labels) |queue_labels| {
-                    for (queue_labels[0..d.*.queue_label_count]) |label| {
-                        try writer.print("\t* queue: {s}\n", .{label.p_label_name});
-                    }
-                }
-            }
-
-            if (d.*.cmd_buf_label_count > 0) {
-                try writer.writeByte('\n');
-                if (d.*.p_cmd_buf_labels) |cmd_buf_labels| {
-                    for (cmd_buf_labels[0..d.*.cmd_buf_label_count]) |label| {
-                        try writer.print("\t* command buffer: {s}\n", .{label.p_label_name});
-                    }
-                }
-            }
-        }
-    }
-};
-
 fn vkDebugCallback(
     severity: vk.DebugUtilsMessageSeverityFlagsEXT,
     message_type: vk.DebugUtilsMessageTypeFlagsEXT,
@@ -3586,29 +3543,43 @@ fn vkDebugCallback(
     }
 
     // Otherwise log them
-    const msg: FormatDebugMessage = .{
-        .severity = severity,
-        .message_type = message_type,
-        .data = data,
-        .userdata = userdata,
-    };
     switch (level) {
-        .err => {
-            log.err("{f}", .{msg});
-            @panic("validation error");
+        inline else => |level_comptime| {
+            _ = userdata;
+            _ = message_type;
+
+            const d = &data[0];
+            const scoped = std.log.scoped(.vkd);
+            const writeLog = switch (level_comptime) {
+                .err => scoped.err,
+                .warn => scoped.warn,
+                .info => scoped.info,
+                .debug => scoped.debug,
+            };
+
+            writeLog("{?s} (0x{x}): {?s}", .{ d.*.p_message_id_name, d.*.message_id_number, d.*.p_message });
+
+            if (d.*.queue_label_count > 0) {
+                if (d.*.p_queue_labels) |queue_labels| {
+                    for (queue_labels[0..d.*.queue_label_count]) |label| {
+                        writeLog("\t* queue: {s}\n", .{label.p_label_name});
+                    }
+                }
+            }
+
+            if (d.*.cmd_buf_label_count > 0) {
+                if (d.*.p_cmd_buf_labels) |cmd_buf_labels| {
+                    for (cmd_buf_labels[0..d.*.cmd_buf_label_count]) |label| {
+                        writeLog("\t* command buffer: {s}\n", .{label.p_label_name});
+                    }
+                }
+            }
         },
-        .warn => {
-            log.warn("{f}", .{msg});
-            return vk.FALSE;
-        },
-        .info => {
-            log.info("{f}", .{msg});
-            return vk.FALSE;
-        },
-        .debug => {
-            log.debug("{f}", .{msg});
-            return vk.FALSE;
-        },
+    }
+
+    switch (level) {
+        .err => @panic("validation error"),
+        .warn, .info, .debug => return vk.FALSE,
     }
 }
 
