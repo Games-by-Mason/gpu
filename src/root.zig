@@ -294,7 +294,10 @@ pub fn UploadBuf(k: BufKind) type {
 
         memory: MemoryHandle,
         handle: BufHandle(kind),
-        data: []volatile anyopaque,
+        data: struct {
+            ptr: *volatile anyopaque,
+            len: usize,
+        },
 
         pub const View = BufView(@This());
 
@@ -1146,22 +1149,21 @@ pub const BarrierStages = packed struct {
 
 fn EnumBitSet(T: type) type {
     const fields = @typeInfo(T).@"enum".fields;
-    var struct_fields: [fields.len]std.builtin.Type.StructField = undefined;
-    for (&struct_fields, fields) |*struct_field, enum_field| {
-        struct_field.* = .{
-            .name = enum_field.name,
-            .type = bool,
-            .default_value_ptr = @as(?*const anyopaque, @ptrCast(&false)),
-            .is_comptime = false,
-            .alignment = 0,
-        };
+    var field_names: [fields.len][]const u8 = undefined;
+    var field_types: [fields.len]type = undefined;
+    var field_attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+    for (fields, 0..) |field, i| {
+        field_names[i] = field.name;
+        field_types[i] = bool;
+        field_attrs[i] = .{ .default_value_ptr = @as(?*const anyopaque, @ptrCast(&false)) };
     }
-    return @Type(.{ .@"struct" = .{
-        .layout = .@"packed",
-        .fields = &struct_fields,
-        .decls = &.{},
-        .is_tuple = false,
-    } });
+    return @Struct(
+        .@"packed",
+        null,
+        &field_names,
+        &field_types,
+        &field_attrs,
+    );
 }
 
 fn nonZero(T: type, self: T) bool {

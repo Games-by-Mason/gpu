@@ -100,25 +100,25 @@ const DeviceFeatures = struct {
 
         // >99% of Windows and Linux devices in `vulkan.gpuinfo.org` support these features at the
         // time of writing.
-        self.vk12.host_query_reset = @intFromBool(options.host_query_reset);
-        self.vk13.synchronization_2 = vk.TRUE;
-        self.vk13.dynamic_rendering = vk.TRUE;
-        self.vk13.pipeline_creation_cache_control = vk.TRUE;
+        self.vk12.host_query_reset = @enumFromInt(@intFromBool(options.host_query_reset));
+        self.vk13.synchronization_2 = .true;
+        self.vk13.dynamic_rendering = .true;
+        self.vk13.pipeline_creation_cache_control = .true;
 
         // Roadmap 2022
-        self.vk10.features.sampler_anisotropy = @intFromBool(options.sampler_anisotropy);
-        self.vk12.scalar_block_layout = vk.TRUE;
-        self.vk12.runtime_descriptor_array = vk.TRUE;
-        self.vk12.descriptor_binding_partially_bound = vk.TRUE;
-        self.vk12.shader_uniform_buffer_array_non_uniform_indexing = vk.TRUE;
-        self.vk12.shader_sampled_image_array_non_uniform_indexing = vk.TRUE;
-        self.vk12.shader_storage_buffer_array_non_uniform_indexing = vk.TRUE;
-        self.vk12.shader_storage_image_array_non_uniform_indexing = vk.TRUE;
-        self.vk12.shader_uniform_texel_buffer_array_non_uniform_indexing = vk.TRUE;
-        self.vk12.shader_storage_texel_buffer_array_non_uniform_indexing = vk.TRUE;
+        self.vk10.features.sampler_anisotropy = @enumFromInt(@intFromBool(options.sampler_anisotropy));
+        self.vk12.scalar_block_layout = .true;
+        self.vk12.runtime_descriptor_array = .true;
+        self.vk12.descriptor_binding_partially_bound = .true;
+        self.vk12.shader_uniform_buffer_array_non_uniform_indexing = .true;
+        self.vk12.shader_sampled_image_array_non_uniform_indexing = .true;
+        self.vk12.shader_storage_buffer_array_non_uniform_indexing = .true;
+        self.vk12.shader_storage_image_array_non_uniform_indexing = .true;
+        self.vk12.shader_uniform_texel_buffer_array_non_uniform_indexing = .true;
+        self.vk12.shader_storage_texel_buffer_array_non_uniform_indexing = .true;
 
         // Roadmap 2024
-        self.vk11.shader_draw_parameters = vk.TRUE;
+        self.vk11.shader_draw_parameters = .true;
     }
 
     fn supersetOf(superset: *@This(), subset: *@This()) bool {
@@ -137,8 +137,8 @@ const DeviceFeatures = struct {
                     std.mem.eql(u8, field.name, "s_type"));
                 continue;
             }
-            const super_enabled = @field(superset, field.name) == vk.TRUE;
-            const sub_enabled = @field(subset, field.name) == vk.TRUE;
+            const super_enabled = @field(superset, field.name) == .true;
+            const sub_enabled = @field(subset, field.name) == .true;
             if (sub_enabled and !super_enabled) {
                 log.debug("\t* missing feature: {s}", .{field.name});
                 result = false;
@@ -495,7 +495,7 @@ pub fn init(
                 device,
                 @intCast(qfi),
                 surface,
-            ) catch |err| @panic(@errorName(err)) != vk.TRUE) continue;
+            ) catch |err| @panic(@errorName(err)) != .true) continue;
             // Check for graphics and compute. We don't check the transfer bit since graphics and
             // compute imply it, and it's not required to be set if they are.
             if (!qfp.queue_flags.graphics_bit or !qfp.queue_flags.compute_bit) continue;
@@ -630,7 +630,7 @@ pub fn init(
                 .min_uniform_buffer_offset_alignment = @intCast(properties.limits.min_uniform_buffer_offset_alignment),
                 .min_storage_buffer_offset_alignment = @intCast(properties.limits.min_storage_buffer_offset_alignment),
                 .min_texel_buffer_offset_alignment = @intCast(properties.limits.min_texel_buffer_offset_alignment),
-                .sampler_anisotropy = features.vk10.features.sampler_anisotropy == vk.TRUE,
+                .sampler_anisotropy = features.vk10.features.sampler_anisotropy == .true,
                 .max_sampler_anisotropy = properties.limits.max_sampler_anisotropy,
                 .queue_family_index = queue_family_index.?,
                 .device_exts = device_exts,
@@ -701,7 +701,7 @@ pub fn init(
             break :b 0.0;
         }
 
-        if (options.timestamp_queries and properties.limits.timestamp_compute_and_graphics != vk.TRUE) {
+        if (options.timestamp_queries and properties.limits.timestamp_compute_and_graphics != .true) {
             log.err("timestamp queries not supported on compute and graphics (can be relaxed by checking as needed)", .{});
             break :b 0.0;
         }
@@ -996,13 +996,13 @@ pub fn uploadBufCreate(
     ) catch |err| @panic(@errorName(err)).?);
 
     // Return the dedicated buffer
-    var data: []volatile anyopaque = undefined;
-    data.ptr = @ptrCast(mapping);
-    data.len = size;
     return .{
         .handle = .fromBackendType(buffer),
         .memory = .fromBackendType(memory),
-        .data = data,
+        .data = .{
+            .ptr = @ptrCast(mapping),
+            .len = size,
+        },
     };
 }
 
@@ -1746,7 +1746,7 @@ pub fn beginFrame(self: *Gx) u64 {
         assert(self.backend.device.waitForFences(
             1,
             &.{cmd_pool_fence},
-            vk.TRUE,
+            .true,
             std.math.maxInt(u64),
         ) catch |err| @panic(@errorName(err)) == .success);
         const wait_ns = blocking_timer.read();
@@ -2045,8 +2045,8 @@ pub fn imageMemoryRequirements(
 
     // Get the memory requirements
     var dedicated_reqs: vk.MemoryDedicatedRequirements = .{
-        .prefers_dedicated_allocation = vk.FALSE,
-        .requires_dedicated_allocation = vk.FALSE,
+        .prefers_dedicated_allocation = .false,
+        .requires_dedicated_allocation = .false,
     };
     const invalid_reqs: vk.MemoryRequirements = .{
         .size = std.math.maxInt(vk.DeviceSize),
@@ -2075,9 +2075,9 @@ pub fn imageMemoryRequirements(
     return .{
         .size = reqs.size,
         .alignment = reqs.alignment,
-        .dedicated = if (dedicated_reqs.requires_dedicated_allocation == vk.TRUE)
+        .dedicated = if (dedicated_reqs.requires_dedicated_allocation == .true)
             .required
-        else if (dedicated_reqs.prefers_dedicated_allocation == vk.TRUE)
+        else if (dedicated_reqs.prefers_dedicated_allocation == .true)
             .preferred
         else
             .discouraged,
@@ -2319,13 +2319,13 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
         .scissor_count = 1,
     };
     const rasterizer: vk.PipelineRasterizationStateCreateInfo = .{
-        .depth_clamp_enable = vk.FALSE,
-        .rasterizer_discard_enable = vk.FALSE,
+        .depth_clamp_enable = .false,
+        .rasterizer_discard_enable = .false,
         .polygon_mode = .fill,
         .line_width = 1.0,
         .cull_mode = .{ .back_bit = true },
         .front_face = .clockwise,
-        .depth_bias_enable = vk.FALSE,
+        .depth_bias_enable = .false,
         .depth_bias_constant_factor = 0.0,
         .depth_bias_clamp = 0.0,
         .depth_bias_slope_factor = 0.0,
@@ -2339,43 +2339,43 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
         input_assembly.* = switch (cmd.input_assembly) {
             .point_list => .{
                 .topology = .point_list,
-                .primitive_restart_enable = vk.FALSE,
+                .primitive_restart_enable = .false,
             },
             .line_list => .{
                 .topology = .line_list,
-                .primitive_restart_enable = vk.FALSE,
+                .primitive_restart_enable = .false,
             },
             .line_strip => |opt| .{
                 .topology = .line_strip,
-                .primitive_restart_enable = @intFromBool(opt.indexed_primitive_restart),
+                .primitive_restart_enable = @enumFromInt(@intFromBool(opt.indexed_primitive_restart)),
             },
             .triangle_list => .{
                 .topology = .triangle_list,
-                .primitive_restart_enable = vk.FALSE,
+                .primitive_restart_enable = .false,
             },
             .triangle_strip => |opt| .{
                 .topology = .triangle_strip,
-                .primitive_restart_enable = @intFromBool(opt.indexed_primitive_restart),
+                .primitive_restart_enable = @enumFromInt(@intFromBool(opt.indexed_primitive_restart)),
             },
             .line_list_with_adjacency => .{
                 .topology = .line_list_with_adjacency,
-                .primitive_restart_enable = vk.FALSE,
+                .primitive_restart_enable = .false,
             },
             .line_strip_with_adjacency => |opt| .{
                 .topology = .line_strip_with_adjacency,
-                .primitive_restart_enable = @intFromBool(opt.indexed_primitive_restart),
+                .primitive_restart_enable = @enumFromInt(@intFromBool(opt.indexed_primitive_restart)),
             },
             .triangle_list_with_adjacency => .{
                 .topology = .triangle_list_with_adjacency,
-                .primitive_restart_enable = vk.FALSE,
+                .primitive_restart_enable = .false,
             },
             .triangle_strip_with_adjacency => |opt| .{
                 .topology = .triangle_strip_with_adjacency,
-                .primitive_restart_enable = @intFromBool(opt.indexed_primitive_restart),
+                .primitive_restart_enable = @enumFromInt(@intFromBool(opt.indexed_primitive_restart)),
             },
             .patch_list => .{
                 .topology = .patch_list,
-                .primitive_restart_enable = vk.FALSE,
+                .primitive_restart_enable = .false,
             },
         };
 
@@ -2406,11 +2406,11 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
         const multisampling_info =
             arena.create(vk.PipelineMultisampleStateCreateInfo) catch @panic("OOM");
         multisampling_info.* = .{
-            .sample_shading_enable = vk.FALSE,
+            .sample_shading_enable = .false,
             .rasterization_samples = samplesToVk(cmd.rasterization_samples),
             .min_sample_shading = 1.0,
-            .alpha_to_coverage_enable = if (cmd.alpha_to_coverage) vk.TRUE else vk.FALSE,
-            .alpha_to_one_enable = vk.FALSE,
+            .alpha_to_coverage_enable = if (cmd.alpha_to_coverage) .true else .false,
+            .alpha_to_one_enable = .false,
         };
 
         const blend_attachment_state =
@@ -2423,7 +2423,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
         };
         blend_attachment_state.* = if (cmd.blend_state) |blend_state| .{
             .color_write_mask = color_write_mask,
-            .blend_enable = vk.TRUE,
+            .blend_enable = .true,
             .src_color_blend_factor = blendFactorToVk(blend_state.src_color_factor),
             .dst_color_blend_factor = blendFactorToVk(blend_state.dst_color_factor),
             .color_blend_op = blendOpToVk(blend_state.color_op),
@@ -2432,7 +2432,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .alpha_blend_op = blendOpToVk(blend_state.alpha_op),
         } else .{
             .color_write_mask = color_write_mask,
-            .blend_enable = vk.FALSE,
+            .blend_enable = .false,
             .src_color_blend_factor = .one,
             .dst_color_blend_factor = .zero,
             .color_blend_op = .add,
@@ -2442,14 +2442,14 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
         };
         const blend_state_info = arena.create(vk.PipelineColorBlendStateCreateInfo) catch @panic("OOM");
         blend_state_info.* = .{
-            .logic_op_enable = vk.FALSE,
+            .logic_op_enable = .false,
             .logic_op = .clear,
             .attachment_count = 1,
             .p_attachments = blend_attachment_state[0..1],
             .blend_constants = cmd.blend_constants,
         };
         if (cmd.logic_op) |op| {
-            blend_state_info.logic_op_enable = vk.TRUE;
+            blend_state_info.logic_op_enable = .true;
             blend_state_info.logic_op = switch (op) {
                 .clear => .clear,
                 .@"and" => .@"and",
@@ -2472,11 +2472,11 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
 
         var depth_stencil_state: vk.PipelineDepthStencilStateCreateInfo = .{
             .flags = .{},
-            .depth_test_enable = if (cmd.depth_state.@"test") vk.TRUE else vk.FALSE,
-            .depth_write_enable = if (cmd.depth_state.write) vk.TRUE else vk.FALSE,
+            .depth_test_enable = if (cmd.depth_state.@"test") .true else .false,
+            .depth_write_enable = if (cmd.depth_state.write) .true else .false,
             .depth_compare_op = compareOpToVk(cmd.depth_state.compare_op),
-            .depth_bounds_test_enable = vk.FALSE,
-            .stencil_test_enable = vk.FALSE,
+            .depth_bounds_test_enable = .false,
+            .stencil_test_enable = .false,
             .front = .{
                 .fail_op = .keep,
                 .pass_op = .keep,
@@ -2499,7 +2499,7 @@ pub fn pipelinesCreateGraphics(self: *Gx, cmds: []const gpu.Pipeline.InitGraphic
             .max_depth_bounds = 0.0,
         };
         if (cmd.stencil_state) |s| {
-            depth_stencil_state.stencil_test_enable = vk.TRUE;
+            depth_stencil_state.stencil_test_enable = .true;
             depth_stencil_state.front = stencilOpStateToVk(s.front);
             depth_stencil_state.back = stencilOpStateToVk(s.back);
         }
@@ -2845,9 +2845,9 @@ pub fn samplerCreate(
         .address_mode_v = addressModeToVk(options.address_mode.v),
         .address_mode_w = addressModeToVk(options.address_mode.w),
         .mip_lod_bias = options.mip_lod_bias,
-        .anisotropy_enable = @intFromBool(options.max_anisotropy != .none and self.backend.physical_device.sampler_anisotropy),
+        .anisotropy_enable = @enumFromInt(@intFromBool(options.max_anisotropy != .none and self.backend.physical_device.sampler_anisotropy)),
         .max_anisotropy = @min(@as(f32, @floatFromInt(@as(u8, @intFromEnum(options.max_anisotropy)))), self.backend.physical_device.max_sampler_anisotropy),
-        .compare_enable = @intFromBool(options.compare_op != null),
+        .compare_enable = @enumFromInt(@intFromBool(options.compare_op != null)),
         .compare_op = if (options.compare_op) |op| compareOpToVk(op) else .never,
         .min_lod = options.min_lod,
         .max_lod = options.max_lod orelse vk.LOD_CLAMP_NONE,
@@ -2861,7 +2861,7 @@ pub fn samplerCreate(
         },
         // Can be useful, but I believe not supported as a sampler option by DX12. Use `texelFetch`
         // in the shader instead.
-        .unnormalized_coordinates = vk.FALSE,
+        .unnormalized_coordinates = .false,
     }, null) catch |err| @panic(@errorName(err));
     setName(self.backend.debug_messenger, self.backend.device, sampler, name);
     return .fromBackendType(sampler);
@@ -3366,7 +3366,7 @@ fn setSwapchainExtent(
         .pre_transform = surface_capabilities.current_transform,
         .composite_alpha = self.physical_device.composite_alpha,
         .present_mode = self.physical_device.present_mode,
-        .clipped = vk.TRUE,
+        .clipped = .true,
         .image_sharing_mode = .exclusive,
         .p_queue_family_indices = null,
         .queue_family_index_count = 0,
@@ -3492,12 +3492,12 @@ fn vkDebugCallback(
             .warn => switch (d.*.message_id_number) {
                 // Ignore `BestPractices-vkCreateDevice-physical-device-features-not-retrieved`,
                 // this is a false positive--we're using `vkGetPhysicalDeviceFeatures2`.
-                584333584 => return vk.FALSE,
+                584333584 => return .false,
                 // Ignore `BestPractices-vkBindBufferMemory-small-dedicated-allocation` and
                 // `BestPractices-vkAllocateMemory-small-allocation`, our whole rendering
                 // is designed around this but we often have so little total memory that we trip it
                 // anyway!
-                280337739, -40745094 => return vk.FALSE,
+                280337739, -40745094 => return .false,
                 // Don't warn us that validation is on every time validation is on, but do log it as
                 // debug
                 615892639, 2132353751, 1734198062, -2111305990 => level = .debug,
@@ -3579,7 +3579,7 @@ fn vkDebugCallback(
 
     switch (level) {
         .err => @panic("validation error"),
-        .warn, .info, .debug => return vk.FALSE,
+        .warn, .info, .debug => return .false,
     }
 }
 

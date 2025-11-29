@@ -1,7 +1,7 @@
 .{
     .name = .gpu,
     .fingerprint = 0xbd89f8f2169abe59,
-    .minimum_zig_version = "0.15.0",
+    .minimum_zig_version = "0.16.0-dev.1484+d0ba6642b",
     .version = "0.1.0",
     .dependencies = .{
         .tracy = .{
@@ -9,8 +9,8 @@
             .hash = "tracy-0.0.0-R7l8BVxEAQDC2E_f6SlQZy5_4BAI2klvP5equvriL47a",
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#93bc6f1ac3e13dd98d918e242dc892f179a0d0f5",
-            .hash = "vulkan-0.0.0-r7YtxwA_AwAU4rmOITZD_KJs11Kie1sv0t-pcMDQGIqw",
+            .url = "git+https://github.com/Snektron/vulkan-zig#f69af7a9248982cf7536aaf32111843f1a4fa4a9",
+            .hash = "vulkan-0.0.0-r7Ytx91DAwDKIXS2K_fFa-c_SJ5py7K1eCKwPcc33NcQ",
         },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.313.tar.gz",
