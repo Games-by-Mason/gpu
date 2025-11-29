@@ -25,6 +25,10 @@ Once I've shipped a commercial game using GPU, I'll start to stabilize the API a
 * Mobile/web support are not a priority.
 	* There's nothing stopping you from writing a mobile or web backend, but these platforms are not factored into the API design. As such, you may have to emulate features that these platforms are late to adopt.
 
+## Which version of Zig is targeted?
+
+See [build.zig.con](/build.zig.zon). For previous Zig versions, see [releases](https://github.com/Games-by-Mason/dear_imgui_zig/releases).
+
 ## Troubleshooting
 
 LunarG provides validation layers for Vulkan which are enabled by default for debug builds. You may want to disable these in the init options if they're too slow on your setup. If you're getting crashes in the validation layers, make sure your SDK is up to date--I recommend getting them directly from LunarG as some package managers update them very infrequently.

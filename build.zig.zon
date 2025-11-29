@@ -2,7 +2,7 @@
     .name = .gpu,
     .fingerprint = 0xbd89f8f2169abe59,
     .minimum_zig_version = "0.15.0",
-    .version = "0.0.0",
+    .version = "0.1.0",
     .dependencies = .{
         .tracy = .{
             .url = "git+https://github.com/Games-By-Mason/tracy_zig#1cb0471b169637ebfc0a4f5ce827a3502412e564",
