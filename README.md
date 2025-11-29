@@ -27,7 +27,7 @@ Once I've shipped a commercial game using GPU, I'll start to stabilize the API a
 
 ## Which version of Zig is targeted?
 
-See [build.zig.con](/build.zig.zon). For previous Zig versions, see [releases](https://github.com/Games-by-Mason/dear_imgui_zig/releases).
+See [build.zig.con](/build.zig.zon). For previous Zig versions, see [releases](https://github.com/Games-by-Mason/gpu/releases).
 
 ## Troubleshooting
 
