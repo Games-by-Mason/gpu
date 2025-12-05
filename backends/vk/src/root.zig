@@ -107,6 +107,8 @@ const DeviceFeatures = struct {
 
         // Roadmap 2022
         self.vk10.features.sampler_anisotropy = @enumFromInt(@intFromBool(options.sampler_anisotropy));
+        self.vk10.features.multi_draw_indirect = .true;
+        self.vk10.features.draw_indirect_first_instance = .true;
         self.vk12.scalar_block_layout = .true;
         self.vk12.runtime_descriptor_array = .true;
         self.vk12.descriptor_binding_partially_bound = .true;
@@ -576,6 +578,7 @@ pub fn init(
         log.debug("\t* best surface format: {?}", .{surface_format});
         log.debug("\t* present mode: {?}", .{present_mode});
         log.debug("\t* device extensions: {}", .{device_exts});
+        log.debug("\t* max draw indirect count: {}", .{properties.limits.max_draw_indirect_count});
 
         const composite_alpha: ?vk.CompositeAlphaFlagsKHR = b: {
             if (surface_capabilities) |sc| {
@@ -599,7 +602,7 @@ pub fn init(
         const device_version: vk.Version = @bitCast(properties.api_version);
         const version_compatible = device_version.variant == vk_version.variant and
             @as(u32, @bitCast(device_version)) >= @as(u32, @bitCast(vk_version));
-        const compatible = version_compatible and queue_family_index != null and device_ext_list != null and composite_alpha != null and supports_required_features;
+        const compatible = version_compatible and queue_family_index != null and device_ext_list != null and composite_alpha != null and supports_required_features and properties.limits.max_draw_indirect_count >= options.max_draw_indirect_count;
 
         if (compatible) {
             log.debug("\t* rank: {}", .{rank});
@@ -634,6 +637,7 @@ pub fn init(
                 .max_sampler_anisotropy = properties.limits.max_sampler_anisotropy,
                 .queue_family_index = queue_family_index.?,
                 .device_exts = device_exts,
+                .max_draw_indirect_count = properties.limits.max_draw_indirect_count,
             };
             // Separate line to work around partial assignment on continue
             best_physical_device = new;
@@ -825,6 +829,7 @@ pub fn init(
             .timestamp_period = timestamp_period,
             .tracy_queue = tracy_queue,
             .surface_format = best_physical_device.surface_format,
+            .max_draw_indirect_count = best_physical_device.max_draw_indirect_count,
         },
     };
 
@@ -1364,6 +1369,20 @@ pub fn cmdBufDraw(
         options.instance_count,
         options.first_vertex,
         options.first_instance,
+    );
+}
+
+pub fn cmdBufDrawIndirect(
+    self: *Gx,
+    cb: gpu.CmdBuf,
+    options: gpu.CmdBuf.DrawIndirectOptions,
+) void {
+    self.backend.device.cmdDrawIndirect(
+        cb.asBackendType(),
+        options.args.handle.asBackendType(),
+        options.args.offset,
+        @intCast(@divExact(options.args.len, @sizeOf(gpu.CmdBuf.DrawOptions))),
+        options.stride,
     );
 }
 
@@ -3446,6 +3465,7 @@ const PhysicalDevice = struct {
     max_sampler_anisotropy: f32 = undefined,
     queue_family_index: u32 = undefined,
     device_exts: DeviceExts = undefined,
+    max_draw_indirect_count: u32 = undefined,
 };
 
 const TimestampQueries = struct {

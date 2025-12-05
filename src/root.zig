@@ -1738,6 +1738,7 @@ pub const Device = struct {
     timestamp_period: f32,
     tracy_queue: TracyQueue,
     surface_format: SurfaceFormatQuery.Result,
+    max_draw_indirect_count: u32,
 };
 
 pub const ImageBarrier = struct {
@@ -2004,7 +2005,8 @@ pub const CmdBuf = enum(u64) {
         });
     }
 
-    pub const DrawOptions = struct {
+    /// Draw call options. Can be passed directly to `draw`, or via a buffer to `drawIndirect`.
+    pub const DrawOptions = extern struct {
         vertex_count: u32,
         instance_count: u32,
         first_vertex: u32,
@@ -2015,6 +2017,17 @@ pub const CmdBuf = enum(u64) {
         const zone = Zone.begin(.{ .src = @src() });
         defer zone.end();
         Backend.cmdBufDraw(gx, self, options);
+    }
+
+    pub const DrawIndirectOptions = struct {
+        args: BufView(Buf(.{ .indirect = true })),
+        stride: u32 = @sizeOf(DrawOptions),
+    };
+
+    pub fn drawIndirect(self: @This(), gx: *Gx, options: DrawIndirectOptions) void {
+        const zone = Zone.begin(.{ .src = @src() });
+        defer zone.end();
+        Backend.cmdBufDrawIndirect(gx, self, options);
     }
 
     /// At the time of writing all Windows hardware on vulkan.gpu.info.org supports at least 256

@@ -125,6 +125,18 @@ pub const Options = struct {
     /// allocations, e.g. translating API independent struts to backend specific structs. It's
     /// allocated up front and cannot grow.
     arena_capacity_log2: usize,
+    /// Require that the device support at least this many draws in one draw indirect call. All
+    /// realistic desktop gaming hardware in the Vulkan Hardware Database supports a value of over
+    /// a billion, with the exception of some mac hardware running Linux where only 2^16-1 are
+    /// supported, so this default shouldn't rule out any current hardware.
+    ///
+    /// That being said, I observed a Intel card on Linux (but not Windows) behave poorly with
+    /// counts of around 500k despite having very high documented limits, so you may not want to
+    /// use all allegedly available headroom if you care about this target without checking if this
+    /// has been fixed. I would elaborate but it was a year ago (early 2025) and I don't recall the
+    /// details, the problem was obvious you won't miss it if it happens, I want to say the graphics
+    /// drivers actually crashed.
+    max_draw_indirect_count: u32 = std.math.maxInt(u16),
 };
 
 /// If the requested level is not available, a warning will be emitted.

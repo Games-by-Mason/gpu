@@ -64,8 +64,9 @@ pub fn BufView(Buf: type) type {
             if (start > self.len) @panic("OOB");
             self.offset += start;
             if (maybe_len) |l| {
-                if (l > self.len - start) @panic("OOB");
-                self.len = self.offset + l;
+                if (l > self.len) @panic("OOB");
+                if (start > self.len - l) @panic("OOB");
+                self.len = l;
             } else {
                 self.len = self.len - start;
             }
