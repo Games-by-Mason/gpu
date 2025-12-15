@@ -115,10 +115,10 @@
 //! approaches here. See the Vulakn backend for `Gx` as reference for the possible blocking calls.
 
 const std = @import("std");
-const geom = @import("geom");
+const geom = @import("mr_geom");
 const tracy = @import("tracy");
 
-const lerp = geom.tween.interp.lerp;
+const lerp = geom.mr_tween.interp.lerp;
 
 const Zone = tracy.Zone;
 

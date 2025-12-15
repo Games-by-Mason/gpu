@@ -1,4 +1,4 @@
-# GPU
+# mr_gpu
 
 A light graphics API abstraction designed for bindless rendering on desktop and eventually console.
 

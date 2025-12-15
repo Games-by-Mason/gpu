@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const gpu = b.addModule("gpu", .{
+    const gpu = b.addModule("mr_gpu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -17,16 +17,16 @@ pub fn build(b: *std.Build) void {
     });
     gpu.addImport("tracy", tracy.module("tracy"));
 
-    const geom = b.dependency("geom", .{
+    const mr_geom = b.dependency("mr_geom", .{
         .target = target,
         .optimize = optimize,
     });
-    gpu.addImport("geom", geom.module("geom"));
+    gpu.addImport("mr_geom", mr_geom.module("mr_geom"));
 
     const lib_unit_tests = b.addTest(.{
         .root_module = gpu,
     });
-    lib_unit_tests.root_module.addImport("geom", geom.module("geom"));
+    lib_unit_tests.root_module.addImport("mr_geom", mr_geom.module("mr_geom"));
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
@@ -39,7 +39,7 @@ pub fn build(b: *std.Build) void {
     // We need an executable to generate docs, but we don't want to use a test executable because
     // "test" ends up in our URLs if we do.
     const docs_exe = b.addExecutable(.{
-        .name = "gpu",
+        .name = "mr_gpu",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/docs.zig"),
             .target = target,
@@ -77,7 +77,7 @@ fn buildVulkanBackend(
         vk_backend.link_libc = true;
     }
 
-    vk_backend.addImport("gpu", gpu);
+    vk_backend.addImport("mr_gpu", gpu);
 
     const vulkan_headers = b.dependency("vulkan_headers", .{});
     const vulkan = b.dependency("vulkan", .{

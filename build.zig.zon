@@ -1,11 +1,11 @@
 .{
-    .name = .gpu,
-    .fingerprint = 0xbd89f8f2169abe59,
+    .name = .mr_gpu,
+    .fingerprint = 0x571c309c52619513,
     .minimum_zig_version = "0.16.0-dev.1484+d0ba6642b",
     .version = "0.1.0",
     .dependencies = .{
         .tracy = .{
-            .url = "git+https://github.com/Games-By-Mason/tracy_zig#1cb0471b169637ebfc0a4f5ce827a3502412e564",
+            .url = "git+https://codeberg.org/Games-by-Mason/tracy_zig#1cb0471b169637ebfc0a4f5ce827a3502412e564",
             .hash = "tracy-0.0.0-R7l8BVxEAQDC2E_f6SlQZy5_4BAI2klvP5equvriL47a",
         },
         .vulkan = .{
@@ -17,9 +17,9 @@
             .hash = "N-V-__8AAPLT7gH4vgN7Xo6yZlOMrzllGbdvVxxhrwUvgI9r",
         },
         // Only used by extensions
-        .geom = .{
-            .url = "git+https://github.com/Games-By-Mason/geom#058f649537c81c2954196ec328b6589d77317d69",
-            .hash = "geom-0.0.0-U1ma31z1BACSF4c5MvG_S7PQPkjtd3JIB7nLpFG1bAmy",
+        .mr_geom = .{
+            .url = "git+https://codeberg.org/Games-by-Mason/mr_geom#4034a3b0b245b9b51c756c960a7faeb8c7a271b2",
+            .hash = "mr_geom-0.0.0-7BWThbv1BACUBxSgOBtzKSNxHCdXGSTekyFAUE6urBvu",
         },
     },
     .paths = .{
