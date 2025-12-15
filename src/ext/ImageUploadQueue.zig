@@ -66,10 +66,10 @@ writer: Writer,
 
 /// Creates an image upload queue. If uploading over the course of multiple frames, you should
 /// create one per frame in flight and reuse them.
-pub fn init(staging: gpu.UploadBuf(.{ .transfer_src = true }).View) @This() {
+pub fn init(staging: gpu.UploadBuf(.{ .transfer_src = true }).View, buffer: []u8) @This() {
     return .{
         .staging = staging.handle,
-        .writer = staging.writer(),
+        .writer = staging.writer(buffer),
     };
 }
 
@@ -88,7 +88,7 @@ pub fn beginWrite(
     // practice real GPUs may have the value set to 1. If DX12 ever lifts this requirements we could
     // elide this padding, though keep in mind that block based formats would still need to be
     // aligned to their blocks or such which is happening implicitly here.
-    self.writer.alignForward(gpu.Device.buffer_copy_offset_alignment);
+    self.writer.alignForwardUnbuffered(gpu.Device.buffer_copy_offset_alignment);
 
     // Create the image.
     const image: gpu.Image(.color) = allocator.alloc(gx, options);

@@ -295,7 +295,7 @@ pub fn UploadBuf(k: BufKind) type {
         memory: MemoryHandle,
         handle: BufHandle(kind),
         data: struct {
-            ptr: *volatile anyopaque,
+            ptr: *anyopaque,
             len: usize,
         },
 
@@ -2136,4 +2136,5 @@ pub const CmdBuf = enum(u64) {
 
 test {
     _ = ext;
+    _ = Writer;
 }

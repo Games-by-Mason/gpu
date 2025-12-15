@@ -46,12 +46,13 @@ pub fn BufView(Buf: type) type {
             };
         }
 
-        pub fn writer(self: @This()) Writer {
-            return .{
+        pub fn writer(self: @This(), buffer: []u8) Writer {
+            return .init(.{
                 .ptr = @ptrFromInt(@intFromPtr(self.ptr) + self.offset),
                 .pos = 0,
                 .size = self.len,
-            };
+                .buffer = buffer,
+            });
         }
 
         pub fn spliced(self: Self, start: u64, maybe_len: ?u64) @This() {
